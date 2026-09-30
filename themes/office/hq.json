@@ -1,0 +1,531 @@
+{
+ "type": "map",
+ "version": "1.10",
+ "tiledversion": "1.11.0",
+ "orientation": "orthogonal",
+ "renderorder": "right-down",
+ "width": 10,
+ "height": 8,
+ "tilewidth": 32,
+ "tileheight": 32,
+ "infinite": false,
+ "nextlayerid": 4,
+ "nextobjectid": 27,
+ "layers": [
+  {
+   "id": 1,
+   "name": "furniture",
+   "type": "objectgroup",
+   "draworder": "index",
+   "opacity": 1,
+   "visible": true,
+   "x": 0,
+   "y": 0,
+   "objects": [
+    {
+     "id": 1,
+     "name": "floor",
+     "x": 0,
+     "y": 0,
+     "width": 320,
+     "height": 256,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#e9e4d8"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    },
+    {
+     "id": 2,
+     "name": "ceo_room",
+     "x": 0,
+     "y": 0,
+     "width": 320,
+     "height": 160,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#d8cfae"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "CEO"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "name": "reception",
+     "x": 0,
+     "y": 168,
+     "width": 320,
+     "height": 88,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#e0d9c6"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Reception"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    },
+    {
+     "id": 13,
+     "name": "ceo_desk",
+     "x": 112,
+     "y": 73.6,
+     "width": 96,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8d6e63"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 14,
+     "name": "plant",
+     "x": 19.2,
+     "y": 35.2,
+     "width": 22.4,
+     "height": 22.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6a994e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 15,
+     "name": "bookshelf",
+     "x": 256,
+     "y": 25.6,
+     "width": 51.2,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#7f5539"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 17,
+     "name": "memo_hatch",
+     "x": 128,
+     "y": 147.2,
+     "width": 64,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#c9b458"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Memo hatch"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "walls",
+   "type": "objectgroup",
+   "draworder": "index",
+   "opacity": 1,
+   "visible": true,
+   "x": 0,
+   "y": 0,
+   "objects": [
+    {
+     "id": 4,
+     "name": "top_band",
+     "x": 0,
+     "y": 0,
+     "width": 320,
+     "height": 24,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "name": "wall_top",
+     "x": 0,
+     "y": 0,
+     "width": 320,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 6,
+     "name": "wall_bottom",
+     "x": 0,
+     "y": 248,
+     "width": 128,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 7,
+     "name": "wall_bottom",
+     "x": 192,
+     "y": 248,
+     "width": 128,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 8,
+     "name": "wall_left",
+     "x": 0,
+     "y": 0,
+     "width": 8,
+     "height": 184,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 9,
+     "name": "wall_left",
+     "x": 0,
+     "y": 240,
+     "width": 8,
+     "height": 16,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 10,
+     "name": "wall_right",
+     "x": 312,
+     "y": 0,
+     "width": 8,
+     "height": 184,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 11,
+     "name": "wall_right",
+     "x": 312,
+     "y": 240,
+     "width": 8,
+     "height": 16,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 12,
+     "name": "ceo_wall_bottom",
+     "x": 0,
+     "y": 160,
+     "width": 320,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "name": "locations",
+   "type": "objectgroup",
+   "draworder": "index",
+   "opacity": 1,
+   "visible": false,
+   "x": 0,
+   "y": 0,
+   "objects": [
+    {
+     "id": 16,
+     "name": "boss_seat",
+     "type": "boss_seat",
+     "x": 160,
+     "y": 51,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 18,
+     "name": "inbox_1",
+     "type": "inbox",
+     "x": 40,
+     "y": 195,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 19,
+     "name": "inbox_2",
+     "type": "inbox",
+     "x": 88,
+     "y": 195,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 20,
+     "name": "inbox_3",
+     "type": "inbox",
+     "x": 136,
+     "y": 195,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 21,
+     "name": "inbox_4",
+     "type": "inbox",
+     "x": 184,
+     "y": 195,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 22,
+     "name": "inbox_5",
+     "type": "inbox",
+     "x": 232,
+     "y": 195,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 23,
+     "name": "inbox_6",
+     "type": "inbox",
+     "x": 280,
+     "y": 195,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 24,
+     "name": "door_bottom",
+     "type": "door",
+     "x": 160,
+     "y": 256,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 25,
+     "name": "door_left",
+     "type": "door",
+     "x": 0,
+     "y": 211,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 26,
+     "name": "door_right",
+     "type": "door",
+     "x": 320,
+     "y": 211,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    }
+   ]
+  }
+ ],
+ "tilesets": []
+}

@@ -1,0 +1,1179 @@
+{
+ "type": "map",
+ "version": "1.10",
+ "tiledversion": "1.11.0",
+ "orientation": "orthogonal",
+ "renderorder": "right-down",
+ "width": 16,
+ "height": 12,
+ "tilewidth": 32,
+ "tileheight": 32,
+ "infinite": false,
+ "nextlayerid": 4,
+ "nextobjectid": 56,
+ "layers": [
+  {
+   "id": 1,
+   "name": "furniture",
+   "type": "objectgroup",
+   "draworder": "index",
+   "opacity": 1,
+   "visible": true,
+   "x": 0,
+   "y": 0,
+   "objects": [
+    {
+     "id": 1,
+     "name": "floor",
+     "x": 0,
+     "y": 0,
+     "width": 512,
+     "height": 384,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#e9e4d8"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    },
+    {
+     "id": 10,
+     "name": "mgr_room",
+     "x": 0,
+     "y": 0,
+     "width": 192,
+     "height": 160,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#d7e3e8"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Manager"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    },
+    {
+     "id": 14,
+     "name": "mgr_desk",
+     "x": 48,
+     "y": 70.4,
+     "width": 96,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#795548"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 16,
+     "name": "printer",
+     "x": 216,
+     "y": 19.2,
+     "width": 64,
+     "height": 44.8,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#90a4ae"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Printer"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 18,
+     "name": "filing",
+     "x": 400,
+     "y": 19.2,
+     "width": 51.2,
+     "height": 44.8,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Filing"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 20,
+     "name": "server_rack",
+     "x": 464,
+     "y": 19.2,
+     "width": 38.4,
+     "height": 76.8,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#546e7a"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Server"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 22,
+     "name": "photo_booth",
+     "x": 416,
+     "y": 201.6,
+     "width": 70.4,
+     "height": 64,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#b39ddb"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Photo"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 24,
+     "name": "water",
+     "x": 224,
+     "y": 108.8,
+     "width": 25.6,
+     "height": 25.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#81d4fa"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 26,
+     "name": "desk_1",
+     "x": 24,
+     "y": 198.4,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 27,
+     "name": "monitor_1",
+     "x": 46.4,
+     "y": 201.6,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 29,
+     "name": "desk_2",
+     "x": 120,
+     "y": 198.4,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 30,
+     "name": "monitor_2",
+     "x": 142.4,
+     "y": 201.6,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 32,
+     "name": "desk_3",
+     "x": 216,
+     "y": 198.4,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 33,
+     "name": "monitor_3",
+     "x": 238.4,
+     "y": 201.6,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 35,
+     "name": "desk_4",
+     "x": 312,
+     "y": 198.4,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 36,
+     "name": "monitor_4",
+     "x": 334.4,
+     "y": 201.6,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 38,
+     "name": "desk_5",
+     "x": 24,
+     "y": 291.2,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 39,
+     "name": "monitor_5",
+     "x": 46.4,
+     "y": 294.4,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 41,
+     "name": "desk_6",
+     "x": 120,
+     "y": 291.2,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 42,
+     "name": "monitor_6",
+     "x": 142.4,
+     "y": 294.4,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 44,
+     "name": "desk_7",
+     "x": 216,
+     "y": 291.2,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 45,
+     "name": "monitor_7",
+     "x": 238.4,
+     "y": 294.4,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 47,
+     "name": "desk_8",
+     "x": 312,
+     "y": 291.2,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#a1887f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 48,
+     "name": "monitor_8",
+     "x": 334.4,
+     "y": 294.4,
+     "width": 19.2,
+     "height": 11.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#263238"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 50,
+     "name": "mat",
+     "x": 224,
+     "y": 352,
+     "width": 64,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6d4c41"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": "Entrance"
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "walls",
+   "type": "objectgroup",
+   "draworder": "index",
+   "opacity": 1,
+   "visible": true,
+   "x": 0,
+   "y": 0,
+   "objects": [
+    {
+     "id": 2,
+     "name": "wall_top",
+     "x": 0,
+     "y": 0,
+     "width": 320,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 3,
+     "name": "wall_top",
+     "x": 384,
+     "y": 0,
+     "width": 128,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 4,
+     "name": "wall_bottom",
+     "x": 0,
+     "y": 376,
+     "width": 224,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 5,
+     "name": "wall_bottom",
+     "x": 288,
+     "y": 376,
+     "width": 224,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 6,
+     "name": "wall_left",
+     "x": 0,
+     "y": 0,
+     "width": 8,
+     "height": 240,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 7,
+     "name": "wall_left",
+     "x": 0,
+     "y": 304,
+     "width": 8,
+     "height": 80,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 8,
+     "name": "wall_right",
+     "x": 504,
+     "y": 0,
+     "width": 8,
+     "height": 160,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 9,
+     "name": "wall_right",
+     "x": 504,
+     "y": 224,
+     "width": 8,
+     "height": 160,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 11,
+     "name": "mgr_wall_right",
+     "x": 184,
+     "y": 0,
+     "width": 8,
+     "height": 168,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 12,
+     "name": "mgr_wall_bl",
+     "x": 0,
+     "y": 160,
+     "width": 64,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    },
+    {
+     "id": 13,
+     "name": "mgr_wall_br",
+     "x": 112,
+     "y": 160,
+     "width": 80,
+     "height": 8,
+     "rotation": 0,
+     "visible": true,
+     "type": "wall",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5c5470"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "name": "locations",
+   "type": "objectgroup",
+   "draworder": "index",
+   "opacity": 1,
+   "visible": false,
+   "x": 0,
+   "y": 0,
+   "objects": [
+    {
+     "id": 15,
+     "name": "manager_seat",
+     "type": "manager_seat",
+     "x": 96,
+     "y": 48,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 17,
+     "name": "printer",
+     "type": "printer",
+     "x": 248,
+     "y": 86,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 19,
+     "name": "filing_cabinet",
+     "type": "filing_cabinet",
+     "x": 426,
+     "y": 86,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 21,
+     "name": "server_room",
+     "type": "server_room",
+     "x": 454,
+     "y": 115,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 23,
+     "name": "photo_booth",
+     "type": "photo_booth",
+     "x": 451,
+     "y": 288,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 25,
+     "name": "water_cooler",
+     "type": "water_cooler",
+     "x": 237,
+     "y": 154,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 28,
+     "name": "desk_1",
+     "type": "desk",
+     "x": 56,
+     "y": 250,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 31,
+     "name": "desk_2",
+     "type": "desk",
+     "x": 152,
+     "y": 250,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 34,
+     "name": "desk_3",
+     "type": "desk",
+     "x": 248,
+     "y": 250,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 37,
+     "name": "desk_4",
+     "type": "desk",
+     "x": 344,
+     "y": 250,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 40,
+     "name": "desk_5",
+     "type": "desk",
+     "x": 56,
+     "y": 342,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 43,
+     "name": "desk_6",
+     "type": "desk",
+     "x": 152,
+     "y": 342,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 46,
+     "name": "desk_7",
+     "type": "desk",
+     "x": 248,
+     "y": 342,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 49,
+     "name": "desk_8",
+     "type": "desk",
+     "x": 344,
+     "y": 342,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 51,
+     "name": "entrance",
+     "type": "entrance",
+     "x": 256,
+     "y": 362,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 52,
+     "name": "door_bottom",
+     "type": "door",
+     "x": 256,
+     "y": 384,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 53,
+     "name": "door_top",
+     "type": "door",
+     "x": 352,
+     "y": 0,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 54,
+     "name": "door_left",
+     "type": "door",
+     "x": 0,
+     "y": 272,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 55,
+     "name": "door_right",
+     "type": "door",
+     "x": 512,
+     "y": 192,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    }
+   ]
+  }
+ ],
+ "tilesets": []
+}

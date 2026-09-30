@@ -82,11 +82,15 @@ export async function loadTheme(name: unknown): Promise<LoadedTheme> {
   const dir = findThemeDir(name)
   if (!dir) throw new Error(`theme not found: ${name}`)
   const manifest = JSON.parse(await readFile(join(dir, 'theme.json'), 'utf8')) as ThemeManifest
-  if (typeof manifest.map !== 'string') throw new Error(`theme ${name}: "map" missing`)
-  const mapPath = safeJoin(dir, manifest.map)
-  if (!mapPath) throw new Error(`theme ${name}: map path escapes the theme folder`)
-  const map: unknown = JSON.parse(await readFile(mapPath, 'utf8'))
-  return { manifest, map, baseUrl: `${THEME_SCHEME}://${name}/` }
+  const readMap = async (key: 'hq' | 'branch'): Promise<unknown> => {
+    const rel = manifest[key]
+    if (typeof rel !== 'string') throw new Error(`theme ${name}: "${key}" missing`)
+    const p = safeJoin(dir, rel)
+    if (!p) throw new Error(`theme ${name}: ${key} path escapes the theme folder`)
+    return JSON.parse(await readFile(p, 'utf8'))
+  }
+  const [hq, branch] = await Promise.all([readMap('hq'), readMap('branch')])
+  return { manifest, hq, branch, baseUrl: `${THEME_SCHEME}://${name}/` }
 }
 
 const notFound = () => new Response('not found', { status: 404 })

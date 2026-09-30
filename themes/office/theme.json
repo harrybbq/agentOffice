@@ -1,7 +1,8 @@
 {
   "name": "office",
   "displayName": "Office",
-  "map": "map.json",
+  "hq": "hq.json",
+  "branch": "branch.json",
   "background": "#2b2d42",
   "roles": {
     "boss": {

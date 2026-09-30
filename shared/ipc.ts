@@ -15,8 +15,9 @@ export const IPC = {
 
 export interface LoadedTheme {
   manifest: ThemeManifest
-  /** Parsed Tiled JSON map. */
-  map: unknown
+  /** Parsed Tiled JSON maps. */
+  hq: unknown
+  branch: unknown
   /** URL prefix for theme assets, served via the `theme://` protocol, e.g. "theme://office/". */
   baseUrl: string
 }

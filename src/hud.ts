@@ -26,11 +26,20 @@ export class Hud {
   private connection = ''
   private themeName = ''
 
-  constructor(root: HTMLElement, private store: AgentStore) {
+  constructor(
+    root: HTMLElement,
+    private store: AgentStore,
+    private onTeamClick: (teamId: string) => void = () => undefined
+  ) {
     root.replaceChildren()
     const left = el('div', 'hud-left')
     this.waitingBox.append(el('h2', undefined, 'Waiting on you'), this.waitingList)
     left.append(this.waitingBox, this.legend)
+    // pointerdown (not click): the legend re-renders every second, which can swallow a click.
+    this.legend.addEventListener('pointerdown', (ev) => {
+      const row = (ev.target as HTMLElement).closest<HTMLElement>('[data-team]')
+      if (row?.dataset.team) this.onTeamClick(row.dataset.team)
+    })
     root.append(left, this.info)
     window.setInterval(() => this.render(), 1000)
     this.render()
@@ -70,7 +79,8 @@ export class Hud {
         const row = el('div', 'hud-team')
         const sw = el('span', 'hud-swatch')
         sw.style.background = t.color
-        row.title = t.provider
+        row.title = `${t.provider} · click to show this branch (double-click the office to fit all)`
+        row.dataset.team = t.id
         row.append(sw, el('span', undefined, t.workers > 0 ? `${t.name} (+${t.workers})` : t.name))
         return row
       })

@@ -11,7 +11,7 @@ import { Hud } from './hud'
 const gameRoot = document.getElementById('game')!
 const errorBox = document.getElementById('error')!
 const store = new AgentStore()
-const hud = new Hud(document.getElementById('hud')!, store)
+const hud = new Hud(document.getElementById('hud')!, store, (teamId) => scene?.focusTeam(teamId))
 
 let game: Phaser.Game | null = null
 let scene: OfficeScene | null = null
@@ -51,7 +51,8 @@ function devBridge(): AgentOfficeBridge {
       }
       try {
         const manifest = await get('theme.json')
-        return { manifest, map: await get(manifest.map), baseUrl }
+        const [hq, branch] = await Promise.all([get(manifest.hq), get(manifest.branch)])
+        return { manifest, hq, branch, baseUrl }
       } catch (err) {
         throw new Error(
           `Not running inside Electron and the theme couldn't be fetched (${String(err)}). ` +
@@ -78,10 +79,11 @@ async function build(s: RendererSettings, bridge: AgentOfficeBridge): Promise<vo
   }
   if (gen !== generation) return
 
-  let map
+  let hq, branch
   try {
-    map = parseMap(theme.map)
-    for (const w of validateTheme(theme.manifest, map)) console.warn(`[agent-office] ${w}`)
+    hq = parseMap(theme.hq, theme.manifest.hq ?? 'HQ map')
+    branch = parseMap(theme.branch, theme.manifest.branch ?? 'Branch map')
+    for (const w of validateTheme(theme.manifest, hq, branch)) console.warn(`[agent-office] ${w}`)
   } catch (err) {
     showError(err instanceof ThemeError ? err.message : `Invalid theme: ${String(err)}`)
     return
@@ -91,7 +93,9 @@ async function build(s: RendererSettings, bridge: AgentOfficeBridge): Promise<vo
 
   const sc = new OfficeScene({
     theme,
-    map,
+    hq,
+    branch,
+    overlay: s.overlay,
     onTeams: (teams) => hud.setTeams(teams),
     onReady: () => {
       if (gen !== generation) return
@@ -104,13 +108,13 @@ async function build(s: RendererSettings, bridge: AgentOfficeBridge): Promise<vo
   game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: gameRoot,
-    width: map.widthPx,
-    height: map.heightPx,
+    width: window.innerWidth,
+    height: window.innerHeight,
     pixelArt: true,
     roundPixels: true,
     transparent: s.overlay,
     backgroundColor: s.overlay ? undefined : theme.manifest.background,
-    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.NO_CENTER },
     banner: false,
     scene: [sc]
   })

@@ -2,17 +2,27 @@
 //
 //   themes/<name>/
 //     theme.json   -> ThemeManifest (below)
-//     map.json     -> Tiled JSON map (orthogonal). Uses:
-//                     - object layer "locations": point objects; `type` (or `class`) = location type
-//                     - object layer "furniture" (optional): rectangles drawn as placeholders when
-//                       there is no art; custom properties `color` (#rrggbb) and `label`
-//                     - any tile layers + embedded tilesets (image paths relative to the theme folder)
+//     hq.json      -> Tiled map of the headquarters: the boss's office + memo inbox. Exactly one.
+//     branch.json  -> Tiled map of ONE team's branch: one manager seat, desks, stations.
+//                     The scene stamps out a copy per active team (session) and lays them all out
+//                     in one world, separated by walkable corridors, all visible at once.
 //     sprites/...  -> optional sprite sheets referenced from theme.json
 //
-// Location types the scene relies on (map must contain them):
-//   boss_seat (1), manager_seat (1 per concurrent team), desk (many), inbox (1+ memo slots),
-//   entrance (1+, where characters arrive and leave)
-// Every other location type is free-form and just referenced from `activities`.
+// Both maps are orthogonal Tiled JSON with the same tile size, and use these layers:
+//   - object layer "locations": point objects; `type` (or `class`) = location type
+//   - object layer "walls" (optional): rectangles nobody can cross. Pathfinding runs on a half-tile
+//     grid, so doors must be at least one tile wide. A room with no door is unreachable: the boss's
+//     office is sealed and agents only ever reach the inbox outside it.
+//   - object layer "furniture" (optional): rectangles drawn as placeholders when there is no art;
+//     properties `color` (#rrggbb), `label`, `solid` (bool: characters path around it)
+//   - any tile layers + embedded tilesets (image paths relative to the theme folder)
+//
+// Required location types:
+//   hq.json:     boss_seat (1), inbox (1+ memo slots), door (1+, on the map edge, opens to corridor)
+//   branch.json: manager_seat (1), desk (1+), entrance (1+, where characters arrive and leave),
+//                door (1+, on the map edge, opens to corridor)
+// Every other type (printer, yard, ...) is free-form and referenced from `activities`.
+// Station lookups are scoped to the character's own branch; `inbox` always resolves to the HQ.
 
 import type { Activity } from './events'
 
@@ -69,8 +79,10 @@ export interface ActivityDef {
 export interface ThemeManifest {
   name: string
   displayName: string
-  /** Path to Tiled JSON, relative to the theme folder. */
-  map: string
+  /** Tiled JSON of the headquarters (boss office + inbox), relative to the theme folder. */
+  hq: string
+  /** Tiled JSON of one team's branch, stamped out once per active team. */
+  branch: string
   background: string
   roles: Record<Role, RoleDef>
   /** Keyed by AgentEvent.provider; "default" is required, "human" is used for the boss (you). */

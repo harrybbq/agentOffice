@@ -44,3 +44,16 @@ TodoWrite, LSP, Skill, AskUserQuestion, ... MCP: `mcp__<server>__<tool>`.
 ## Transcripts
 `~/.claude/projects/<project>/<session-id>.jsonl`; subagents in
 `<session-id>/subagents/agent-<agent-id>.jsonl`. The format is internal and changes between versions, so parse defensively.
+
+## Sending prompts INTO a running session (CEO speech bar) — for M2
+Source: https://code.claude.com/docs/en/cross-session-messaging#the-sessions-inbox-socket
+- Claude Code exports `CLAUDE_CODE_MESSAGING_SOCKET` (Windows: named pipe `\.\pipe\LOCAL\cc-msg-...`;
+  macOS/Linux: unix socket) and `CLAUDE_CODE_MESSAGING_TOKEN` to hooks and child processes.
+  Verified present in Claude Code 2.1.284 on this machine.
+- Protocol: connect, send `{"type":"auth","token":"<token>"}\n` (required on Windows), then the message text + `\n`.
+- Mid-turn: delivered between tool calls (never interrupts a tool). Idle: starts a new turn.
+- It arrives as a *peer* message ("from another session"): it can't approve permissions, and slash commands arrive as plain text.
+  The receiver's `crossSessionInbound` setting can be accept (default) / hold / refuse.
+- Plan: the hook script includes the socket path + token with SessionStart (and each event, cheaply).
+  The app keeps them **in memory only** per session_id; the speech bar writes to the pipe.
+- Fallbacks: Stop hook `{"decision":"block","reason":...}` (loop guard `stop_hook_active`).

@@ -1,4 +1,4 @@
-// A character on screen with its own action queue: walk (L-path) -> dwell (>= 1200 ms) -> next.
+// A character on screen with its own action queue: walk (A* path) -> dwell (>= 1200 ms) -> next.
 import Phaser from 'phaser'
 import type { Point } from './roster'
 import { compactQueue, MIN_DWELL_MS } from './queue'
@@ -40,19 +40,13 @@ export interface CharacterOptions {
   y: number
   /** Called whenever the queue runs dry. */
   onIdle?: (c: Character) => void
+  /** Waypoints from -> to (excluding from), [] if already there, null if unreachable. */
+  findPath: (from: Point, to: Point) => Point[] | null
 }
 
 export function truncate(s: string, n = BUBBLE_CHARS): string {
   const clean = s.replace(/\s+/g, ' ').trim()
   return clean.length > n ? clean.slice(0, n - 1) + '…' : clean
-}
-
-/** Manhattan L-path: along x first, then y. */
-export function lPath(from: Point, to: Point): Point[] {
-  const pts: Point[] = []
-  if (Math.abs(from.x - to.x) >= 0.5) pts.push({ x: to.x, y: from.y })
-  if (Math.abs(from.y - to.y) >= 0.5) pts.push({ x: to.x, y: to.y })
-  return pts
 }
 
 export class Character {
@@ -78,12 +72,17 @@ export class Character {
   private tween: Phaser.Tweens.Tween | null = null
   private timer: Phaser.Time.TimerEvent | null = null
   private onIdle?: (c: Character) => void
+  private findPath: (from: Point, to: Point) => Point[] | null
+  /** Final destination of the current walk, for re-pathing when the world changes. */
+  private dest: Point | null = null
+  private walkDone: (() => void) | null = null
 
   constructor(scene: Phaser.Scene, o: CharacterOptions) {
     this.scene = scene
     this.id = o.id
     this.skin = o.skin
     this.onIdle = o.onIdle
+    this.findPath = o.findPath
     const h = o.skin.height
 
     const shadow = scene.add.image(0, 0, o.skin.shadow).setOrigin(0.5, 1)
@@ -199,6 +198,8 @@ export class Character {
     this.timer?.remove(false)
     this.tween = null
     this.timer = null
+    this.dest = null
+    this.walkDone = null
     this.current = null
     this.phase = 'idle'
     this.hideBubble()
@@ -256,15 +257,71 @@ export class Character {
     this.hideBubble()
     this.setCarry(a.carry ?? null)
     const to = a.target(this.position)
-    const path = to ? lPath(this.position, to) : []
+    const path = to ? this.route(to) : []
     this.phase = 'walking'
+    this.dest = to && path.length > 0 ? to : null
     this.setAnim(path.length > 0 ? (a.carry ? 'carry' : 'walk') : 'idle')
     this.walk(path, () => this.arrive(a))
   }
 
+  /** Path to `to`, or [] (stay put) with a warning when there is none. Never teleports. */
+  private route(to: Point): Point[] {
+    const path = this.findPath(this.position, to)
+    if (path) return path
+    console.warn(
+      `[agent-office] no path for ${this.id} from (${Math.round(this.container.x)},${Math.round(this.container.y)}) ` +
+        `to (${Math.round(to.x)},${Math.round(to.y)}); staying put`
+    )
+    return []
+  }
+
+  /** True while waiting in place (stay) or walking somewhere: relocate() will work. */
+  get canRelocate(): boolean {
+    return this.phase === 'staying' || (this.phase === 'walking' && this.dest !== null && this.walkDone !== null)
+  }
+
+  /** Moves a staying (or walking) character to a new spot without ending its action. */
+  relocate(to: Point): boolean {
+    const a = this.current
+    if (!a || !this.canRelocate) return false
+    if (this.phase === 'walking') {
+      this.dest = to
+      this.repath()
+      return true
+    }
+    const path = this.route(to)
+    this.phase = 'walking'
+    this.hideBubble()
+    this.dest = path.length > 0 ? to : null
+    this.setAnim(path.length > 0 ? (a.carry ? 'carry' : 'walk') : 'idle')
+    this.walk(path, () => {
+      if (this.phase === 'gone' || this.current !== a) return
+      this.container.setDepth(this.container.y)
+      this.setAnim(a.anim ?? 'idle')
+      this.showBubble(a)
+      if (a.stay) this.phase = 'staying'
+      else this.finish()
+    })
+    return true
+  }
+
+  /** The world changed (a branch appeared/vanished): re-plan the current walk from here. */
+  repath(): void {
+    if (this.phase !== 'walking' || !this.dest || !this.walkDone) return
+    const done = this.walkDone
+    this.tween?.stop()
+    this.tween = null
+    const path = this.route(this.dest)
+    if (path.length === 0) this.setAnim('idle')
+    this.walk(path, done)
+  }
+
   private walk(path: Point[], done: () => void): void {
+    this.walkDone = done
     const seg = path.shift()
     if (!seg) {
+      this.walkDone = null
+      this.dest = null
       done()
       return
     }
