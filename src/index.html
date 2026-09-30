@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' theme: data: blob:; connect-src 'self' theme:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>Agent Office</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --panel: rgba(20, 22, 32, 0.82);
+        --text: #f4f1ea;
+        --dim: #a9a6b8;
+        --accent: #f6e05e;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #1b1c28;
+        font: 12px/1.35 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        color: var(--text);
+      }
+      body.overlay {
+        background: transparent;
+      }
+      #game {
+        position: absolute;
+        inset: 0;
+      }
+      #hud {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .hud-left {
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-width: 280px;
+      }
+      .hud-panel {
+        background: var(--panel);
+        border-radius: 6px;
+        padding: 6px 8px;
+      }
+      .hud-panel[hidden] {
+        display: none;
+      }
+      .hud-waiting {
+        border-left: 3px solid var(--accent);
+      }
+      .hud-waiting h2 {
+        margin: 0 0 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--accent);
+      }
+      .hud-waiting ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .hud-waiting li + li {
+        margin-top: 4px;
+      }
+      .hud-ago {
+        float: right;
+        color: var(--dim);
+        margin-left: 8px;
+      }
+      .hud-detail {
+        color: var(--dim);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .hud-team {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .hud-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        border: 1px solid rgba(0, 0, 0, 0.5);
+      }
+      .hud-info {
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        text-align: right;
+      }
+      .hud-dim {
+        color: var(--dim);
+      }
+      body.overlay .hud-legend,
+      body.overlay .hud-info {
+        display: none;
+      }
+      #error {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        max-width: 520px;
+        padding: 14px 18px;
+        background: #3b1f24;
+        border: 1px solid #d9534f;
+        border-radius: 6px;
+        white-space: pre-wrap;
+      }
+      #error[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud"></div>
+    <div id="error" role="alert" hidden></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

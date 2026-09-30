@@ -1,0 +1,32 @@
+{
+  "name": "agent-office",
+  "version": "0.1.0",
+  "description": "Watch AI agents work as pixel-art characters in a themed scene",
+  "private": true,
+  "main": "out/main/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "simulate": "tsx scripts/simulate.ts",
+    "test": "tsx tests/roster.test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.2",
+    "electron": "^44.5.1",
+    "electron-vite": "^5.0.0",
+    "phaser": "^4.2.1",
+    "tsx": "^4.23.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6"
+  }
+}

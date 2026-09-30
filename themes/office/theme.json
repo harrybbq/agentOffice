@@ -1,0 +1,91 @@
+{
+  "name": "office",
+  "displayName": "Office",
+  "map": "map.json",
+  "background": "#2b2d42",
+  "roles": {
+    "boss": {
+      "label": "CEO",
+      "placeholder": {
+        "accessory": "tie",
+        "accent": "#c0392b",
+        "scale": 1.15
+      }
+    },
+    "manager": {
+      "label": "Manager",
+      "placeholder": {
+        "accessory": "clipboard",
+        "accent": "#8d6e63"
+      }
+    },
+    "worker": {
+      "label": "Worker",
+      "placeholder": {
+        "accessory": "none",
+        "accent": "#ffffff"
+      }
+    }
+  },
+  "providers": {
+    "default": {
+      "tint": "#bab0ac"
+    },
+    "human": {
+      "tint": "#2f3e46"
+    },
+    "claude-code": {
+      "tint": "#d97757"
+    },
+    "simulate": {
+      "tint": "#76b7b2"
+    }
+  },
+  "activities": {
+    "read": {
+      "location": "filing_cabinet",
+      "anim": "work",
+      "verb": "Filing"
+    },
+    "write": {
+      "location": "home",
+      "anim": "work",
+      "verb": "Typing"
+    },
+    "exec": {
+      "location": "server_room",
+      "anim": "work",
+      "verb": "Running"
+    },
+    "web": {
+      "location": "printer",
+      "anim": "work",
+      "verb": "Copying"
+    },
+    "capture": {
+      "location": "photo_booth",
+      "anim": "work",
+      "verb": "Snapping"
+    },
+    "waiting": {
+      "location": "inbox",
+      "anim": "idle",
+      "verb": "Awaiting sign-off"
+    },
+    "idle": {
+      "location": "home",
+      "anim": "idle",
+      "verb": ""
+    },
+    "done": {
+      "location": "manager",
+      "anim": "carry",
+      "verb": "Reporting"
+    }
+  },
+  "props": {
+    "handoff": "folder",
+    "report": "report",
+    "memo": "memo"
+  }
+}
