@@ -4,8 +4,9 @@
 //     theme.json   -> ThemeManifest (below)
 //     hq.json      -> Tiled map of the headquarters: the boss's office + memo inbox. Exactly one.
 //     branch.json  -> Tiled map of ONE team's branch: one manager seat, desks, stations.
-//                     The scene stamps out a copy per active team (session) and lays them all out
-//                     in one world, separated by walkable corridors, all visible at once.
+//                     The scene stamps out a copy per active team (session) on a grid of lots. Each
+//                     new branch is connected by an animated 2-tile corridor laid from a `door` of an
+//                     existing building, then built. Outside buildings and corridors is not walkable.
 //     sprites/...  -> optional sprite sheets referenced from theme.json
 //
 // Both maps are orthogonal Tiled JSON with the same tile size, and use these layers:

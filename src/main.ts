@@ -101,7 +101,7 @@ async function build(s: RendererSettings, bridge: AgentOfficeBridge): Promise<vo
       if (gen !== generation) return
       scene = sc
       // Rebuild the roster from what we already know; characters walk in again.
-      for (const e of store.replay()) sc.handleEvent(e)
+      sc.replay(store.replay())
     }
   })
 

@@ -5,7 +5,7 @@ import { parseMap } from '../src/theme/parse.ts'
 import type { Rect } from '../src/theme/parse.ts'
 import { slotCell, WorldLayout } from '../src/world/layout.ts'
 import type { Block } from '../src/world/layout.ts'
-import { NavGrid } from '../src/world/pathfinding.ts'
+import { CorridorNetwork } from '../src/world/corridors.ts'
 import { doorNormal } from '../src/scene/roster.ts'
 import type { Point } from '../src/scene/roster.ts'
 
@@ -17,7 +17,16 @@ const branchMap = parseMap(raw('branch.json'))
 let pass = 0
 const t = (name: string, fn: () => void) => { fn(); pass++; console.log('ok -', name) }
 
-const navOf = (l: WorldLayout) => new NavGrid(l.bounds(), l.blocked())
+/** Builds a world: the HQ plus n branches, each connected by its corridor. */
+function world(n: number): { l: WorldLayout; net: CorridorNetwork } {
+  const l = new WorldLayout(hqMap, branchMap)
+  const net = new CorridorNetwork(l)
+  for (let i = 0; i < n; i++) assert.ok(net.connect(l.addBranch('T' + i)), `T${i} not connected`)
+  return { l, net }
+}
+const navOf = (net: CorridorNetwork) => net.nav()
+/** Component of the HQ inbox = the one every live character must be able to reach. */
+const hqComp = (net: CorridorNetwork) => net.nav().componentAt(net.hqPoint())
 const strictlyInside = (p: Point, r: Rect) => p.x > r.x && p.x < r.x + r.width && p.y > r.y && p.y < r.y + r.height
 const allPoints = (b: Block) => [...b.locations.values()].flat()
 const first = (b: Block, type: string) => b.locations.get(type)![0]
@@ -99,21 +108,23 @@ t('blocks sit inside bounds, never overlap, with corridors >= 2 tiles between th
   }
 })
 
-t('door gaps are open and every door opens onto the shared corridor', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 3; i++) l.addBranch('T' + i)
-  const nav = navOf(l)
-  const corridor = nav.componentAt({ x: 8, y: 8 })
-  assert.ok(corridor >= 0)
-  for (const b of l.all()) {
-    for (const d of b.locations.get('door')!) {
+t('door gaps are open; every corridor door opens onto its corridor and the HQ network', () => {
+  const { l, net } = world(3)
+  const nav = navOf(net)
+  const hub = nav.componentAt(net.hqPoint())
+  assert.ok(hub >= 0)
+  let doors = 0
+  for (const c of net.corridors()) {
+    for (const [id, name] of [[c.fromBlock, c.fromDoor], [c.toBlock, c.toDoor]]) {
+      const b = l.all().find((x) => x.id === id)!
+      const d = b.locations.get('door')!.find((x) => x.name === name)!
       const n = doorNormal(b, d)
-      const outside = { x: d.x + n.x * 8, y: d.y + n.y * 8 }
-      const inside = { x: d.x - n.x * 12, y: d.y - n.y * 12 }
-      assert.equal(nav.componentAt(outside), corridor, `door ${b.id}/${d.name} outside`)
-      assert.equal(nav.componentAt(inside), corridor, `door ${b.id}/${d.name} inside`)
+      assert.equal(nav.componentAt({ x: d.x + n.x * 8, y: d.y + n.y * 8 }), hub, `door ${b.id}/${d.name} outside`)
+      assert.equal(nav.componentAt({ x: d.x - n.x * 12, y: d.y - n.y * 12 }), hub, `door ${b.id}/${d.name} inside`)
+      doors++
     }
   }
+  assert.ok(doors >= 6)
   // The branch manager-room door (x 64..112) keeps 3 free half-tile cells.
   const b = l.branch('T0')!
   let free = 0
@@ -122,11 +133,10 @@ t('door gaps are open and every door opens onto the shared corridor', () => {
 })
 
 t('A* never crosses a wall or solid furniture (1 px sampling of smoothed paths)', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 4; i++) l.addBranch('T' + i)
-  const nav = navOf(l)
+  const { l, net } = world(4)
+  const nav = navOf(net)
   const blocked = l.blocked()
-  const pts = l.all().flatMap(allPoints).filter((p) => nav.componentAt(p) === nav.componentAt({ x: 8, y: 8 }))
+  const pts = l.all().flatMap(allPoints).filter((p) => nav.componentAt(p) === hqComp(net))
   const rand = rng(42)
   let paths = 0
   for (let k = 0; k < 400; k++) {
@@ -137,31 +147,35 @@ t('A* never crosses a wall or solid furniture (1 px sampling of smoothed paths)'
     assertClear(a, path, blocked, [ceoRoom(l)])
     paths++
   }
-  // Random free points anywhere in the world, including empty lots.
   const bounds = l.bounds()
-  for (let k = 0; k < 300; k++) {
+  // Random free points anywhere walkable (most of the world is outside now).
+  for (let k = 0, tries = 0; k < 300 && tries < 20000; tries++) {
     const a = { x: rand() * bounds.width, y: rand() * bounds.height }
     const b = { x: rand() * bounds.width, y: rand() * bounds.height }
     if (!nav.isFreeAt(a)) continue
     const path = nav.findPath(a, b)
     if (path) assertClear(a, path, blocked)
     paths++
+    k++
   }
   assert.ok(paths > 500)
 })
 
 t('smoothing: a straight corridor walk is a single segment', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  l.addBranch('T0')
-  const nav = navOf(l)
-  const path = nav.findPath({ x: 24, y: 24 }, { x: 24, y: l.bounds().height - 24 })!
+  const { net } = world(1)
+  const nav = navOf(net)
+  // T0 sits right of the HQ: its corridor is one straight run from the HQ's right door.
+  const c = net.corridors().find((x) => x.toBlock === 'T0')!
+  assert.equal(c.strip.length, 1)
+  const a = net.cellCenter(c.path[0])
+  const b = net.cellCenter(c.path[c.path.length - 1])
+  const path = nav.findPath(a, b)!
   assert.equal(path.length, 1)
 })
 
 t('every branch point can reach every HQ inbox slot and the inbox queue', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 4; i++) l.addBranch('T' + i)
-  const nav = navOf(l)
+  const { l, net } = world(4)
+  const nav = navOf(net)
   const inboxes = l.hq.locations.get('inbox')!
   const door = l.hq.locations.get('door')!.find((d) => d.name === 'door_bottom')!
   const queueSpot = { x: door.x, y: door.y + 44 }
@@ -178,9 +192,8 @@ t('every branch point can reach every HQ inbox slot and the inbox queue', () => 
 })
 
 t('nothing inside the sealed CEO office is reachable from any branch', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 4; i++) l.addBranch('T' + i)
-  const nav = navOf(l)
+  const { l, net } = world(4)
+  const nav = navOf(net)
   const room = ceoRoom(l)
   let cells = 0
   for (let y = room.y + 8; y < room.y + room.height; y += 16) {
@@ -206,12 +219,11 @@ t('nothing inside the sealed CEO office is reachable from any branch', () => {
 })
 
 t('the HQ boss_seat is unreachable from outside the CEO office', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 4; i++) l.addBranch('T' + i)
-  const nav = navOf(l)
+  const { l, net } = world(4)
+  const nav = navOf(net)
   const seat = first(l.hq, 'boss_seat')
   assert.ok(nav.isFreeAt(seat))
-  const froms: Point[] = [{ x: 8, y: 8 }, ...l.hq.locations.get('inbox')!, ...l.hq.locations.get('door')!]
+  const froms: Point[] = [...l.hq.locations.get('inbox')!, ...l.hq.locations.get('door')!]
   for (const b of l.branches()) froms.push(...allPoints(b))
   for (const p of froms) assert.equal(nav.findPath(p, seat), null, `boss_seat reachable from (${p.x},${p.y})`)
   // The boss itself can move around inside its office.
@@ -219,31 +231,34 @@ t('the HQ boss_seat is unreachable from outside the CEO office', () => {
 })
 
 t('grid rebuild after removing a branch; paths still valid', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 4; i++) l.addBranch('T' + i)
+  const { l, net } = world(4)
   const before = l.bounds()
   l.removeBranch('T3') // slot 4 (col 2) -> bounds shrink back to 2x2
+  net.remove('T3')
   const after = l.bounds()
   assert.ok(after.width < before.width)
-  const nav = navOf(l)
+  const nav = navOf(net)
   const path = nav.findPath(first(l.branch('T2')!, 'entrance'), l.hq.locations.get('inbox')![0])
   assert.ok(path); assertClear(first(l.branch('T2')!, 'entrance'), path, l.blocked())
 })
 
 t('performance: corner-to-corner path in a ~120x90 tile world', () => {
-  const l = new WorldLayout(hqMap, branchMap)
-  for (let i = 0; i < 35; i++) l.addBranch('T' + i)
+  const t00 = performance.now()
+  const { l, net } = world(35)
+  const routing = performance.now() - t00
   const b = l.bounds()
   const t0 = performance.now()
-  const nav = navOf(l)
+  const nav = navOf(net)
   const t1 = performance.now()
   const far = l.branches().reduce((m, x) => (x.slot > m.slot ? x : m))
   const path = nav.findPath(first(far, 'manager_seat'), l.hq.locations.get('inbox')![0])
   const t2 = performance.now()
   assert.ok(path)
   assertClear(first(far, 'manager_seat'), path, l.blocked())
-  console.log(`   world ${b.width / 32}x${b.height / 32} tiles, grid ${nav.cols}x${nav.rows}: build ${(t1 - t0).toFixed(1)} ms, path ${(t2 - t1).toFixed(1)} ms, ${path.length} waypoints`)
+  console.log(`   world ${b.width / 32}x${b.height / 32} tiles, grid ${nav.cols}x${nav.rows}: 35 corridors ${routing.toFixed(0)} ms, build ${(t1 - t0).toFixed(1)} ms, path ${(t2 - t1).toFixed(1)} ms, ${path.length} waypoints`)
   assert.ok(t2 - t1 < 250)
 })
 
 console.log(`\n${pass} world tests passed`)
+
+await import('./corridors.test.ts')

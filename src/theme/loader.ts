@@ -21,28 +21,33 @@ export function preloadTemplates(scene: Phaser.Scene, maps: Record<TemplateKind,
   }
 }
 
-/** Draws one block at its world offset. Returns every object created, for fading/destroying. */
-export function drawBlock(scene: Phaser.Scene, block: Block, depth = -1000): Phaser.GameObjects.GameObject[] {
+/** The block's Tiled tile layers at its world offset ([] when the map has no usable tiles). */
+export type TileLayer = Phaser.Tilemaps.TilemapLayer | Phaser.Tilemaps.TilemapGPULayer
+
+export function drawTileLayers(scene: Phaser.Scene, block: Block, depth = -1000): TileLayer[] {
   const kind: TemplateKind = block.kind
   const map = block.template
-  const out: Phaser.GameObjects.GameObject[] = []
-  let tiled = false
-  if (map.useTiles && scene.cache.tilemap.exists(mapKey(kind))) {
-    try {
-      const tm = scene.make.tilemap({ key: mapKey(kind) })
-      const sets = map.tilesets
-        .map((ts, i) => tm.addTilesetImage(ts.name, tilesetKey(kind, ts.name, i)))
-        .filter((t): t is Phaser.Tilemaps.Tileset => t !== null)
-      for (const name of map.tileLayers) {
-        const layer = tm.createLayer(name, sets, block.offset.x, block.offset.y)
-        if (layer) out.push(layer.setDepth(depth))
-      }
-      tiled = out.length > 0
-    } catch (err) {
-      console.warn('[agent-office] tilemap render failed, drawing furniture instead', err)
+  const out: TileLayer[] = []
+  if (!map.useTiles || !scene.cache.tilemap.exists(mapKey(kind))) return out
+  try {
+    const tm = scene.make.tilemap({ key: mapKey(kind) })
+    const sets = map.tilesets
+      .map((ts, i) => tm.addTilesetImage(ts.name, tilesetKey(kind, ts.name, i)))
+      .filter((t): t is Phaser.Tilemaps.Tileset => t !== null)
+    for (const name of map.tileLayers) {
+      const layer = tm.createLayer(name, sets, block.offset.x, block.offset.y)
+      if (layer) out.push(layer.setDepth(depth))
     }
+  } catch (err) {
+    console.warn('[agent-office] tilemap render failed, drawing furniture instead', err)
   }
-  if (!tiled) out.push(...drawFurniture(scene, block.furniture, depth))
+  return out
+}
+
+/** Draws one block at its world offset. Returns every object created, for fading/destroying. */
+export function drawBlock(scene: Phaser.Scene, block: Block, depth = -1000): Phaser.GameObjects.GameObject[] {
+  const out: Phaser.GameObjects.GameObject[] = drawTileLayers(scene, block, depth)
+  if (out.length === 0) out.push(...drawFurniture(scene, block.furniture, depth))
   // Walls always read as walls, on top of tiles/furniture.
   out.push(drawWalls(scene, block.walls, depth + 1))
   return out

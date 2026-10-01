@@ -1,6 +1,8 @@
 // A* on a half-tile grid over the world bounds, with line-of-sight path smoothing. Pure logic.
 //
-// A cell is blocked if it overlaps (open intervals: touching edges don't count) any blocked rect.
+// With `walkable` rects (blocks + built corridors), only cells fully inside one of them are free;
+// without, everything is. Then a cell is blocked if it overlaps (open intervals: touching edges
+// don't count) any blocked rect.
 // Walls are thin (8 px) and doors are >= 1 tile, so no inflation: a 32 px door keeps 2 free cells.
 import type { Rect } from '../theme/parse'
 import type { Point } from '../scene/roster'
@@ -12,7 +14,7 @@ const START_SNAP_CELLS = 16
 const SQRT2 = Math.SQRT2
 
 /** Binary min-heap of cell indices keyed by f-score (lazy deletion by the caller). */
-class MinHeap {
+export class MinHeap {
   private idx: number[] = []
   private key: number[] = []
 
@@ -71,11 +73,15 @@ export class NavGrid {
   /** Connected component per cell (4-connected), -1 for blocked cells. */
   readonly comp: Int32Array
 
-  constructor(bounds: Rect, rects: Rect[], cell = CELL) {
+  constructor(bounds: Rect, rects: Rect[], walkable: Rect[] | null = null, cell = CELL) {
     this.cell = cell
     this.cols = Math.max(1, Math.ceil((bounds.x + bounds.width) / cell))
     this.rows = Math.max(1, Math.ceil((bounds.y + bounds.height) / cell))
     this.blocked = new Uint8Array(this.cols * this.rows)
+    if (walkable) {
+      this.blocked.fill(1)
+      for (const r of walkable) this.clearInside(r)
+    }
     for (const r of rects) this.rasterize(r)
     this.comp = new Int32Array(this.cols * this.rows).fill(-1)
     this.label()
@@ -88,6 +94,15 @@ export class NavGrid {
     const r0 = Math.max(0, Math.floor(r.y / this.cell))
     const r1 = Math.min(this.rows - 1, Math.ceil((r.y + r.height) / this.cell) - 1)
     for (let y = r0; y <= r1; y++) for (let x = c0; x <= c1; x++) this.blocked[y * this.cols + x] = 1
+  }
+
+  /** Frees the cells lying fully inside r. */
+  private clearInside(r: Rect): void {
+    const c0 = Math.max(0, Math.ceil(r.x / this.cell - 1e-9))
+    const c1 = Math.min(this.cols - 1, Math.floor((r.x + r.width) / this.cell + 1e-9) - 1)
+    const r0 = Math.max(0, Math.ceil(r.y / this.cell - 1e-9))
+    const r1 = Math.min(this.rows - 1, Math.floor((r.y + r.height) / this.cell + 1e-9) - 1)
+    for (let y = r0; y <= r1; y++) for (let x = c0; x <= c1; x++) this.blocked[y * this.cols + x] = 0
   }
 
   private label(): void {

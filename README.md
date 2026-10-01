@@ -102,10 +102,12 @@ themes/my-theme/
   sprites/       optional sprite sheets
 ```
 
-The scene lays out one **world**: the HQ plus one branch per active session on a grid, joined by
-walkable corridors, with the camera fitting everything on screen (zoom floor 0.5×; wheel to zoom,
-drag to pan, double-click to refit, click a team in the legend to jump to it). Branches never move
-once placed; a branch disappears when its whole team has left and its lot is reused.
+The scene lays out one **world**: the HQ plus one branch per active session on a grid of lots.
+When a team appears, a 2-tile corridor is laid from a `door` of an existing building (HQ or another
+branch) to the new lot, then the branch is built (floor, walls, furniture, sign) and the team moves in.
+Only buildings and built corridors are walkable. When a whole team has left, its branch is demolished
+and corridors nobody else needs retract. Branches never move once placed. The camera fits everything
+(zoom floor 0.5×; wheel to zoom, drag to pan, double-click to refit, click a team in the legend to jump to it).
 
 Both maps are orthogonal [Tiled](https://www.mapeditor.org/) JSON (embedded tilesets), same tile size:
 - **`locations`** object layer: point objects whose *class/type* is the location type.
@@ -142,6 +144,7 @@ docs/       research notes (hooks, art direction)
 ## Roadmap
 1. ✅ Window, office placeholder scene, event format, generic endpoint, simulator
    ✅ Dynamic branches per session, A* pathfinding, sealed CEO office
+   ✅ Corridor + construction animation when a team arrives, demolition when it leaves
 2. Claude Code hook adapter + install snippet, CEO speech bar (prompts via the session inbox socket)
 3. Claude Code transcript watcher (zero setup), prison theme
 4. Real pixel art

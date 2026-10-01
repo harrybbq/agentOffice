@@ -1,5 +1,6 @@
-// World composition: the HQ and one branch per team, stamped into fixed-size slots on a grid,
-// separated by walkable corridors. Pure logic (no Phaser).
+// World composition: the HQ and one branch per team, stamped into fixed-size slots on a grid.
+// The space between blocks is "outside" (not walkable); src/world/corridors.ts builds the
+// corridors that join them. Pure logic (no Phaser).
 //
 // Slot index -> grid cell is a fixed "shell" enumeration, so the arrangement stays roughly square
 // as it grows and an allocated slot never moves:
@@ -33,9 +34,9 @@ export interface Block {
 }
 
 export interface LayoutOptions {
-  /** Corridor width between slots, in tiles (min 2). */
+  /** Gap between slots, in tiles (min 2; corridors are 2 tiles wide). */
   gutterTiles?: number
-  /** Walkable margin around everything, in tiles. */
+  /** Outside margin around everything, in tiles (room for a corridor). */
   marginTiles?: number
 }
 
@@ -151,7 +152,39 @@ export class WorldLayout {
     }
   }
 
-  /** Rect covering every occupied slot plus the margin; the walkable world. Starts at (0, 0). */
+  /**
+   * Where a block sits inside a slot: slot 0 holds the HQ, every other slot a branch. Fixed per slot,
+   * so corridors can avoid every lot, built or not.
+   */
+  footprint(slot: number): Rect {
+    const map = slot === 0 ? this.hqMap : this.branchMap
+    const s = this.slotRect(slot)
+    const tiles = (px: number) => Math.round(px / this.tile)
+    // Centre the block in its slot, snapped to whole tiles; spare slot space is outside.
+    return {
+      x: s.x + Math.floor((tiles(this.slotW) - tiles(map.widthPx)) / 2) * this.tile,
+      y: s.y + Math.floor((tiles(this.slotH) - tiles(map.heightPx)) / 2) * this.tile,
+      width: map.widthPx,
+      height: map.heightPx
+    }
+  }
+
+  /** Footprints of every slot (occupied or free) whose slot rect intersects `r`. */
+  footprintsIn(r: Rect): Rect[] {
+    const out: Rect[] = []
+    const cols = Math.ceil((r.x + r.width) / (this.slotW + this.gutter)) + 1
+    const rows = Math.ceil((r.y + r.height) / (this.slotH + this.gutter)) + 1
+    const side = Math.max(cols, rows)
+    for (let i = 0; i < side * side; i++) {
+      const s = this.slotRect(i)
+      if (s.x < r.x + r.width && s.x + s.width > r.x && s.y < r.y + r.height && s.y + s.height > r.y) {
+        out.push(this.footprint(i))
+      }
+    }
+    return out
+  }
+
+  /** Rect covering every occupied slot plus the margin. Starts at (0, 0). */
   bounds(): Rect {
     const u = unionRects([...this.slotOwner.keys()].map((s) => this.slotRect(s)))!
     return { x: 0, y: 0, width: u.x + u.width + this.margin, height: u.y + u.height + this.margin }
@@ -167,14 +200,8 @@ export class WorldLayout {
   }
 
   private place(id: string, kind: BlockKind, slot: number, map: ParsedMap): Block {
-    const s = this.slotRect(slot)
-    const tiles = (px: number) => Math.round(px / this.tile)
-    // Centre the block in its slot, snapped to whole tiles; spare slot space is open floor
-    // that joins the corridors, so every edge door opens onto a corridor.
-    const offset = {
-      x: s.x + Math.floor((tiles(this.slotW) - tiles(map.widthPx)) / 2) * this.tile,
-      y: s.y + Math.floor((tiles(this.slotH) - tiles(map.heightPx)) / 2) * this.tile
-    }
+    const fp = this.footprint(slot)
+    const offset = { x: fp.x, y: fp.y }
     const walls = map.walls.map((w) => shiftRect(w, offset))
     const furniture = map.furniture.map((f) => shiftRect(f, offset))
     const blocked: Rect[] = [
