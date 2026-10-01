@@ -6,13 +6,14 @@
 //
 // Routing a new branch: multi-source A* over the cells outside every lot footprint (built or not,
 // so a future branch never lands on a corridor), with a turn penalty and no U-turns. Sources are
-// the doors of blocks reachable from the HQ and every cell of an existing corridor reachable from
-// the HQ (branching off it); the target is any door of the new branch. A corridor that branches
-// off another stores the full polyline from the original door, so every corridor starts at a door.
+// the HQ doors and every cell of an existing corridor that reaches the HQ through corridors alone
+// (branching off it) - never another branch's door, so no branch becomes a thoroughfare. The target
+// is any door of the new branch. A corridor that branches off another stores the full polyline
+// from the original HQ door, so every corridor starts at an HQ door.
 //
-// Removing a branch drops its corridors. A branch that can then no longer reach the HQ (because
-// its corridor started at the removed branch's door) gets a repair corridor. Cells no remaining
-// corridor uses are retracted, far end first.
+// Removing a branch drops its corridors. Because every corridor holds its whole route from the HQ,
+// the others stay connected; a branch that somehow can no longer reach the HQ still gets a repair
+// corridor (safety net). Cells no remaining corridor uses are retracted, far end first.
 import type { Rect } from '../theme/parse'
 import type { LocationPoint, Point } from '../scene/roster'
 import { doorNormal, nearest } from '../scene/roster'
@@ -194,14 +195,15 @@ export class CorridorNetwork {
    * reached (it stays unconnected). The corridor is registered in the network.
    */
   connect(block: Block, repair = false): Corridor | null {
-    const others = this.liveBlocks().filter((b) => b.id !== block.id)
-    const nav = this.navOf(others)
+    // Reachability through the HQ and corridors only: branch rooms never carry traffic.
+    const hqOnly = this.liveBlocks().filter((b) => b.kind === 'hq' && b.id !== block.id)
+    const nav = this.navOf(hqOnly)
     const hqComp = nav.componentAt(this.hqPoint())
     const grid = this.grid()
     const valid = (c: Cell) => c.x >= 0 && c.y >= 0 && c.x < grid.w && c.y < grid.h && grid.valid[c.y * grid.w + c.x] === 1
 
     const sources: Source[] = []
-    for (const b of others) {
+    for (const b of hqOnly) {
       for (const d of b.locations.get('door') ?? []) {
         const n = doorNormal(b, d)
         if (nav.componentAt({ x: d.x - n.x * 12, y: d.y - n.y * 12 }) !== hqComp) continue

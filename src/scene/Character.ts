@@ -11,7 +11,7 @@ const BUBBLE_CHARS = 28
 const WALK_FRAME_MS = 150
 const WORK_FRAME_MS = 400
 
-export type ActionKind = 'spawn' | 'activity' | 'waiting' | 'done' | 'handoff' | 'return' | 'leave' | 'home'
+export type ActionKind = 'spawn' | 'activity' | 'waiting' | 'relay' | 'done' | 'handoff' | 'return' | 'leave' | 'home'
 
 export interface Action extends QueueItem {
   kind: ActionKind
@@ -42,6 +42,8 @@ export interface CharacterOptions {
   onIdle?: (c: Character) => void
   /** Waypoints from -> to (excluding from), [] if already there, null if unreachable. */
   findPath: (from: Point, to: Point) => Point[] | null
+  /** Team colour pin, for sprite-sheet skins (placeholders bake a collar instead). */
+  teamColor?: number
 }
 
 export function truncate(s: string, n = BUBBLE_CHARS): string {
@@ -76,6 +78,7 @@ export class Character {
   /** Final destination of the current walk, for re-pathing when the world changes. */
   private dest: Point | null = null
   private walkDone: (() => void) | null = null
+  private sayTimer: Phaser.Time.TimerEvent | null = null
 
   constructor(scene: Phaser.Scene, o: CharacterOptions) {
     this.scene = scene
@@ -94,6 +97,10 @@ export class Character {
       this.overlay = o.skin.overlay ? scene.add.sprite(0, 0, o.skin.overlay, 0).setOrigin(0.5, 1) : null
     }
     this.body.setTint(o.tint)
+    const pin =
+      o.skin.kind === 'sheet' && o.teamColor !== undefined
+        ? scene.add.circle(Math.round(h * -0.18), -Math.round(h * 0.38), 2.5, o.teamColor).setStrokeStyle(1, 0x1e1e24)
+        : null
     this.prop = scene.add.image(Math.round(h * 0.3), -Math.round(h * 0.34), propKey('handoff')).setVisible(false)
 
     this.label = scene.add
@@ -132,6 +139,7 @@ export class Character {
 
     const parts: Phaser.GameObjects.GameObject[] = [shadow, this.body]
     if (this.overlay) parts.push(this.overlay)
+    if (pin) parts.push(pin)
     parts.push(this.prop, this.label, this.bubble, this.badge)
     this.container = scene.add.container(o.x, o.y, parts)
     this.container.setDepth(o.y)
@@ -180,6 +188,38 @@ export class Character {
     if (this.phase === 'idle') this.next()
   }
 
+  /** Runs `a` right after the current action (ahead of everything queued). */
+  enqueueFront(a: Action): void {
+    if (this.phase === 'gone') return
+    this.queue.unshift(a)
+    if (this.phase === 'idle') this.next()
+  }
+
+  /** Removes queued (not current) actions matching `pred` and returns them, oldest first. */
+  dropQueued(pred: (a: Action) => boolean): Action[] {
+    const out = this.queue.filter(pred)
+    this.queue = this.queue.filter((a) => !pred(a))
+    return out
+  }
+
+  /** The action being carried out, if any. */
+  get currentAction(): Action | null {
+    return this.current
+  }
+
+  /** A short speech bubble that doesn't touch the queue (CEO speaking, an order arriving). */
+  say(text: string, ms = 3500, chars = 48): void {
+    if (this.phase === 'gone') return
+    this.sayTimer?.remove(false)
+    this.bubble.setText(truncate(text, chars)).setVisible(text.length > 0)
+    this.sayTimer = this.scene.time.delayedCall(ms, () => {
+      this.sayTimer = null
+      if (this.phase === 'gone') return
+      if (this.current && (this.phase === 'dwelling' || this.phase === 'staying')) this.showBubble(this.current)
+      else this.hideBubble()
+    })
+  }
+
   /** Ends any waiting: the current stay finishes (respecting the min dwell), queued ones don't stay. */
   releaseStay(): void {
     for (const a of this.queue) a.stay = false
@@ -222,6 +262,7 @@ export class Character {
 
   destroy(): void {
     this.phase = 'gone'
+    this.sayTimer?.remove(false)
     this.tween?.stop()
     this.timer?.remove(false)
     this.queue = []

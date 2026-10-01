@@ -18,7 +18,9 @@ import {
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type RendererSettings } from '../shared/ipc'
+import { planOrder, type OrderResult } from '../shared/orders'
 import { EventBus } from './bus'
+import { SessionInbox } from './sessionInbox'
 import { startIngestServer, type IngestServer } from './ingest/server'
 import { isValidThemeName, listThemes, loadTheme, registerThemeProtocol, registerThemeScheme } from './themes'
 
@@ -34,6 +36,8 @@ let server: IngestServer | null = null
 let serverStatus = 'starting…'
 let quitting = false
 const bus = new EventBus()
+/** Session inbox sockets + tokens (memory only; filled by the Claude Code hook adapter in M2). */
+const inbox = new SessionInbox()
 
 // ---------- pre-ready ----------
 
@@ -96,7 +100,27 @@ async function onReady(): Promise<void> {
 
 function rendererSettings(): RendererSettings {
   const c = getConfig()
-  return { theme: c.theme, overlay: c.overlay }
+  return {
+    theme: c.theme,
+    overlay: c.overlay,
+    allowOrders: c.allowOrders,
+    officeWideTimeoutMs: c.officeWideMinutes * 60_000
+  }
+}
+
+/** CEO speech bar -> session inbox(es). Validated, gated by the tray toggle, never throws. */
+async function sendOrder(input: unknown): Promise<OrderResult> {
+  const plan = planOrder(input, { allowOrders: getConfig().allowOrders, known: bus.topLevelIds() })
+  if (!plan.ok) return plan.result
+  const result: OrderResult = { delivered: [], failed: [] }
+  await Promise.all(
+    plan.targets.map(async (id) => {
+      const r = await inbox.deliver(id, plan.text)
+      if (r.ok) result.delivered.push(id)
+      else result.failed.push({ agentId: id, reason: r.reason })
+    })
+  )
+  return result
 }
 
 function fromOurWindow(e: IpcMainInvokeEvent): boolean {
@@ -113,6 +137,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.getSettings, guard(() => rendererSettings()))
   ipcMain.handle(IPC.listThemes, guard(() => listThemes()))
   ipcMain.handle(IPC.loadTheme, guard((name: unknown) => loadTheme(name)))
+  ipcMain.handle(IPC.sendOrder, guard((req: unknown) => sendOrder(req)))
 }
 
 function pushSettings(): void {
@@ -185,7 +210,8 @@ function createWindow(): void {
   })
   w.on('show', rebuildTrayMenu)
   w.on('hide', rebuildTrayMenu)
-  w.once('ready-to-show', () => w.show())
+  // AGENT_OFFICE_SHOW_INACTIVE=1 (testing): appear without taking focus.
+  w.once('ready-to-show', () => (process.env.AGENT_OFFICE_SHOW_INACTIVE === '1' ? w.showInactive() : w.show()))
 
   bus.attach(w.webContents)
   const old = win
@@ -220,6 +246,12 @@ async function setOverlay(on: boolean): Promise<void> {
 function setAlwaysOnTop(on: boolean): void {
   saveConfig({ alwaysOnTop: on })
   if (win && !win.isDestroyed() && !getConfig().overlay) win.setAlwaysOnTop(on)
+  rebuildTrayMenu()
+}
+
+function setAllowOrders(on: boolean): void {
+  saveConfig({ allowOrders: on })
+  pushSettings()
   rebuildTrayMenu()
 }
 
@@ -305,6 +337,13 @@ function rebuildTrayMenu(): void {
           click: (item) => void setOverlay(item.checked)
         },
         { label: 'Theme', submenu: themeItems },
+        { type: 'separator' },
+        {
+          label: 'Allow CEO orders',
+          type: 'checkbox',
+          checked: cfg.allowOrders,
+          click: (item) => setAllowOrders(item.checked)
+        },
         { type: 'separator' },
         { label: 'Copy token', click: () => clipboard.writeText(getConfig().token) },
         { label: 'Regenerate token…', click: () => void confirmRegenerate() },

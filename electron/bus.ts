@@ -27,6 +27,15 @@ export class EventBus implements EventSink {
     if (this.ready) this.send(e)
   }
 
+  /** Top-level sessions (managers) currently live: their last event isn't `done`. */
+  topLevelIds(): string[] {
+    const out: string[] = []
+    for (const { event } of this.snapshot.values()) {
+      if (event.parentId === null && event.activity !== 'done') out.push(event.agentId)
+    }
+    return out
+  }
+
   /** Point the bus at a (new) window's webContents. */
   attach(wc: WebContents): void {
     this.detach?.()

@@ -10,9 +10,19 @@
 // the sign drops. Its manager and workers wait (spawns and events are buffered) until it's ready.
 // When a team has left, its branch is demolished and the corridor parts nobody else uses retract.
 // Builds and demolitions run one at a time from a queue, faster while more are waiting.
+//
+// Who goes where (see also shared/theme.ts):
+// - Workers stay in their branch: stations resolve there only and they path on the branch's own
+//   nav grid (no corridors, no HQ). A waiting worker takes its memo to its manager's office.
+// - Managers may use corridors and the HQ: the manager carries its team's memos (and its own) to the
+//   HQ inbox, waits while anyone in the team waits, then goes home. Managers never path through
+//   another branch.
+// - Office-wide CEO order (opts.isOfficeWide): workers may use stations, corridors and the inbox
+//   anywhere. When it ends, workers outside their branch walk home.
+// - Each team has a colour (theme teams.colors) and its manager a distinct procedural head.
 import Phaser from 'phaser'
 import type { Activity, AgentEvent } from '../../shared/events'
-import { activityDef, HOME, MANAGER } from '../../shared/theme'
+import { activityDef, HOME, MANAGER, teamColors } from '../../shared/theme'
 import type { ActivityDef, Role, ThemeManifest } from '../../shared/theme'
 import type { LoadedTheme } from '../../shared/ipc'
 import { cssToInt, preloadTemplates } from '../theme/loader'
@@ -20,6 +30,7 @@ import type { ParsedMap, Rect } from '../theme/loader'
 import { unionRects, WorldLayout } from '../world/layout'
 import type { Block } from '../world/layout'
 import { NavGrid } from '../world/pathfinding'
+import { NavScopes } from '../world/scopes'
 import { blockRect, buildNav, CorridorNetwork } from '../world/corridors'
 import type { Cell, Corridor } from '../world/corridors'
 import { BOSS_ID, nearest, Roster, Stations } from './roster'
@@ -28,18 +39,21 @@ import { BlockView } from './blockView'
 import type { BuildTimes } from './blockView'
 import { CorridorView } from './corridorView'
 import { Character } from './Character'
+import { RelayBook } from './relay'
+import { TeamLooks } from './teamLook'
 import type { Action } from './Character'
 import {
   createSheetAnims,
   ensureProps,
   placeholderSkin,
   preloadSheets,
+  propKey,
   providerSheetKey,
   roleSheetKey,
   sheetSkin,
   toneIndex
 } from './charTextures'
-import type { Skin } from './charTextures'
+import type { PlaceholderLook, Skin } from './charTextures'
 
 // ---- construction timings (ms at normal speed; a new team takes about 2.6-3.3 s) -----------------
 /** Highlight pulse on the source door. */
@@ -70,8 +84,13 @@ export interface TeamInfo {
   id: string
   name: string
   provider: string
+  /** Team colour (CSS). */
   color: string
+  /** Provider (body) colour (CSS). */
+  providerColor: string
   workers: number
+  /** False while the manager has left but workers are still walking out (not an order target). */
+  live: boolean
 }
 
 export interface SceneOptions {
@@ -81,6 +100,8 @@ export interface SceneOptions {
   overlay: boolean
   onReady: () => void
   onTeams: (teams: TeamInfo[]) => void
+  /** Office-wide CEO order in progress (state lives outside the scene so rebuilds keep it). */
+  isOfficeWide: () => boolean
 }
 
 const DRIFT_HOME_MS = 4000
@@ -99,6 +120,7 @@ const CORRIDOR_DEPTH = -2000
 const GROUND_DEPTH = -2100
 /** Outside ground: the background mixed with a little of this green. */
 const GROUND_TINT = 0x4a6741
+const ORDER_DEPTH = 100_000
 
 type BuildJob = { kind: 'build'; view: BlockView; corridor: Corridor | null; fast: boolean }
 type CorridorJob = { kind: 'corridor'; corridor: Corridor }
@@ -162,6 +184,14 @@ export class OfficeScene extends Phaser.Scene {
   /** Last known manager per team, so a branch keeps its name while workers finish leaving. */
   private teamLeads = new Map<string, RosterEntry>()
   private promoteClock = 0
+  /** Per-role walkable areas (rebuilt with the nav grid). */
+  private scopes!: NavScopes
+  /** Open memos and which managers are relaying them to the HQ. Deferred items = manager actions. */
+  private relay = new RelayBook<Action>()
+  /** A manager's own waiting detail (shown while it relays). */
+  private selfDetail = new Map<string, string>()
+  private looks!: TeamLooks
+  private palette: readonly string[] = []
 
   constructor(opts: SceneOptions) {
     super({ key: 'office' })
@@ -182,6 +212,8 @@ export class OfficeScene extends Phaser.Scene {
     ensureProps(this)
     createSheetAnims(this, this.manifest)
 
+    this.palette = teamColors(this.manifest)
+    this.looks = new TeamLooks(this.palette.length)
     this.layout = new WorldLayout(hq, branch)
     const w = this.manifest.activities?.waiting ? activityDef(this.manifest, 'waiting').location : ''
     this.waitingType = hq.locations.get(w)?.length ? w : 'inbox'
@@ -240,7 +272,7 @@ export class OfficeScene extends Phaser.Scene {
   private promoteQueue(): void {
     for (const id of this.queuedAtDoor) {
       const c = this.chars.get(id)
-      if (!c || !this.waiting.has(id)) {
+      if (!c || !(this.waiting.has(id) || this.relay.isRelaying(id))) {
         this.queuedAtDoor.delete(id)
         continue
       }
@@ -304,28 +336,192 @@ export class OfficeScene extends Phaser.Scene {
     this.frame(blockRect(b), true, MAX_FIT_ZOOM)
   }
 
+  /**
+   * The CEO speaks (speech bar): a bubble over the CEO and a sealed order envelope flying to the
+   * target team's manager, or to every manager for 'all'.
+   */
+  showOrder(target: string, text: string): void {
+    if (!this.roster) return
+    this.chars.get(BOSS_ID)?.say(`“${text}”`, 4500)
+    const ids = target === 'all' ? this.roster.managers().map((m) => m.id) : [target]
+    ids.forEach((id, i) => this.time.delayedCall(i * 160, () => this.flyOrder(id, text)))
+  }
+
+  /** Office-wide mode changed: re-plan walks; when it ends, workers come back to their branch. */
+  setOfficeWide(on: boolean): void {
+    if (!this.roster) return
+    if (!on) {
+      for (const entry of this.roster.all()) {
+        if (entry.role !== 'worker' || this.leaving.has(entry.id)) continue
+        const c = this.chars.get(entry.id)
+        if (!c) continue
+        if (this.relay.route(entry.id) === 'hq') {
+          // Memo bound for the HQ: hand it to the manager instead.
+          const atIt = c.currentAction?.kind === 'waiting'
+          if (!atIt) {
+            this.relay.open(entry.id, entry.teamId, 'manager') // not started: its target re-resolves
+          } else if (c.canRelocate) {
+            this.roster.releaseInbox(entry.id)
+            this.queuedAtDoor.delete(entry.id)
+            this.relay.open(entry.id, entry.teamId, 'manager')
+            const spot = this.roster.claimMemoSpot(entry.id) ?? entry.home
+            c.relocate(this.claimAt(entry.id, c, spot, false))
+            this.relay.deliver(entry.id)
+            this.syncRelay(entry.teamId)
+          } // else: just arriving at the HQ inbox; that memo stays there until answered
+        } else if (!this.insideOwnBranch(entry, c.position)) {
+          c.enqueueFront({ kind: 'home', activity: 'idle', lifecycle: false, target: () => this.goHome(entry, c) })
+        }
+      }
+    }
+    for (const c of this.chars.values()) c.repath()
+  }
+
+  private flyOrder(managerId: string, text: string): void {
+    const boss = this.chars.get(BOSS_ID)
+    const mc = this.chars.get(managerId)
+    if (!boss || !mc || this.leaving.has(managerId)) return
+    const start = { x: boss.position.x, y: boss.position.y - 24 }
+    const img = this.add.image(start.x, start.y, propKey('order')).setDepth(ORDER_DEPTH)
+    const end0 = mc.position
+    const dist = Math.hypot(end0.x - start.x, end0.y - start.y)
+    this.tweens.addCounter({
+      from: 0,
+      to: 1,
+      duration: Phaser.Math.Clamp(700 + dist * 0.9, 900, 2400),
+      ease: 'Sine.easeInOut',
+      onUpdate: (tw) => {
+        const t = tw.getValue() ?? 0
+        const end = { x: mc.position.x, y: mc.position.y - 22 }
+        const mid = { x: (start.x + end.x) / 2, y: Math.min(start.y, end.y) - 60 - dist * 0.15 }
+        const u = 1 - t
+        img.setPosition(
+          u * u * start.x + 2 * u * t * mid.x + t * t * end.x,
+          u * u * start.y + 2 * u * t * mid.y + t * t * end.y
+        )
+        img.setAngle(Math.sin(t * Math.PI) * 18)
+      },
+      onComplete: () => {
+        img.destroy()
+        if (this.chars.get(managerId) === mc && !this.leaving.has(managerId)) mc.say(`Order: ${text}`, 3500)
+      }
+    })
+  }
+
+  private officeWide(): boolean {
+    return this.opts.isOfficeWide()
+  }
+
+  private insideOwnBranch(entry: RosterEntry, p: Point): boolean {
+    const b = this.layout.branch(entry.teamId)
+    if (!b) return false
+    const r = blockRect(b)
+    return p.x >= r.x && p.x <= r.x + r.width && p.y >= r.y && p.y <= r.y + r.height
+  }
+
   /** Acts on an event for an agent whose character exists. */
   private apply(e: AgentEvent): void {
     const id = e.agentId
     const entry = this.roster.get(id)
     const c = this.chars.get(id)
-    if (!entry || !c || this.leaving.has(id)) return
+    if (!entry || !c || this.leaving.has(id) || entry.role === 'boss') return
 
-    if (e.activity !== 'waiting' && this.waiting.delete(id)) {
+    if (e.activity === 'waiting') {
+      this.onWaiting(entry, c, e.detail)
+      return
+    }
+    if (entry.role === 'manager') {
+      this.managerEvent(entry, c, e)
+      return
+    }
+    // Worker: its own memo (if any) is answered; it resumes its queue.
+    if (this.waiting.delete(id)) {
       c.releaseStay()
       this.updateBadge()
     }
+    if (this.relay.isOpen(id)) {
+      this.relay.close(id)
+      this.syncRelay(entry.teamId)
+    }
+    if (e.activity === 'done') this.workerDone(entry, c, e.detail)
+    else c.enqueue(this.activityAction(entry, c, e.activity, e.detail))
+  }
 
-    switch (e.activity) {
-      case 'waiting':
-        this.onWaiting(entry, c, e.detail)
-        break
-      case 'done':
-        if (entry.role === 'worker') this.workerDone(entry, c, e.detail)
-        else this.managerDone(entry)
-        break
-      default:
-        c.enqueue(this.activityAction(entry, c, e.activity, e.detail))
+  /** A manager's non-waiting event. While it relays its workers' memos the event is deferred. */
+  private managerEvent(entry: RosterEntry, c: Character, e: AgentEvent): void {
+    const team = entry.teamId
+    if (this.waiting.delete(entry.id)) this.updateBadge()
+    this.selfDetail.delete(team)
+    if (e.activity === 'done') {
+      this.managerDone(entry)
+      return
+    }
+    const action = this.activityAction(entry, c, e.activity, e.detail)
+    if (this.relay.deferManagerEvent(team, action)) {
+      this.syncRelay(team) // badge / bubble without its own memo
+      return
+    }
+    // Own memo answered and nothing else to carry: the relay (if any) ends, then this runs.
+    if (this.relay.isRelaying(team)) this.syncRelay(team, false)
+    c.enqueue(action)
+  }
+
+  /** Starts / updates / ends the team manager's trip to the HQ inbox with the team's memos. */
+  private syncRelay(teamId: string, returnHome = true): void {
+    const m = this.roster.teamManager(teamId)
+    const mc = m ? this.chars.get(m.id) : undefined
+    const present = !!m && !!mc && !this.leaving.has(m.id)
+    const step = this.relay.step(teamId, present)
+    if (!present || !m || !mc) return
+    const count = this.relay.relayCount(teamId)
+    if (step === 'start') {
+      // Whatever the manager had queued collapses to the latest; it runs after the relay.
+      const dropped = mc.dropQueued((a) => !a.lifecycle)
+      if (dropped.length > 0) this.relay.setDeferred(teamId, dropped[dropped.length - 1])
+      mc.enqueueFront(this.relayAction(m, mc))
+      mc.setBadge(count)
+    } else if (step === 'update') {
+      mc.setBadge(count)
+      if (mc.currentAction?.kind === 'relay') mc.setDetail(this.relayText(teamId))
+    } else if (step === 'stop') {
+      mc.setBadge(0)
+      mc.dropQueued((a) => a.kind === 'relay') // never started: no trip needed
+      mc.releaseStay()
+      const d = this.relay.takeDeferred(teamId)
+      if (d) mc.enqueue(d)
+      else if (returnHome) mc.enqueue({ kind: 'return', activity: 'idle', lifecycle: false, target: () => this.goHome(m, mc) })
+    }
+  }
+
+  private relayText(teamId: string): string {
+    const n = this.relay.workerMemos(teamId)
+    const own = this.relay.isOpen(teamId) ? this.selfDetail.get(teamId) ?? '' : ''
+    const memos = n > 0 ? `${n} ${this.manifest.props.memo}${n === 1 ? '' : 's'}` : ''
+    return [memos, own].filter((x) => x.length > 0).join(' · ')
+  }
+
+  /** The manager carries the team's memos to the HQ inbox (or the queue outside) and waits there. */
+  private relayAction(m: RosterEntry, mc: Character): Action {
+    const def = this.def('waiting')
+    return {
+      kind: 'relay',
+      activity: 'waiting',
+      lifecycle: true,
+      stay: true,
+      carry: 'memo',
+      verb: def.verb,
+      anim: def.anim,
+      detail: this.relayText(m.teamId),
+      target: () => {
+        const { point, queued } = this.roster.claimInbox(m.id)
+        if (queued) this.queuedAtDoor.add(m.id)
+        return this.claimAt(m.id, mc, point, false)
+      },
+      onDone: () => {
+        this.roster.releaseInbox(m.id)
+        this.queuedAtDoor.delete(m.id)
+        mc.setBadge(0)
+      }
     }
   }
 
@@ -380,7 +576,8 @@ export class OfficeScene extends Phaser.Scene {
   /** Rebuilds the nav grid from built blocks and corridors; everyone walking re-plans. */
   private rebuildNav(): void {
     const rects = [...this.walkable.values()].map((c) => this.network.cellRect(c))
-    this.nav = buildNav(this.layout.bounds(), this.builtBlocks(), rects)
+    this.scopes = new NavScopes(this.layout.bounds(), this.builtBlocks(), rects)
+    this.nav = this.scopes.full()
     for (const c of this.chars.values()) c.repath()
   }
 
@@ -409,8 +606,20 @@ export class OfficeScene extends Phaser.Scene {
     }
   }
 
-  private findPath(from: Point, to: Point): Point[] | null {
-    return this.nav.findPath(from, to)
+  private findPath(id: string, from: Point, to: Point): Point[] | null {
+    return this.navFor(id, from).findPath(from, to)
+  }
+
+  /**
+   * Where this character may walk: managers = HQ + corridors + own branch; workers = their branch
+   * only (the whole world during an office-wide order, or when outside it so they can walk home).
+   */
+  private navFor(id: string, from: Point): NavGrid {
+    const e = this.roster.get(id)
+    if (!e || e.role === 'boss') return this.nav
+    if (e.role === 'manager') return this.scopes.manager(e.teamId)
+    if (this.officeWide()) return this.nav
+    return this.insideOwnBranch(e, from) ? this.scopes.branch(e.teamId) : this.nav
   }
 
   private addBlockView(block: Block, built: boolean): BlockView {
@@ -430,7 +639,7 @@ export class OfficeScene extends Phaser.Scene {
     const live = this.roster?.get(blockId)
     if (live) this.teamLeads.set(blockId, { ...live })
     const m = live ?? this.teamLeads.get(blockId)
-    view.setSign(m?.displayName ?? blockId, m ? this.tintFor(m) : null)
+    view.setSign(m?.displayName ?? blockId, this.teamColor(blockId), m ? this.tintFor(m) : null)
   }
 
   // ---- construction ------------------------------------------------------------------------
@@ -441,6 +650,7 @@ export class OfficeScene extends Phaser.Scene {
 
   /** A team got a lot: plan its corridor now, build it when its turn in the queue comes. */
   private planBranch(block: Block): void {
+    this.looks.ensure(block.id) // in arrival order: deterministic colours and heads
     const view = this.addBlockView(block, false)
     const corridor = this.network.connect(block)
     if (!corridor) console.warn(`[agent-office] no corridor route to branch ${block.id}; it stays unconnected`)
@@ -456,6 +666,9 @@ export class OfficeScene extends Phaser.Scene {
     if (!view) return
     this.views.delete(teamId)
     this.teamLeads.delete(teamId)
+    this.looks.release(teamId)
+    this.relay.dropTeam(teamId)
+    this.selfDetail.delete(teamId)
     this.doomed.add(view)
     const plan = this.network.remove(teamId)
     for (const corridor of plan.repairs) this.jobs.push({ kind: 'corridor', corridor })
@@ -725,12 +938,26 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private onWaiting(entry: RosterEntry, c: Character, detail: string): void {
+    if (entry.role === 'boss') return
     if (this.waiting.has(entry.id)) {
-      c.setDetail(detail)
+      if (entry.role === 'manager') {
+        this.selfDetail.set(entry.teamId, detail)
+        if (c.currentAction?.kind === 'relay') c.setDetail(this.relayText(entry.teamId))
+      } else c.setDetail(detail)
       return
     }
     this.waiting.add(entry.id)
     this.updateBadge()
+    if (entry.role === 'manager') {
+      // A manager's own permission request: it goes to the HQ inbox (with any team memos).
+      this.selfDetail.set(entry.teamId, detail)
+      this.relay.open(entry.id, entry.teamId, 'self')
+      this.syncRelay(entry.teamId)
+      if (c.currentAction?.kind === 'relay') c.setDetail(this.relayText(entry.teamId))
+      return
+    }
+    // A worker: memo to its manager's office (straight to the HQ during an office-wide order).
+    this.relay.open(entry.id, entry.teamId, this.officeWide() ? 'hq' : 'manager')
     const def = this.def('waiting')
     c.enqueue({
       kind: 'waiting',
@@ -741,14 +968,24 @@ export class OfficeScene extends Phaser.Scene {
       verb: def.verb,
       anim: def.anim,
       detail,
-      // Always the HQ inbox (or the queue outside the HQ door), whatever branch they're in.
       target: () => {
-        const { point, queued } = this.roster.claimInbox(entry.id)
-        if (queued) this.queuedAtDoor.add(entry.id)
-        return this.claimAt(entry.id, c, point, false)
+        if (this.relay.route(entry.id) === 'hq') {
+          const { point, queued } = this.roster.claimInbox(entry.id)
+          if (queued) this.queuedAtDoor.add(entry.id)
+          return this.claimAt(entry.id, c, point, false)
+        }
+        const spot = this.roster.claimMemoSpot(entry.id) ?? this.roster.managerHome(entry.id) ?? entry.home
+        return this.claimAt(entry.id, c, spot, false)
+      },
+      onArrive: () => {
+        // The memo is on the manager's desk: the manager takes it to the HQ.
+        if (this.relay.route(entry.id) !== 'manager') return
+        this.relay.deliver(entry.id)
+        this.syncRelay(entry.teamId)
       },
       onDone: () => {
         this.roster.releaseInbox(entry.id)
+        this.roster.releaseMemoSpot(entry.id)
         this.queuedAtDoor.delete(entry.id)
       }
     })
@@ -773,6 +1010,9 @@ export class OfficeScene extends Phaser.Scene {
 
   private managerDone(entry: RosterEntry): void {
     if (entry.role === 'boss') return
+    this.relay.dropTeam(entry.teamId)
+    this.selfDetail.delete(entry.teamId)
+    this.chars.get(entry.id)?.setBadge(0)
     for (const w of this.roster.teamWorkers(entry.teamId)) this.sendAway(w)
     this.sendAway(entry)
   }
@@ -783,7 +1023,9 @@ export class OfficeScene extends Phaser.Scene {
     if (!c) return
     this.leaving.add(entry.id)
     if (this.waiting.delete(entry.id)) this.updateBadge()
+    this.relay.close(entry.id)
     this.roster.releaseInbox(entry.id)
+    this.roster.releaseMemoSpot(entry.id)
     c.clearQueue()
     c.interrupt()
     this.queueLeave(entry, c)
@@ -804,6 +1046,11 @@ export class OfficeScene extends Phaser.Scene {
 
   private despawn(id: string): void {
     const c = this.chars.get(id)
+    const teamId = this.roster.get(id)?.teamId
+    if (this.relay.isOpen(id)) {
+      this.relay.close(id)
+      if (teamId) this.syncRelay(teamId)
+    }
     this.stations.release(id)
     const removed = this.roster.remove(id)
     this.leaving.delete(id)
@@ -838,8 +1085,9 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   /**
-   * HOME -> own seat/desk; MANAGER -> manager's seat (own for a manager); the waiting type ->
-   * HQ; anything else -> nearest of that type in the character's branch, then the HQ, then home.
+   * HOME -> own seat/desk; MANAGER -> manager's seat (own for a manager); the waiting type -> HQ
+   * for managers; anything else -> nearest of that type in the character's branch (managers: then
+   * the HQ), else home. Workers never resolve outside their branch unless an office-wide order runs.
    */
   private resolve(entry: RosterEntry, c: Character, loc: string, from: Point): Point {
     if (loc === HOME) return this.goHome(entry, c)
@@ -847,8 +1095,11 @@ export class OfficeScene extends Phaser.Scene {
       const base = this.roster.managerHome(entry.id) ?? entry.home
       return this.claimAt(entry.id, c, base, base === entry.home)
     }
+    const wide = entry.role === 'worker' && this.officeWide()
     const p =
-      loc === this.waitingType ? nearest(this.layout.hq.locations, loc, from) : this.roster.station(entry.id, loc, from)
+      loc === this.waitingType && (entry.role !== 'worker' || wide)
+        ? nearest(this.layout.hq.locations, loc, from)
+        : this.roster.station(entry.id, loc, from, wide ? this.builtBlocks() : null)
     return p ? this.claimAt(entry.id, c, p, false) : this.goHome(entry, c)
   }
 
@@ -872,7 +1123,8 @@ export class OfficeScene extends Phaser.Scene {
       x: at.x,
       y: at.y,
       onIdle: (c) => this.driftHome(entry.id, c),
-      findPath: (from, to) => this.findPath(from, to)
+      findPath: (from, to) => this.findPath(entry.id, from, to),
+      teamColor: entry.role === 'boss' ? undefined : this.teamColor(entry.teamId) ?? undefined
     })
   }
 
@@ -904,7 +1156,25 @@ export class OfficeScene extends Phaser.Scene {
     const fromSheet =
       (provSheet && sheetSkin(this, providerSheetKey(prov, role), provSheet)) ||
       (roleDef.sprite && sheetSkin(this, roleSheetKey(role), roleDef.sprite))
-    return fromSheet || placeholderSkin(this, role, roleDef.placeholder, toneIndex(entry.id))
+    return fromSheet || placeholderSkin(this, role, roleDef.placeholder, toneIndex(entry.id), this.lookFor(entry))
+  }
+
+  /** Team colour of a branch (null for the HQ / unknown). */
+  private teamColor(teamId: string): number | null {
+    if (teamId === BOSS_ID || !this.layout?.branch(teamId)) return null
+    return cssToInt(this.palette[this.looks.ensure(teamId).color], 0xffffff)
+  }
+
+  private teamColorCss(teamId: string): string {
+    return this.palette[this.looks.ensure(teamId).color] ?? '#ffffff'
+  }
+
+  /** Managers: distinct head + team-colour clipboard and collar. Workers: team collar + badge. */
+  private lookFor(entry: RosterEntry): PlaceholderLook {
+    const color = this.teamColor(entry.teamId)
+    if (color === null) return {}
+    if (entry.role === 'manager') return { head: this.looks.ensure(entry.teamId).head, accent: color, collar: color }
+    return { collar: color }
   }
 
   private updateBadge(): void {
@@ -921,9 +1191,11 @@ export class OfficeScene extends Phaser.Scene {
         id: b.id,
         name: m.displayName,
         provider: m.provider,
-        color:
+        color: this.teamColorCss(b.id),
+        providerColor:
           this.manifest.providers[this.providerKey(m)]?.tint ?? this.manifest.providers.default?.tint ?? '#bab0ac',
-        workers: this.roster.teamWorkers(b.id).length
+        workers: this.roster.teamWorkers(b.id).length,
+        live: !!this.roster.get(b.id) && !this.leaving.has(b.id)
       })
     }
     this.opts.onTeams(teams)

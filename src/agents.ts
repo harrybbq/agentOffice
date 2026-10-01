@@ -4,6 +4,8 @@ import type { AgentEvent } from '../shared/events'
 
 export interface WaitingInfo {
   agentId: string
+  /** Top-level session (team) this agent belongs to. */
+  teamId: string
   displayName: string
   detail: string
   since: number
@@ -23,6 +25,7 @@ export class AgentStore {
       const prev = this.waitingMap.get(e.agentId)
       this.waitingMap.set(e.agentId, {
         agentId: e.agentId,
+        teamId: this.rootOf(e),
         displayName: e.displayName,
         detail: e.detail,
         since: prev?.since ?? Date.now()
@@ -44,6 +47,17 @@ export class AgentStore {
   /** Events that rebuild the current roster in a fresh scene. */
   replay(): AgentEvent[] {
     return [...this.live.values()]
+  }
+
+  /** Follows parentIds through live agents to the top-level session. */
+  private rootOf(e: AgentEvent): string {
+    let id = e.agentId
+    let parent = e.parentId
+    for (let guard = 0; parent && guard < 32; guard++) {
+      id = parent
+      parent = this.live.get(parent)?.parentId ?? null
+    }
+    return id
   }
 
   private drop(id: string, cascade: boolean): void {

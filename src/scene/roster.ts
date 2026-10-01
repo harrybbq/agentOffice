@@ -2,7 +2,11 @@
 //
 // Each manager (top-level agent) owns one branch of the world (WorldLayout). Workers sit at the
 // nearest free desk of their team's branch; nested subagents live in the root team's branch.
-// The boss sits at the HQ boss_seat. Waiting characters queue at the HQ inbox slots.
+// The boss sits at the HQ boss_seat. Waiting managers queue at the HQ inbox slots; waiting workers
+// drop their memo in their manager's office (memo spots in front of the manager_seat).
+//
+// Scope: a worker only resolves stations in its own branch (no HQ fallback) unless the caller passes
+// the whole world (office-wide CEO order). Managers use their branch, then the HQ.
 import type { Role } from '../../shared/theme'
 import type { Block, WorldLayout } from '../world/layout'
 
@@ -155,7 +159,13 @@ interface Site {
   seat: LocationPoint
   desks: SlotPool
   overflow: OverflowRow
+  /** Where workers wait with memos for their manager. */
+  memos: OverflowRow
 }
+
+/** Memo spots: rows of 5, 20 px apart, starting this far in front of the manager_seat. */
+export const MEMO_OFFSET = 78
+const MEMO_SPACING = 20
 
 /** Outward normal of a door point on the block edge (defaults to "down"). */
 export function doorNormal(block: Block, door: Point): Point {
@@ -249,12 +259,43 @@ export class Roster {
   }
 
   /**
-   * Nearest point of a station type for this agent: its own branch first, then the HQ.
-   * null if neither has it (caller goes home).
+   * Nearest point of a station type for this agent, or null (caller goes home).
+   * - worker: its own branch only; with `world` (office-wide order), the nearest in any of those blocks
+   * - manager / boss: its own block first, then the HQ
    */
-  station(id: string, type: string, from: Point): LocationPoint | null {
+  station(id: string, type: string, from: Point, world: Block[] | null = null): LocationPoint | null {
+    const e = this.entries.get(id)
     const block = this.blockOf(id)
+    if (e?.role === 'worker') {
+      if (!world) return nearest(block.locations, type, from)
+      let best: LocationPoint | null = null
+      for (const b of world) {
+        const p = nearest(b.locations, type, from)
+        if (p && (!best || dist2(p, from) < dist2(best, from))) best = p
+      }
+      return best
+    }
     return nearest(block.locations, type, from) ?? nearest(this.layout.hq.locations, type, from)
+  }
+
+  /** The top-level manager of this agent's team (itself for a manager), if still on the roster. */
+  teamManager(id: string): RosterEntry | undefined {
+    const e = this.entries.get(id)
+    if (!e) return undefined
+    const m = this.entries.get(e.teamId)
+    return m && m.role === 'manager' ? m : undefined
+  }
+
+  /** A spot in the team manager's office where a waiting worker drops its memo (stable per id). */
+  claimMemoSpot(id: string): LocationPoint | null {
+    const e = this.entries.get(id)
+    const site = e ? this.sites.get(e.teamId) : undefined
+    return site ? site.memos.claim(id) : null
+  }
+
+  releaseMemoSpot(id: string): void {
+    const e = this.entries.get(id)
+    if (e) this.sites.get(e.teamId)?.memos.release(id)
   }
 
   /** Where the agent arrives / leaves: nearest entrance of its branch (HQ door for the HQ). */
@@ -316,6 +357,7 @@ export class Roster {
     const site = this.sites.get(e.teamId)
     site?.desks.release(id)
     site?.overflow.release(id)
+    site?.memos.release(id)
     let releasedBranch: Block | null = null
     if (site && e.teamId !== BOSS_ID && !this.all().some((x) => x.teamId === e.teamId)) {
       this.sites.delete(e.teamId)
@@ -346,11 +388,17 @@ export class Roster {
     const entrance = nearest(block.locations, 'entrance', seat) ?? nearest(block.locations, 'door', seat) ?? seat
     // Overflow workers stand in rows just inside the entrance.
     const inward = block.kind === 'branch' ? { x: -doorNormal(block, entrance).x, y: -doorNormal(block, entrance).y } : { x: 0, y: -1 }
+    // Memo spots: the map's manager_inbox if it has one, else in front of the seat (inward).
+    const tray = nearest(block.locations, 'manager_inbox', seat)
+    const memos = tray
+      ? new OverflowRow(tray, { x: 0, y: 1 }, MEMO_SPACING, 5, 0, `memo_${block.id}`)
+      : new OverflowRow(seat, { x: 0, y: 1 }, MEMO_SPACING, 5, MEMO_OFFSET, `memo_${block.id}`)
     return {
       block,
       seat,
       desks: new SlotPool(block.locations.get('desk') ?? []),
-      overflow: new OverflowRow(entrance, inward, 22, 5, 26, `overflow_${block.id}`)
+      overflow: new OverflowRow(entrance, inward, 22, 5, 26, `overflow_${block.id}`),
+      memos
     }
   }
 

@@ -53,6 +53,8 @@ export class BlockView {
   private sign: Phaser.GameObjects.Container
   private signText: Phaser.GameObjects.Text
   private signSwatch: Phaser.GameObjects.Rectangle | null
+  /** Small provider-colour dot next to the team swatch. */
+  private signDot: Phaser.GameObjects.Arc | null
   private signY: number
   /** 0..1 floor reveal, measured from `from` (the connecting door's edge) inward. */
   private wipe = 1
@@ -93,13 +95,15 @@ export class BlockView {
         fontSize: '13px',
         color: '#f4f1ea',
         backgroundColor: 'rgba(20, 22, 32, 0.85)',
-        padding: { left: isHq ? 6 : 20, right: 6, top: 2, bottom: 2 },
+        padding: { left: isHq ? 6 : 30, right: 6, top: 2, bottom: 2 },
         resolution: 2
       })
       .setOrigin(0.5, 1)
     this.signSwatch = isHq ? null : scene.add.rectangle(0, 0, 10, 10, 0xffffff).setStrokeStyle(1, 0x000000, 0.6)
     const parts: Phaser.GameObjects.GameObject[] = [this.signText]
+    this.signDot = isHq ? null : scene.add.circle(0, 0, 3, 0xffffff).setStrokeStyle(1, 0x000000, 0.6)
     if (this.signSwatch) parts.push(this.signSwatch)
+    if (this.signDot) parts.push(this.signDot)
     this.sign = scene.add.container(block.offset.x + block.width / 2, this.signY, parts).setDepth(o.signDepth)
 
     if (o.built) {
@@ -120,11 +124,17 @@ export class BlockView {
     return { x: b.offset.x, y: b.offset.y, width: b.width, height: b.height }
   }
 
-  setSign(text: string, color: number | null): void {
+  /** Team name, team colour swatch and (optional) provider colour dot. */
+  setSign(text: string, color: number | null, providerColor: number | null = null): void {
     this.signText.setText(text)
     if (this.signSwatch) {
       if (color !== null) this.signSwatch.setFillStyle(color)
-      this.signSwatch.setPosition(-this.signText.width / 2 + 10, -this.signText.height / 2)
+      this.signSwatch.setPosition(-this.signText.width / 2 + 20, -this.signText.height / 2)
+    }
+    if (this.signDot) {
+      this.signDot.setVisible(providerColor !== null)
+      if (providerColor !== null) this.signDot.setFillStyle(providerColor)
+      this.signDot.setPosition(-this.signText.width / 2 + 8, -this.signText.height / 2)
     }
   }
 

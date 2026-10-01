@@ -2,9 +2,21 @@
 import Phaser from 'phaser'
 import type { Placeholder, Role, SpriteSheet, ThemeManifest } from '../../shared/theme'
 import { cssToInt } from '../theme/loader'
+import { HAIR_COLORS, SKIN_TONES } from './teamLook'
+import type { HeadLook } from './teamLook'
 
-export type PropKind = 'handoff' | 'report' | 'memo'
-export const PROP_KINDS: readonly PropKind[] = ['handoff', 'report', 'memo']
+export type PropKind = 'handoff' | 'report' | 'memo' | 'order'
+export const PROP_KINDS: readonly PropKind[] = ['handoff', 'report', 'memo', 'order']
+
+/** Per-character variations of the procedural placeholder (all optional). */
+export interface PlaceholderLook {
+  /** Distinct head (managers): hairstyle, hair colour, skin tone. Default: from the id hash. */
+  head?: HeadLook
+  /** Overrides the role's accent (managers: the team colour on the clipboard). */
+  accent?: number
+  /** Team colour collar (+ chest badge for workers). */
+  collar?: number
+}
 
 const BASE_W = 24
 const BASE_H = 32
@@ -88,9 +100,19 @@ function drawBody(g: Phaser.GameObjects.Graphics, s: number, dy: number) {
   g.fillRoundedRect(4 * s, (14 + dy) * s, 13 * s, 12.5 * s, 6 * s)
 }
 
-function drawOverlay(g: Phaser.GameObjects.Graphics, s: number, dy: number, ph: Placeholder, tone: number) {
-  const { skin, hair } = TONES[tone % TONES.length]
-  const a = cssToInt(ph.accent, 0xffffff)
+function drawOverlay(
+  g: Phaser.GameObjects.Graphics,
+  s: number,
+  dy: number,
+  ph: Placeholder,
+  tone: number,
+  look: PlaceholderLook,
+  role: Role
+) {
+  const base = TONES[tone % TONES.length]
+  const skin = look.head ? SKIN_TONES[look.head.skin % SKIN_TONES.length] : base.skin
+  const hair = look.head ? HAIR_COLORS[look.head.hair % HAIR_COLORS.length] : base.hair
+  const a = look.accent ?? cssToInt(ph.accent, 0xffffff)
   const cx = 12 * s
   const y = (v: number) => (v + dy) * s
   const line = Math.max(1, Math.round(s))
@@ -98,6 +120,20 @@ function drawOverlay(g: Phaser.GameObjects.Graphics, s: number, dy: number, ph: 
   // Body outline.
   g.lineStyle(line, OUTLINE, 1)
   g.strokeRoundedRect(4.5 * s, y(14.5), 15 * s, 15 * s, 7 * s)
+
+  // Team collar (shows on both sides of the head) and, for workers, a chest badge.
+  if (look.collar !== undefined) {
+    g.fillStyle(look.collar, 1)
+    g.fillRoundedRect(5.5 * s, y(15), 13 * s, 3 * s, 1.5 * s)
+    g.lineStyle(line, OUTLINE, 0.8)
+    g.strokeRoundedRect(5.5 * s, y(15), 13 * s, 3 * s, 1.5 * s)
+    if (role === 'worker') {
+      g.fillStyle(look.collar, 1)
+      g.fillRect(7 * s, y(20), 3.5 * s, 3.5 * s)
+      g.lineStyle(line, OUTLINE, 1)
+      g.strokeRect(7 * s, y(20), 3.5 * s, 3.5 * s)
+    }
+  }
 
   // Accessories worn on the body go under the head.
   switch (ph.accessory) {
@@ -148,26 +184,57 @@ function drawOverlay(g: Phaser.GameObjects.Graphics, s: number, dy: number, ph: 
   g.fillEllipse(cx, y(10), 12 * s, 13 * s)
   const shaved = ph.accessory === 'number'
   const hatted = ph.accessory === 'cap' || ph.accessory === 'peaked_cap'
-  if (!hatted) {
-    g.fillStyle(shaved ? darken(skin, 0.85) : hair, 1)
-    g.beginPath()
-    g.arc(cx, y(9), 5.8 * s, Math.PI, 0, false)
-    g.closePath()
-    g.fillPath()
-  }
-  g.lineStyle(line, OUTLINE, 1)
-  g.strokeEllipse(cx, y(10), 12 * s, 13 * s)
-
-  if (ph.accessory === 'cap') {
-    g.fillStyle(a, 1)
+  const style = look.head?.style ?? 'short'
+  const cap = (fill: number) => {
+    g.fillStyle(fill, 1)
     g.beginPath()
     g.arc(cx, y(8), 6.2 * s, Math.PI, 0, false)
     g.closePath()
     g.fillPath()
-    g.fillStyle(darken(a), 1)
+    g.fillStyle(darken(fill), 1)
     g.fillRect(5.5 * s, y(7.5), 13 * s, 2 * s)
     g.lineStyle(line, OUTLINE, 1)
     g.strokeRect(5.5 * s, y(7.5), 13 * s, 2 * s)
+  }
+  const crown = (r: number, cy: number) => {
+    g.beginPath()
+    g.arc(cx, y(cy), r * s, Math.PI, 0, false)
+    g.closePath()
+    g.fillPath()
+  }
+  if (!hatted) {
+    g.fillStyle(shaved ? darken(skin, 0.85) : hair, 1)
+    if (shaved || style === 'short' || style === 'bun') crown(5.8, 9)
+    else if (style === 'long') {
+      crown(6, 9)
+      g.fillRect(5.6 * s, y(8.5), 2.6 * s, 7.5 * s)
+      g.fillRect(15.8 * s, y(8.5), 2.6 * s, 7.5 * s)
+    } else if (style === 'spiky') {
+      crown(5.6, 9.5)
+      for (const x of [7, 10, 13, 16]) g.fillTriangle((x - 1.8) * s, y(6), (x + 1.8) * s, y(6), x * s, y(1.2))
+    } else if (style === 'bald') {
+      g.fillStyle(0xffffff, 0.35)
+      g.fillEllipse(cx - 2 * s, y(6), 4 * s, 2.5 * s)
+      g.fillStyle(hair, 1)
+      g.fillRect(6.2 * s, y(9), 1.6 * s, 3 * s) // a bit of hair over the ears
+      g.fillRect(16.2 * s, y(9), 1.6 * s, 3 * s)
+    }
+  }
+  g.lineStyle(line, OUTLINE, 1)
+  g.strokeEllipse(cx, y(10), 12 * s, 13 * s)
+  if (!hatted && !shaved) {
+    if (style === 'bun') {
+      g.fillStyle(hair, 1)
+      g.fillCircle(cx, y(2.6), 2.8 * s)
+      g.lineStyle(line, OUTLINE, 1)
+      g.strokeCircle(cx, y(2.6), 2.8 * s)
+    } else if (style === 'cap') {
+      cap(a)
+    }
+  }
+
+  if (ph.accessory === 'cap') {
+    cap(a)
   } else if (ph.accessory === 'peaked_cap') {
     g.fillStyle(a, 1)
     g.fillRoundedRect(4.5 * s, y(2), 15 * s, 6 * s, 2 * s)
@@ -180,17 +247,25 @@ function drawOverlay(g: Phaser.GameObjects.Graphics, s: number, dy: number, ph: 
   }
 }
 
-/** Generates (once) the placeholder textures for a role + skin tone and returns the skin. */
-export function placeholderSkin(scene: Phaser.Scene, role: Role, ph: Placeholder, tone: number): Skin {
+/** Generates (once) the placeholder textures for a role + skin tone (+ look) and returns the skin. */
+export function placeholderSkin(
+  scene: Phaser.Scene,
+  role: Role,
+  ph: Placeholder,
+  tone: number,
+  look: PlaceholderLook = {}
+): Skin {
   const s = ph.scale && ph.scale > 0 ? ph.scale : 1
   const { w, h } = dims(s)
-  const sig = `${role}:${ph.accessory}:${ph.accent}:${s}`
+  // Every look parameter is in the key: bake() reuses existing textures by key.
+  const hd = look.head ? `${look.head.style}.${look.head.hair}.${look.head.skin}` : '-'
+  const sig = `${role}:${ph.accessory}:${look.accent ?? ph.accent}:${s}:${hd}:${look.collar ?? '-'}`
   const body: [string, string] = [`ph:body:${s}:0`, `ph:body:${s}:1`]
   const overlay: [string, string] = [`ph:over:${sig}:${tone}:0`, `ph:over:${sig}:${tone}:1`]
   for (let f = 0; f < 2; f++) {
     const dy = f === 0 ? 0 : -1
     bake(scene, body[f], w, h, (g) => drawBody(g, s, dy))
-    bake(scene, overlay[f], w, h, (g) => drawOverlay(g, s, dy, ph, tone))
+    bake(scene, overlay[f], w, h, (g) => drawOverlay(g, s, dy, ph, tone, look, role))
   }
   return { kind: 'placeholder', shadow: ensureShadow(scene, s), body, overlay, height: h }
 }
@@ -219,6 +294,18 @@ export function ensureProps(scene: Phaser.Scene): void {
     g.fillRect(2, 7, 5, 1)
     g.lineStyle(1, OUTLINE, 1)
     g.strokeRect(0.5, 0.5, 8, 10)
+  })
+  // Sealed order envelope (CEO -> manager).
+  bake(scene, propKey('order'), 12, 9, (g) => {
+    g.fillStyle(0xfffdf5, 1)
+    g.fillRect(0, 0, 12, 9)
+    g.lineStyle(1, 0x9e9e9e, 1)
+    g.lineBetween(0.5, 0.5, 6, 5)
+    g.lineBetween(11.5, 0.5, 6, 5)
+    g.fillStyle(0xc0392b, 1)
+    g.fillCircle(6, 5, 1.8)
+    g.lineStyle(1, OUTLINE, 1)
+    g.strokeRect(0.5, 0.5, 11, 8)
   })
   bake(scene, propKey('memo'), 8, 8, (g) => {
     g.fillStyle(0xf6e05e, 1)

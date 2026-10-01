@@ -1,6 +1,7 @@
 // Contract between main process and renderer. Preload exposes `window.agentOffice`.
 import type { AgentEvent } from './events'
 import type { ThemeManifest } from './theme'
+import type { OrderRequest, OrderResult } from './orders'
 
 export const IPC = {
   /** main -> renderer: one AgentEvent per message */
@@ -10,7 +11,9 @@ export const IPC = {
   /** renderer -> main (invoke) */
   loadTheme: 'agent-office:load-theme',
   listThemes: 'agent-office:list-themes',
-  getSettings: 'agent-office:get-settings'
+  getSettings: 'agent-office:get-settings',
+  /** renderer -> main (invoke): CEO order from the speech bar -> session inbox socket(s). */
+  sendOrder: 'agent-office:send-order'
 } as const
 
 export interface LoadedTheme {
@@ -30,6 +33,10 @@ export interface ThemeInfo {
 export interface RendererSettings {
   theme: string
   overlay: boolean
+  /** Tray "Allow CEO orders" (off by default: the app starts read-only). */
+  allowOrders: boolean
+  /** Office-wide mode ends after this long at the latest. */
+  officeWideTimeoutMs: number
 }
 
 export interface AgentOfficeBridge {
@@ -38,6 +45,7 @@ export interface AgentOfficeBridge {
   getSettings(): Promise<RendererSettings>
   listThemes(): Promise<ThemeInfo[]>
   loadTheme(name: string): Promise<LoadedTheme>
+  sendOrder(req: OrderRequest): Promise<OrderResult>
 }
 
 declare global {

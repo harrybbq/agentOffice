@@ -6,7 +6,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 
 // Must run before app 'ready' and before anything reads userData. main.ts imports this module first.
-app.setPath('userData', join(app.getPath('appData'), 'agent-office'))
+// AGENT_OFFICE_USER_DATA (testing): run a second, isolated instance with its own config/token/port.
+app.setPath('userData', process.env.AGENT_OFFICE_USER_DATA || join(app.getPath('appData'), 'agent-office'))
 
 export interface AppConfig {
   token: string
@@ -14,6 +15,10 @@ export interface AppConfig {
   theme: string
   alwaysOnTop: boolean
   overlay: boolean
+  /** Tray "Allow CEO orders": the speech bar may write to session inboxes. Off = read-only. */
+  allowOrders: boolean
+  /** Office-wide CEO orders end after this many minutes at the latest. */
+  officeWideMinutes: number
 }
 
 export const DEFAULT_PORT = 47821
@@ -27,7 +32,15 @@ function newToken(): string {
 }
 
 function defaults(): AppConfig {
-  return { token: newToken(), port: DEFAULT_PORT, theme: 'office', alwaysOnTop: false, overlay: false }
+  return {
+    token: newToken(),
+    port: DEFAULT_PORT,
+    theme: 'office',
+    alwaysOnTop: false,
+    overlay: false,
+    allowOrders: false,
+    officeWideMinutes: 10
+  }
 }
 
 let current: AppConfig | null = null
@@ -47,7 +60,13 @@ function normalise(raw: unknown): { cfg: AppConfig; changed: boolean } {
     port: pick(Number.isInteger(o.port) && (o.port as number) > 0 && (o.port as number) < 65536, o.port, d.port),
     theme: pick(typeof o.theme === 'string' && /^[a-z0-9_-]+$/.test(o.theme), o.theme, d.theme),
     alwaysOnTop: pick(typeof o.alwaysOnTop === 'boolean', o.alwaysOnTop, d.alwaysOnTop),
-    overlay: pick(typeof o.overlay === 'boolean', o.overlay, d.overlay)
+    overlay: pick(typeof o.overlay === 'boolean', o.overlay, d.overlay),
+    allowOrders: pick(typeof o.allowOrders === 'boolean', o.allowOrders, d.allowOrders),
+    officeWideMinutes: pick(
+      typeof o.officeWideMinutes === 'number' && o.officeWideMinutes >= 1 && o.officeWideMinutes <= 240,
+      o.officeWideMinutes,
+      d.officeWideMinutes
+    )
   }
   return { cfg, changed }
 }

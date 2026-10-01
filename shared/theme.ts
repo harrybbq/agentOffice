@@ -22,8 +22,14 @@
 //   hq.json:     boss_seat (1), inbox (1+ memo slots), door (1+, on the map edge, opens to corridor)
 //   branch.json: manager_seat (1), desk (1+), entrance (1+, where characters arrive and leave),
 //                door (1+, on the map edge, opens to corridor)
+// Optional:
+//   branch.json: manager_inbox (1): where workers drop memos for their manager (default: in front of
+//                the manager_seat)
 // Every other type (printer, yard, ...) is free-form and referenced from `activities`.
-// Station lookups are scoped to the character's own branch; `inbox` always resolves to the HQ.
+// Scope rules: workers only ever resolve locations inside their own branch (or their manager's
+// seat/office); a missing station type sends them home. Managers resolve in their branch, then the
+// HQ. The HQ `inbox` is for managers only: a waiting worker brings its memo to its manager, who takes
+// it to the HQ. During an office-wide CEO order, workers may use stations and the inbox anywhere.
 
 import type { Activity } from './events'
 
@@ -92,6 +98,28 @@ export interface ThemeManifest {
   activities: Record<Activity, string | ActivityDef>
   /** Names for the items carried between characters. */
   props: { handoff: string; report: string; memo: string }
+  /** Team (branch) colours: the manager's accessory, a collar/badge on its workers, the branch sign
+   *  and the HUD legend. Assigned per team, unique among live teams while the palette lasts. */
+  teams?: { colors: string[] }
+}
+
+/** Used when a theme has no `teams.colors`: 10 clearly distinct colours. */
+export const DEFAULT_TEAM_COLORS: readonly string[] = [
+  '#e6194b',
+  '#3cb44b',
+  '#4363d8',
+  '#f58231',
+  '#911eb4',
+  '#42d4f4',
+  '#f032e6',
+  '#bfef45',
+  '#ffe119',
+  '#9a6324'
+]
+
+export function teamColors(t: ThemeManifest): readonly string[] {
+  const c = t.teams?.colors?.filter((x) => typeof x === 'string' && /^#[0-9a-f]{6}$/i.test(x))
+  return c && c.length > 0 ? c : DEFAULT_TEAM_COLORS
 }
 
 export function activityDef(t: ThemeManifest, a: Activity): ActivityDef {

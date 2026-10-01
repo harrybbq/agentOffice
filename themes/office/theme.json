@@ -88,5 +88,19 @@
     "handoff": "folder",
     "report": "report",
     "memo": "memo"
+  },
+  "teams": {
+    "colors": [
+      "#e6194b",
+      "#3cb44b",
+      "#4363d8",
+      "#f58231",
+      "#911eb4",
+      "#42d4f4",
+      "#f032e6",
+      "#bfef45",
+      "#ffe119",
+      "#9a6324"
+    ]
   }
 }

@@ -137,18 +137,54 @@ t('desk overflow near the branch entrance when all 8 taken; desk-for-life kept',
   assert.equal(r.get('w8')!.home, o1) // overflow keeps its spot
 })
 
-t('stations resolve within own branch, then HQ, else null', () => {
+t('worker stations resolve only within its own branch (no HQ fallback); managers fall back to the HQ', () => {
   const r = mk()
   r.ensure(ev('m1', null)); r.ensure(ev('m2', null)); r.ensure(ev('w1', 'm2'))
   const b2 = r.blockOf('w1')
   const p = r.station('w1', 'printer', r.get('w1')!.home)!
   assert.equal(p.x, b2.offset.x + 248); assert.equal(p.y, b2.offset.y + 86)
+  // Even standing right next to m1's printer, the worker uses its own branch's.
+  const b1 = r.blockOf('m1')
+  const p2 = r.station('w1', 'printer', { x: b1.offset.x + 250, y: b1.offset.y + 90 })!
+  assert.equal(p2.x, p.x); assert.equal(p2.y, p.y)
   const e = r.entranceOf('w1')
   assert.equal(e.x, b2.offset.x + 256); assert.equal(e.y, b2.offset.y + 362)
-  // inbox only exists in the HQ -> HQ fallback.
-  const ib = r.station('w1', 'inbox', r.get('w1')!.home)!
-  assert.ok(ib.name.startsWith('inbox'))
+  // inbox only exists in the HQ: a worker gets nothing (goes home), a manager gets the HQ inbox.
+  assert.equal(r.station('w1', 'inbox', r.get('w1')!.home), null)
+  assert.ok(r.station('m2', 'inbox', r.get('m2')!.home)!.name.startsWith('inbox'))
   assert.equal(r.station('w1', 'no_such_station', { x: 0, y: 0 }), null)
+})
+
+t('office-wide: worker stations resolve world-wide (nearest of the type in any given block)', () => {
+  const r = mk()
+  r.ensure(ev('m1', null)); r.ensure(ev('m2', null)); r.ensure(ev('w1', 'm2'))
+  const world = r.layout.all()
+  const b1 = r.blockOf('m1')
+  const near1 = { x: b1.offset.x + 250, y: b1.offset.y + 90 }
+  const p = r.station('w1', 'printer', near1, world)!
+  assert.equal(p.x, b1.offset.x + 248); assert.equal(p.y, b1.offset.y + 86)
+  const ib = r.station('w1', 'inbox', r.get('w1')!.home, world)!
+  assert.ok(ib.name.startsWith('inbox'))
+})
+
+t('memo spots sit in the team manager office,distinct per worker, stable, freed on remove', () => {
+  const r = mk()
+  r.ensure(ev('m1', null)); r.ensure(ev('w1', 'm1')); r.ensure(ev('w2', 'm1')); r.ensure(ev('n1', 'w1'))
+  const seat = r.get('m1')!.home
+  const a = r.claimMemoSpot('w1')!; const b = r.claimMemoSpot('w2')!; const c = r.claimMemoSpot('n1')!
+  assert.equal(new Set([a, b, c].map((p) => `${p.x},${p.y}`)).size, 3)
+  // In front of the manager's desk, inside the manager's room (0..192 x 0..160 of the branch).
+  const o = r.blockOf('m1').offset
+  for (const p of [a, b, c]) {
+    assert.ok(p.y > seat.y + 50 && p.y - o.y < 160, `memo spot ${p.x},${p.y} outside the office`)
+    assert.ok(p.x - o.x > 8 && p.x - o.x < 184)
+  }
+  assert.deepEqual(r.claimMemoSpot('w1'), a)
+  assert.equal(r.teamManager('n1')!.id, 'm1') // nested subagents relay via the team manager
+  r.remove('w1')
+  assert.deepEqual(r.claimMemoSpot('w2'), b)
+  const d = r.claimMemoSpot('n1')!
+  assert.deepEqual(d, c)
 })
 
 t('inbox slots at HQ, overflow queues outside the HQ door', () => {

@@ -16,7 +16,8 @@ const bridge: AgentOfficeBridge = {
   onSettings: (cb) => subscribe<RendererSettings>(IPC.settings, cb),
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   listThemes: () => ipcRenderer.invoke(IPC.listThemes),
-  loadTheme: (name) => ipcRenderer.invoke(IPC.loadTheme, name)
+  loadTheme: (name) => ipcRenderer.invoke(IPC.loadTheme, name),
+  sendOrder: (req) => ipcRenderer.invoke(IPC.sendOrder, req)
 }
 
 contextBridge.exposeInMainWorld('agentOffice', bridge)

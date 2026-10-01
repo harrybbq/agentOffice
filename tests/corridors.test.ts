@@ -5,7 +5,7 @@ import { parseMap } from '../src/theme/parse.ts'
 import type { Rect } from '../src/theme/parse.ts'
 import { HQ_ID, WorldLayout } from '../src/world/layout.ts'
 import type { Block } from '../src/world/layout.ts'
-import { blockRect, CorridorNetwork } from '../src/world/corridors.ts'
+import { blockRect, buildNav, CorridorNetwork } from '../src/world/corridors.ts'
 import type { Cell, Corridor } from '../src/world/corridors.ts'
 
 const raw = (f: string) => JSON.parse(readFileSync(new URL(`../themes/office/${f}`, import.meta.url), 'utf8'))
@@ -74,15 +74,14 @@ t('the HQ porch is built from the start, outside the HQ door, and holds the inbo
   }
 })
 
-t('every new corridor starts at a built block\'s door and ends at the new branch\'s door', () => {
+t('every new corridor starts at an HQ door (never a branch door) and ends at the new branch\'s door', () => {
   const { l, net } = setup()
-  const built = new Set<string>([HQ_ID])
   for (let i = 0; i < 12; i++) {
     const b = l.addBranch('T' + i)
     const c = net.connect(b)
     assert.ok(c, `T${i} not connected`)
     assert.equal(c.toBlock, b.id)
-    assert.ok(built.has(c.fromBlock), `T${i} corridor starts at unbuilt ${c.fromBlock}`)
+    assert.equal(c.fromBlock, HQ_ID, `T${i} corridor starts at ${c.fromBlock}, not the HQ`)
     const from = l.all().find((x) => x.id === c.fromBlock)!
     assert.deepEqual(c.path[0], doorCellOf(net, from, c.fromDoor), `T${i} does not start at ${c.fromBlock}/${c.fromDoor}`)
     assert.deepEqual(c.path[c.path.length - 1], doorCellOf(net, b, c.toDoor), `T${i} does not end at its door`)
@@ -92,7 +91,25 @@ t('every new corridor starts at a built block\'s door and ends at the new branch
     assert.ok(inside(d0, net.cellRect(c.path[0])))
     assert.ok(inside(d1, net.cellRect(c.path[c.path.length - 1])))
     assertCorridorShape(net, c)
-    built.add(b.id)
+  }
+})
+
+t('corridor sources are never branch doors; every corridor reaches the HQ through corridors alone', () => {
+  const { l, net } = setup()
+  for (let i = 0; i < 12; i++) net.connect(l.addBranch('T' + i))
+  const branchDoorCells = new Map<string, Cell[]>()
+  for (const b of l.branches()) branchDoorCells.set(b.id, b.locations.get('door')!.map((d) => net.doorCell(b, d)))
+  for (const c of net.corridors()) {
+    assert.equal(c.fromBlock, HQ_ID, `${c.id} starts at ${c.fromBlock}`)
+    for (const [id, cells] of branchDoorCells) {
+      for (const dc of cells) assert.notDeepEqual(c.path[0], dc, `${c.id} starts at a door of ${id}`)
+    }
+  }
+  // No branch room on the way: the HQ + corridors alone connect every corridor cell.
+  const hqOnly = buildNav(l.bounds(), [l.hq], net.cells().map((x) => net.cellRect(x)))
+  const hub = hqOnly.componentAt(net.hqPoint())
+  for (const c of net.corridors()) {
+    for (const p of c.path) assert.equal(hqOnly.componentAt(net.cellCenter(p)), hub, `${c.id} cell cut off from the HQ without branches`)
   }
 })
 
@@ -130,20 +147,21 @@ t('removing B keeps A and C reachable; B\'s corridor goes unless C depends on it
   assertConnected(l, net)
 })
 
-t('a branch hanging off a removed branch\'s door gets a repair corridor', () => {
+t('removing a branch never strands another: no repairs, other corridors and their shared prefixes kept', () => {
   const { l, net } = setup()
-  for (const id of ['A', 'B', 'C']) net.connect(l.addBranch(id))
-  // In this layout C (slot 3) is closest to B's (slot 2) right door.
-  const cCorr = net.corridors().find((c) => c.toBlock === 'C')!
-  assert.equal(cCorr.fromBlock, 'B')
-  l.removeBranch('B')
-  const plan = net.remove('B')
-  assert.equal(plan.repairs.length, 1)
-  const r = plan.repairs[0]
-  assert.equal(r.toBlock, 'C'); assert.ok(r.repair)
-  assert.ok(['A', HQ_ID].includes(r.fromBlock))
-  assert.ok(!net.corridors().includes(cCorr))
-  assertConnected(l, net)
+  for (const id of ['A', 'B', 'C', 'D', 'E']) net.connect(l.addBranch(id))
+  for (const id of ['B', 'A']) {
+    const others = net.corridors().filter((c) => !c.permanent && c.toBlock !== id)
+    l.removeBranch(id)
+    const plan = net.remove(id)
+    assert.equal(plan.repairs.length, 0, `removing ${id} needed a repair`)
+    const keep = new Set(net.cells().map((c) => net.key(c)))
+    for (const c of others) {
+      assert.ok(net.corridors().includes(c), `${c.id} was dropped`)
+      for (const p of c.path) assert.ok(keep.has(net.key(p)), `${c.id} lost a cell`)
+    }
+    assertConnected(l, net)
+  }
 })
 
 t('random add/remove sequences keep every live branch connected; retracted cells are unused', () => {
@@ -201,4 +219,6 @@ t('the sealed CEO office stays unreachable with corridors on every side', () => 
   assert.equal(nav.findPath(net.hqPoint(), seat), null)
 })
 
-console.log(`\n${pass} corridor tests passed`)
+console.log(`\n${pass} corridor tests passed\n`)
+
+await import('./rules.test.ts')
