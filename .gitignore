@@ -5,3 +5,5 @@ dist/
 .DS_Store
 scripts/spikes/codex/generated/
 scripts/spikes/codex/logs/
+scripts/spikes/agy/logs/
+scripts/spikes/board/logs/
