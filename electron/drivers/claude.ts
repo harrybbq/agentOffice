@@ -21,6 +21,7 @@ import {
 } from '../adapters/claude-code-hooks'
 import type { RequestContext } from '../adapters/types'
 import { DEFAULT_DENY_MESSAGE, describeToolInput } from '../permissions'
+import { plainPermission } from '../../shared/permissionText'
 import { claudeBriefing, taggedOrder } from './claudeBriefing'
 import type { SessionInbox } from '../sessionInbox'
 import { SessionStateMachine, titleHint, type Scheduler } from './sessionState'
@@ -277,6 +278,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   private providerSession: string | undefined
   private model: string | undefined
   private exited = false
+  /** The session's current title (the manager's name in the world). */
+  private title: string
   private exitWaiters: Array<() => void> = []
   /** Resolved by the next real UserPromptSubmit. */
   private promptWaiters: Array<(seen: boolean) => void> = []
@@ -286,6 +289,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     private readonly opts: ClaudeProviderOptions
   ) {
     this.id = ctx.sessionId
+    this.title = ctx.start.title
     this.mapper = new ClaudeHookMapper({ rootId: this.id, displayName: ctx.start.title, holdWaiting: true, endsWithProcess: true })
   }
 
@@ -409,6 +413,9 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   /** Keeps the PermissionRequest hook open until the CEO office decides or Claude hangs up. */
   private holdPermission(body: Record<string, unknown>, agentId: string, displayName: string, req: RequestContext): Promise<unknown> {
     const toolName = typeof body.tool_name === 'string' ? body.tool_name : 'tool'
+    // One plain sentence for the card. A subagent is named with the team it works for.
+    const who = agentId === this.id ? displayName : `${displayName} (${this.title}'s team)`
+    const plain = plainPermission({ who, tool: toolName, input: body.tool_input, cwd: this.ctx.start.cwd })
     // The `waiting` world event was emitted by the mapper already.
     return new Promise<unknown>((resolve) => {
       const id = this.ctx.permissions.add(
@@ -419,7 +426,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
           provider: 'claude-code',
           toolName,
           summary: summarise(toolName, body.tool_input),
-          detail: describeToolInput(body.tool_input)
+          detail: describeToolInput(body.tool_input),
+          ...plain
         },
         {
           signal: req.signal,
@@ -443,6 +451,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
 
   setTitle(title: string): void {
     if (this.exited) return
+    this.title = title
     for (const e of this.mapper.rename(title)) this.ctx.sink.emit(e)
   }
 

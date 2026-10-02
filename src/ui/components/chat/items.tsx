@@ -3,12 +3,13 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ChatItem, ChatItemStatus } from '../../../../shared/chat'
+import { relativeTo } from '../../../../shared/paths'
 import { countLines, parseAnsi } from '../../chat/ansi'
 import type { AnsiSpan } from '../../chat/ansi'
 import { clipDiff, parseDiff } from '../../chat/diff'
 import { safeHref } from '../../chat/markdown'
 import { useApp, useAppState } from '../../controller'
-import { duration, shortenPath, stripToolPrefix } from '../../format'
+import { duration, permissionHeadline, riskBadge, shortenPath, stripToolPrefix } from '../../format'
 import { cx } from '../../hooks'
 import {
   IconAlert,
@@ -31,6 +32,7 @@ import {
   IconUsers,
   IconWrench
 } from '../../icons'
+import { QuestionText } from '../Inbox'
 import { CopyButton, ExternalLink, Markdown } from './Markdown'
 
 type Of<K extends ChatItem['kind']> = Extract<ChatItem, { kind: K }>
@@ -229,7 +231,8 @@ function Output({ text, running, truncated }: { text: string; running: boolean; 
   )
 }
 
-export const CommandItem = memo(function CommandItem({ item }: { item: Of<'command'> }) {
+/** `awaiting`: a permission request for this command is pending, so it has not started yet. */
+export const CommandItem = memo(function CommandItem({ item, awaiting = false }: { item: Of<'command'>; awaiting?: boolean }) {
   const running = item.status === 'running'
   const lines = useMemo(() => countLines(item.output), [item.output])
   // null = automatic: open while running, folded when it ends with a lot of output.
@@ -262,7 +265,7 @@ export const CommandItem = memo(function CommandItem({ item }: { item: Of<'comma
             </span>
           )}
           <span className="cmd-info-status">
-            {running ? 'Running…' : STATUS_LABEL[item.status]}
+            {awaiting ? 'Waiting for your approval' : running ? 'Running…' : STATUS_LABEL[item.status]}
             {!running && item.exitCode !== null && ` · exit code ${item.exitCode}`}
             {!running && item.durationMs !== undefined && ` · ${duration(item.durationMs)}`}
           </span>
@@ -271,7 +274,7 @@ export const CommandItem = memo(function CommandItem({ item }: { item: Of<'comma
         {item.output ? (
           <Output text={item.output} running={running} truncated={item.outputTruncated} />
         ) : (
-          <div className="cmd-empty">{running ? 'No output yet' : 'No output'}</div>
+          <div className="cmd-empty">{awaiting ? 'Not started' : running ? 'No output yet' : 'No output'}</div>
         )}
       </div>
     </Card>
@@ -327,10 +330,11 @@ function DiffView({ diff, change }: { diff: string; change: 'add' | 'delete' | '
   )
 }
 
-function ChangeBlock({ change }: { change: Of<'file-change'>['changes'][number] }) {
+function ChangeBlock({ change, cwd }: { change: Of<'file-change'>['changes'][number]; cwd: string | undefined }) {
   const stats = useMemo(() => parseDiff(change.diff, change.change), [change.diff, change.change])
   const [open, setOpen] = useState(true)
-  const { dir, name } = fileName(change.path)
+  // As seen from the session's folder; the tooltip has the full path.
+  const { dir, name } = fileName(relativeTo(change.path, cwd))
   return (
     <div className="change">
       <button type="button" className="change-head" onClick={() => setOpen(!open)} aria-expanded={open} title={change.path}>
@@ -338,7 +342,7 @@ function ChangeBlock({ change }: { change: Of<'file-change'>['changes'][number] 
         <span className="change-path">
           <span className="change-dir">{dir}</span>
           <span className="change-name">{name}</span>
-          {change.movedTo && <span className="change-moved">→ {change.movedTo}</span>}
+          {change.movedTo && <span className="change-moved">→ {relativeTo(change.movedTo, cwd)}</span>}
         </span>
         <span className="change-stats">
           {stats.added > 0 && <span className="stat-add">+{stats.added}</span>}
@@ -353,16 +357,27 @@ function ChangeBlock({ change }: { change: Of<'file-change'>['changes'][number] 
   )
 }
 
-export const FileChangeItem = memo(function FileChangeItem({ item }: { item: Of<'file-change'> }) {
+export const FileChangeItem = memo(function FileChangeItem({ item, awaiting = false }: { item: Of<'file-change'>; awaiting?: boolean }) {
   const [open, setOpen] = useState(true)
+  const cwd = useAppState((s) => s.sessions.find((x) => x.id === item.sessionId)?.cwd)
   const n = item.changes.length
-  const verb = item.status === 'running' ? 'Editing' : item.status === 'declined' ? 'Declined change to' : item.status === 'failed' ? 'Failed to change' : 'Changed'
+  const verb = awaiting
+    ? 'Wants to change'
+    : item.status === 'running'
+      ? 'Editing'
+      : item.status === 'declined'
+        ? 'Declined change to'
+        : item.status === 'failed'
+          ? 'Failed to change'
+          : item.status === 'interrupted'
+            ? 'Interrupted change to'
+            : 'Changed'
   const title = n === 1 ? `${verb} ${fileName(item.changes[0].path).name}` : `${verb} ${n} files`
   return (
     <Card status={item.status} icon={<IconPencil size={14} />} title={<span className="cc-text">{title}</span>} open={open && n > 0} onToggle={n > 0 ? () => setOpen(!open) : undefined}>
       <div className="cc-body cc-body-flush">
         {item.changes.map((c, i) => (
-          <ChangeBlock key={`${c.path}:${i}`} change={c} />
+          <ChangeBlock key={`${c.path}:${i}`} change={c} cwd={cwd} />
         ))}
       </div>
     </Card>
@@ -514,6 +529,13 @@ export const ApprovalItem = memo(function ApprovalItem({ item }: { item: Of<'app
   const pending = item.outcome === 'pending'
   const outcome = item.outcome === 'pending' ? null : OUTCOME[item.outcome]
   const toolName = req?.toolName ?? (item.summary.includes(':') ? item.summary.slice(0, item.summary.indexOf(':')) : 'Permission')
+  // The same words as the inbox card: the plain question leads, the raw request is under Details.
+  const question = item.question ?? req?.question
+  const risk = item.risk ?? req?.risk ?? 'normal'
+  const riskNote = item.riskNote ?? req?.riskNote
+  const headline = permissionHeadline({ question, summary: item.summary })
+  const badge = riskBadge(risk, riskNote)
+  const danger = risk === 'danger'
 
   useEffect(() => {
     if (!pending) setDenying(false)
@@ -530,12 +552,15 @@ export const ApprovalItem = memo(function ApprovalItem({ item }: { item: Of<'app
       toolName,
       summary: item.summary,
       detail: item.detail,
+      question: headline,
+      risk,
+      ...(riskNote ? { riskNote } : {}),
       createdAt: item.ts
     })
   }
 
   return (
-    <div className={cx('approval', `is-${item.outcome}`)} role={pending ? 'group' : undefined} aria-label={pending ? 'Permission request' : undefined}>
+    <div className={cx('approval', `is-${item.outcome}`, pending && badge && `risk-${badge.tone}`)} role={pending ? 'group' : undefined} aria-label={pending ? 'Permission request' : undefined}>
       <div className="approval-head">
         <span className="approval-icon">
           <IconShield size={14} />
@@ -548,17 +573,28 @@ export const ApprovalItem = memo(function ApprovalItem({ item }: { item: Of<'app
           </span>
         )}
       </div>
-      <div className="card-summary">
-        <span className="tool-chip">{toolName}</span>
-        <span className="card-summary-text">{stripToolPrefix(item.summary, toolName)}</span>
-      </div>
-      {item.detail && (
-        <button type="button" className={cx('card-toggle', details && 'is-open')} onClick={() => setDetails(!details)} aria-expanded={details}>
-          <IconChevron size={12} />
-          {details ? 'Hide details' : 'Details'}
-        </button>
+      <p className="card-question" title={headline}>
+        <QuestionText text={headline} />
+      </p>
+      {badge && (
+        <span className={cx('risk-badge', `is-${badge.tone}`)}>
+          <IconAlert size={12} />
+          {badge.text}
+        </span>
       )}
-      {details && <pre className="card-detail">{item.detail}</pre>}
+      <button type="button" className={cx('card-toggle', details && 'is-open')} onClick={() => setDetails(!details)} aria-expanded={details}>
+        <IconChevron size={12} />
+        {details ? 'Hide details' : 'Details'}
+      </button>
+      {details && (
+        <div className="card-raw">
+          <div className="card-summary">
+            <span className="tool-chip">{toolName}</span>
+            <span className="card-summary-text">{stripToolPrefix(item.summary, toolName)}</span>
+          </div>
+          {item.detail && <pre className="card-detail">{item.detail}</pre>}
+        </div>
+      )}
       {pending &&
         (denying ? (
           <form
@@ -592,9 +628,15 @@ export const ApprovalItem = memo(function ApprovalItem({ item }: { item: Of<'app
           </form>
         ) : (
           <div className="card-actions approval-actions">
-            <button type="button" className="btn btn-allow" disabled={busy} onClick={() => decide(true)}>
+            <button
+              type="button"
+              className={cx('btn btn-allow', danger && 'is-danger')}
+              disabled={busy}
+              onClick={() => decide(true)}
+              title={danger ? 'This one is risky: read it before you allow it' : undefined}
+            >
               <IconCheck />
-              Allow
+              {danger ? 'Allow anyway' : 'Allow'}
             </button>
             <button
               type="button"
@@ -625,7 +667,8 @@ export const NoticeItem = memo(function NoticeItem({ item }: { item: Of<'notice'
   )
 })
 
-export function ItemView({ item }: { item: ChatItem }) {
+/** `awaiting`: the item is a command / file change whose permission request is still pending. */
+export function ItemView({ item, awaiting = false }: { item: ChatItem; awaiting?: boolean }) {
   switch (item.kind) {
     case 'user':
       return <UserItem item={item} />
@@ -634,9 +677,9 @@ export function ItemView({ item }: { item: ChatItem }) {
     case 'reasoning':
       return <ReasoningItem item={item} />
     case 'command':
-      return <CommandItem item={item} />
+      return <CommandItem item={item} awaiting={awaiting} />
     case 'file-change':
-      return <FileChangeItem item={item} />
+      return <FileChangeItem item={item} awaiting={awaiting} />
     case 'web':
       return <WebItem item={item} />
     case 'tool':

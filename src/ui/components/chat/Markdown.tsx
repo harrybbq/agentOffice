@@ -2,6 +2,7 @@
 // in text nodes and in `href` values that passed safeHref: nothing here sets inner HTML.
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { linkNote, openLink } from '../../chat/links'
 import { parseMarkdown } from '../../chat/markdown'
 import type { Block, Inline } from '../../chat/markdown'
 import { cx } from '../../hooks'
@@ -35,44 +36,44 @@ export function CopyButton({ text, label = 'Copy', className }: { text: string; 
 }
 
 /**
- * A link to an http(s) URL (the caller passes one that went through safeHref). A click asks for a
- * new window: the main process decides what that does (open the system browser, or refuse). When
- * it is refused, the URL is copied instead so the link is never a dead end.
+ * A link to an http(s) URL (the caller passes one that went through safeHref). In the app a click
+ * hands the URL to the main process, which opens the system browser; in the browser stub it opens
+ * a new tab. If neither worked the URL is copied instead, so the link is never a dead end.
  */
 export function ExternalLink({ href, className, children }: { href: string; className?: string; children: ReactNode }) {
-  const [copied, setCopied] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
   const timer = useRef(0)
   useEffect(() => () => window.clearTimeout(timer.current), [])
   return (
     <a
-      className={cx('md-link', copied && 'is-copied', className)}
+      className={cx('md-link', note && 'is-copied', className)}
       href={href}
-      title={copied ? 'Opened in your browser · link copied' : href}
+      title={note ?? href}
       target="_blank"
       rel="noopener noreferrer"
       onClick={(ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        let opened: Window | null = null
-        try {
-          opened = window.open(href, '_blank')
-          if (opened) opened.opener = null
-        } catch {
-          opened = null
-        }
-        if (opened) return
-        void navigator.clipboard
-          ?.writeText(href)
-          .then(() => {
-            setCopied(true)
-            window.clearTimeout(timer.current)
-            timer.current = window.setTimeout(() => setCopied(false), 1600)
-          })
-          .catch(() => undefined)
+        const bridge = window.agentOffice
+        void openLink(href, {
+          openExternal: typeof bridge?.openExternal === 'function' ? (url) => bridge.openExternal!(url) : undefined,
+          openWindow: (url) => {
+            const w = window.open(url, '_blank')
+            if (w) w.opener = null
+            return w
+          },
+          copy: (url) => navigator.clipboard.writeText(url)
+        }).then((outcome) => {
+          const text = linkNote(outcome)
+          if (!text) return
+          setNote(text)
+          window.clearTimeout(timer.current)
+          timer.current = window.setTimeout(() => setNote(null), 1800)
+        })
       }}
     >
       {children}
-      {copied && <span className="md-link-note">Opened in your browser · link copied</span>}
+      {note && <span className="md-link-note">{note}</span>}
     </a>
   )
 }

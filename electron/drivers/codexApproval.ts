@@ -1,19 +1,22 @@
 // Codex server requests (the server asks, the client must answer) -> a card for the CEO inbox, and
 // the user's decision -> the JSON-RPC result. Pure. Shapes: docs/spikes-phase-b.md, spike 4.
 import type { ChatItem } from '../../shared/chat'
+import { relativeTo } from '../../shared/paths'
 import type { PermissionDecision } from '../../shared/sessions'
 import { describeToolInput } from '../permissions'
 import { arr, innerCommand, isRecord, str } from './codexProtocol'
 
 export interface ApprovalCard {
-  /** "Command", "File change", … (PermissionRequestInfo.toolName). */
+  /** "Command", "Edit", "Create", "Delete", … (PermissionRequestInfo.toolName). The summary starts with it. */
   toolName: string
-  /** One line: "Command: node -e …" or "Edit: path (+2 more)". */
+  /** One line: "Command: node -e …" or "Edit: src\\app.ts (+2 more)" (paths as seen from the session's folder). */
   summary: string
   /** Command + cwd + reason, or the file list with diffs. The registry truncates it. */
   detail: string
   /** The item the request is about (the command or file-change card in the chat). */
   itemId: string
+  /** The request in the terms of shared/permissionText.ts (`plainPermission({ who, cwd, ...plain })`). */
+  plain: { tool: string; input: Record<string, unknown> }
 }
 
 export type RequestHandling =
@@ -39,8 +42,9 @@ function pathsOf(permissions: unknown): string[] {
 /**
  * What to do with a server request. `subject` is the chat item with the request's `itemId`: a
  * file-change request carries no paths or diff of its own, the item sent just before it does.
+ * `cwd` is the session's folder: file paths under it are shown relative to it.
  */
-export function describeServerRequest(method: string, params: Record<string, unknown>, subject?: ChatItem): RequestHandling {
+export function describeServerRequest(method: string, params: Record<string, unknown>, subject?: ChatItem, cwd?: string): RequestHandling {
   const itemId = str(params.itemId, 200)
   const reason = str(params.reason, 1000)
   switch (method) {
@@ -54,12 +58,14 @@ export function describeServerRequest(method: string, params: Record<string, unk
       if (network) lines.push(`network: ${network}`)
       if (reason) lines.push(`reason: ${reason}`)
       const what = params.kind === 'writeStdin' ? 'Input to command' : 'Command'
-      return { kind: 'card', card: { toolName: 'Command', summary: `${what}: ${command || network || 'run a command'}`, detail: lines.join('\n'), itemId } }
+      return { kind: 'card', card: { toolName: 'Command', summary: `${what}: ${command || network || 'run a command'}`, detail: lines.join('\n'), itemId, plain: { tool: 'Command', input: { command } } } }
     }
     case 'item/fileChange/requestApproval': {
       const changes = subject?.kind === 'file-change' ? subject.changes : []
-      const first = changes[0]?.path ?? ''
+      const first = changes[0] ? relativeTo(changes[0].path, cwd) : ''
       const more = changes.length > 1 ? ` (+${changes.length - 1} more)` : ''
+      // What happens to the (first) file. The chip and the summary say the same word.
+      const verb = changes[0]?.change === 'add' ? 'Create' : changes[0]?.change === 'delete' ? 'Delete' : 'Edit'
       const lines: string[] = []
       for (const c of changes) {
         lines.push(`${c.change} ${c.path}${c.movedTo ? ` -> ${c.movedTo}` : ''}`)
@@ -68,7 +74,9 @@ export function describeServerRequest(method: string, params: Record<string, unk
       const root = str(params.grantRoot, 1000)
       if (root) lines.push(`grant write access under: ${root}`)
       if (reason) lines.push(`reason: ${reason}`)
-      return { kind: 'card', card: { toolName: 'File change', summary: `Edit: ${first || 'files'}${more}`, detail: lines.join('\n') || 'file change', itemId } }
+      // The full path of the first file: the sentence tells inside the project from outside.
+      const plain = { tool: verb, input: { path: changes[0]?.path ?? '', more: Math.max(0, changes.length - 1) } }
+      return { kind: 'card', card: { toolName: verb, summary: `${verb}: ${first || 'files'}${more}`, detail: lines.join('\n') || 'file change', itemId, plain } }
     }
     case 'item/permissions/requestApproval': {
       const perms = isRecord(params.permissions) ? params.permissions : {}
@@ -82,7 +90,7 @@ export function describeServerRequest(method: string, params: Record<string, unk
       if (cwd) lines.push(`cwd: ${cwd}`)
       if (reason) lines.push(`reason: ${reason}`)
       lines.push('', describeToolInput(perms))
-      return { kind: 'card', card: { toolName: 'Permissions', summary: `Permissions: ${wants.join(' + ') || 'more access'}${paths[0] ? ` (${paths[0]})` : ''}`, detail: lines.join('\n'), itemId } }
+      return { kind: 'card', card: { toolName: 'Permissions', summary: `Permissions: ${wants.join(' + ') || 'more access'}${paths[0] ? ` (${paths[0]})` : ''}`, detail: lines.join('\n'), itemId, plain: { tool: 'Permissions', input: { wants } } } }
     }
     case 'mcpServer/elicitation/request': {
       const server = str(params.serverName, 200) || 'MCP server'
@@ -94,7 +102,9 @@ export function describeServerRequest(method: string, params: Record<string, unk
       if (params.mode === 'url' || fields > 0) {
         return { kind: 'auto', result: { action: 'decline', content: null, _meta: null }, notice: `${server} asked for input Agent Office can't collect yet, so the request was declined: ${message || '(no message)'}` }
       }
-      return { kind: 'card', card: { toolName: 'MCP', summary: `${server}: ${message || 'asks to continue'}`, detail: [`server: ${server}`, message].filter(Boolean).join('\n'), itemId } }
+      // The tool's name, when the request carries one (the plugin's own wording is in the summary).
+      const tool = str(params.toolName, 200) || str(params.tool, 200)
+      return { kind: 'card', card: { toolName: 'MCP', summary: `${server}: ${message || 'asks to continue'}`, detail: [`server: ${server}`, message].filter(Boolean).join('\n'), itemId, plain: { tool: 'mcp', input: { server, tool } } } }
     }
     case 'item/tool/requestUserInput': {
       const questions = arr(params.questions)

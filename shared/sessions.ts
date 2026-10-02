@@ -7,6 +7,9 @@
 // - The renderer never supplies a command line, args or env. It picks a provider id + folder; the
 //   main process resolves the executable from a fixed table.
 
+import type { PermissionRisk } from './permissionText'
+
+export type { PermissionRisk } from './permissionText'
 export type ProviderId = 'claude-code' | 'codex' | 'antigravity'
 
 export interface ProviderInfo {
@@ -36,6 +39,17 @@ export interface StartSessionRequest {
   resume?: string
   /** Shown as the team/manager name. Defaults to the folder name. */
   title?: string
+}
+
+/** An earlier conversation of a provider in a folder, which a new session can continue (`resume`). */
+export interface SessionHistoryEntry {
+  /** The provider's own session id: what StartSessionRequest.resume takes. */
+  id: string
+  /** How the conversation began (its first prompt), on one line, truncated. May be empty. */
+  preview: string
+  /** Unix ms of the last activity. */
+  updatedAt: number
+  model?: string
 }
 
 export type SessionState =
@@ -84,6 +98,14 @@ export interface PermissionRequestInfo {
   summary: string
   /** Pretty-printed tool input, truncated (for the expandable card). */
   detail: string
+  /** The request as ONE plain sentence: "Sonnet 5.5 wants to run the tests (`npm test`)." The
+   *  card's headline; `toolName` / `summary` / `detail` are the raw request under "Details".
+   *  Built from fixed templates (shared/permissionText.ts), never by a model. */
+  question: string
+  /** How careful to be: `caution` and `danger` get a badge, `danger` also a slower Allow. */
+  risk: PermissionRisk
+  /** Why, in two or three words: "Deletes files", "Outside the project folder". */
+  riskNote?: string
   createdAt: number
 }
 

@@ -9,14 +9,16 @@ import type { AgentOfficeBridge } from '../shared/ipc.ts'
 import { countLines, parseAnsi, stripAnsi, tailLines } from '../src/ui/chat/ansi.ts'
 import { clipDiff, parseDiff } from '../src/ui/chat/diff.ts'
 import { PromptHistory } from '../src/ui/chat/history.ts'
+import { linkNote, openLink } from '../src/ui/chat/links.ts'
 import { inlineText, parseInline, parseMarkdown, safeHref } from '../src/ui/chat/markdown.ts'
 import type { Block, Inline } from '../src/ui/chat/markdown.ts'
-import { applyEvents, EMPTY_CHAT, hasOpenItem, setApprovalOutcome, startsTurn, windowTail } from '../src/ui/chat/state.ts'
+import { relativeTo } from '../shared/paths.ts'
+import { applyEvents, awaitsApproval, EMPTY_CHAT, hasOpenItem, setApprovalOutcome, startsTurn, windowTail } from '../src/ui/chat/state.ts'
 import type { ChatState } from '../src/ui/chat/state.ts'
 import { ChatManager } from '../src/ui/chats.ts'
 import { Markdown } from '../src/ui/components/chat/Markdown.tsx'
 import type { ProviderInfo, SessionInfo } from '../shared/sessions.ts'
-import { composerState, groupSessions, loginHint, modeHints, modelPlaceholder, orderTargets, usageInfo } from '../src/ui/format.ts'
+import { allowsByKey, questionParts, canResume, composerState, DANGER_CONFIRM_MS, groupSessions, loginHint, modeHints, modelPlaceholder, orderTargets, permissionHeadline, riskBadge, usageInfo, whenAgo } from '../src/ui/format.ts'
 
 let pass = 0
 const t = (name: string, fn: () => void | Promise<void>) => {
@@ -651,7 +653,129 @@ t('composer state follows the session state', () => {
   assert.ok(composerState('needs-attention', 'Codex').reason!.includes('Codex'))
 })
 
+// ---- approvals and paths ------------------------------------------------------------------------
+
+t('a command or file change with a pending request is waiting, not running', () => {
+  const base = { sessionId: 'S', agentId: 'S', ts: 1, turnId: 't1' }
+  const cmd: ChatItem = { ...base, id: 'exec-1', kind: 'command', command: 'node x', intent: 'exec', output: '', outputTruncated: false, exitCode: null, status: 'running' }
+  const fc: ChatItem = { ...base, id: 'fc-1', kind: 'file-change', changes: [], status: 'running' }
+  const ask = (id: string, subjectId: string | undefined, outcome: 'pending' | 'allowed'): ChatItem => ({ ...base, id, kind: 'approval', requestId: `perm-${id}`, subjectId, summary: 'Command: node x', detail: '', outcome })
+  let s = applyEvents(EMPTY_CHAT, 'S', [{ type: 'reset', sessionId: 'S', items: [cmd, fc, ask('a1', 'exec-1', 'pending')] }])
+  assert.deepEqual([awaitsApproval(s, 'exec-1'), awaitsApproval(s, 'fc-1'), awaitsApproval(s, 'a1'), awaitsApproval(s, 'nope')], [true, false, false, false])
+  // Answered: it runs (or was declined) from here on.
+  s = setApprovalOutcome(s, 'perm-a1', 'allowed')
+  assert.equal(awaitsApproval(s, 'exec-1'), false)
+  // A request about a file change; one without a subject concerns no card.
+  s = applyEvents(s, 'S', [{ type: 'item', item: ask('a2', 'fc-1', 'pending') }, { type: 'item', item: ask('a3', undefined, 'pending') }])
+  assert.deepEqual([awaitsApproval(s, 'exec-1'), awaitsApproval(s, 'fc-1')], [false, true])
+  // The subject is no longer running (the turn was interrupted): nothing waits.
+  s = applyEvents(s, 'S', [{ type: 'item', item: { ...fc, status: 'interrupted' } }])
+  assert.equal(awaitsApproval(s, 'fc-1'), false)
+})
+
+t('a permission card leads with the plain question; risky ones get a badge and a slower Allow', () => {
+  assert.equal(permissionHeadline({ question: 'Opus 5.5 wants to run the tests (`npm test`).', summary: 'Bash: npm test' }), 'Opus 5.5 wants to run the tests (`npm test`).')
+  // An older main process sends no question: the raw summary stands in.
+  assert.equal(permissionHeadline({ summary: 'Bash: npm test' }), 'Bash: npm test')
+  assert.equal(permissionHeadline({ question: '  ', summary: 'Bash: npm test' }), 'Bash: npm test')
+
+  // The quoted command is shown as code; a stray backtick stays a character.
+  assert.deepEqual(questionParts('A wants to run the tests (`npm test`).'), [{ text: 'A wants to run the tests (', code: false }, { text: 'npm test', code: true }, { text: ').', code: false }])
+  assert.deepEqual(questionParts('no code here'), [{ text: 'no code here', code: false }])
+  assert.deepEqual(questionParts('one ` only'), [{ text: 'one ` only', code: false }])
+  assert.deepEqual(questionParts('`a` and `b` and ` c').map((p) => (p.code ? `[${p.text}]` : p.text)).join(''), '[a] and [b] and ` c')
+  assert.deepEqual(questionParts(''), [])
+
+  assert.equal(riskBadge('normal', 'ignored'), null)
+  assert.equal(riskBadge(undefined), null)
+  assert.deepEqual(riskBadge('caution', 'Installs software'), { tone: 'caution', text: 'Careful: Installs software' })
+  assert.deepEqual(riskBadge('caution'), { tone: 'caution', text: 'Careful' })
+  assert.deepEqual(riskBadge('danger', 'Deletes files'), { tone: 'danger', text: 'Deletes files' })
+  assert.deepEqual(riskBadge('danger', ' '), { tone: 'danger', text: 'Dangerous' })
+
+  // The A key: at once for routine and careful requests; twice, close together, for a dangerous one.
+  const now = 1_000_000
+  assert.equal(allowsByKey('normal', null, now), true)
+  assert.equal(allowsByKey('caution', null, now), true)
+  assert.equal(allowsByKey(undefined, null, now), true)
+  assert.equal(allowsByKey('danger', null, now), false)
+  assert.equal(allowsByKey('danger', now - 400, now), true)
+  assert.equal(allowsByKey('danger', now - DANGER_CONFIRM_MS, now), true)
+  assert.equal(allowsByKey('danger', now - DANGER_CONFIRM_MS - 1, now), false)
+  assert.equal(allowsByKey('danger', now + 50, now), false)
+})
+
+t('paths are shown as seen from the session folder', () => {
+  const W = 'C:\\Users\\me\\repo'
+  assert.equal(relativeTo(`${W}\\order.txt`, W), 'order.txt')
+  assert.equal(relativeTo(`${W}\\src\\ui\\app.ts`, W), 'src\\ui\\app.ts')
+  // Windows: case and the separator don't matter; the answer keeps the path's own spelling.
+  assert.equal(relativeTo('c:/users/ME/repo/Src/App.ts', W), 'Src/App.ts')
+  assert.equal(relativeTo(`${W}\\a.ts`, `${W}\\`), 'a.ts')
+  assert.equal(relativeTo(W, W), '.')
+  // Outside the folder (a sibling with the same prefix, another drive, a relative path): unchanged.
+  assert.equal(relativeTo('C:\\Users\\me\\repo2\\a.ts', W), 'C:\\Users\\me\\repo2\\a.ts')
+  assert.equal(relativeTo('D:\\x\\a.ts', W), 'D:\\x\\a.ts')
+  assert.equal(relativeTo('src\\a.ts', W), 'src\\a.ts')
+  assert.equal(relativeTo('C:\\a.ts', 'C:\\'), 'C:\\a.ts')
+  // POSIX paths are case-sensitive.
+  assert.equal(relativeTo('/home/me/repo/src/a.ts', '/home/me/repo'), 'src/a.ts')
+  assert.equal(relativeTo('/home/me/repo/src/a.ts', '/home/me/repo/'), 'src/a.ts')
+  assert.equal(relativeTo('/home/me/Repo/a.ts', '/home/me/repo'), '/home/me/Repo/a.ts')
+  assert.equal(relativeTo('/etc/passwd', '/'), '/etc/passwd')
+  // No folder known: the path as it is.
+  assert.equal(relativeTo('C:\\a.ts', undefined), 'C:\\a.ts')
+  assert.equal(relativeTo('', W), '')
+})
+
+// ---- links ----------------------------------------------------------------------------------------
+
+await t('a link opens in the system browser through the bridge; a new tab in the stub; copied when neither works', async () => {
+  const run = async (deps: { openExternal?: (url: string) => Promise<boolean>; openWindow?: (url: string) => unknown; copy?: (url: string) => Promise<void> }) => {
+    const calls: string[] = []
+    const outcome = await openLink('https://example.com/a', {
+      openExternal: deps.openExternal && ((url) => (calls.push(`bridge ${url}`), deps.openExternal!(url))),
+      openWindow: (url) => (calls.push(`window ${url}`), (deps.openWindow ?? (() => null))(url)),
+      copy: (url) => (calls.push(`copy ${url}`), (deps.copy ?? (async () => undefined))(url))
+    })
+    return { outcome, calls }
+  }
+  // The app: the main process opened it. Nothing is copied and no window is asked for.
+  assert.deepEqual(await run({ openExternal: async () => true }), { outcome: 'browser', calls: ['bridge https://example.com/a'] })
+  // The main process refused, or the call failed: the URL is copied instead.
+  assert.deepEqual(await run({ openExternal: async () => false }), { outcome: 'copied', calls: ['bridge https://example.com/a', 'copy https://example.com/a'] })
+  assert.deepEqual((await run({ openExternal: async () => Promise.reject(new Error('no handler')) })).outcome, 'copied')
+  assert.deepEqual((await run({ openExternal: async () => 'yes' as unknown as boolean })).outcome, 'copied')
+  // The stub in a browser (no bridge.openExternal): a new tab, and nothing to say about it.
+  assert.deepEqual(await run({ openWindow: () => ({}) }), { outcome: 'tab', calls: ['window https://example.com/a'] })
+  // A blocked or throwing window.open: copied.
+  assert.deepEqual(await run({ openWindow: () => null }), { outcome: 'copied', calls: ['window https://example.com/a', 'copy https://example.com/a'] })
+  assert.deepEqual((await run({ openWindow: () => { throw new Error('blocked') } })).outcome, 'copied')
+  // No clipboard either.
+  assert.deepEqual((await run({ copy: async () => Promise.reject(new Error('denied')) })).outcome, 'failed')
+
+  assert.equal(linkNote('browser'), 'Opened in your browser')
+  assert.match(linkNote('copied') ?? '', /link copied/)
+  assert.equal(linkNote('tab'), null)
+  assert.equal(linkNote('failed'), null)
+})
+
 // ---- provider helpers ---------------------------------------------------------------------------
+
+t('resume picker helpers: which providers have a history, and how long ago', () => {
+  assert.deepEqual([canResume('codex'), canResume('claude-code'), canResume('antigravity'), canResume(null)], [true, false, false, false])
+  const now = new Date(2026, 9, 2, 15, 0).getTime()
+  const at = (ms: number) => whenAgo(now - ms, now)
+  assert.deepEqual(
+    [at(0), at(59_000), at(60_000), at(59 * 60_000), at(3_600_000), at(23.9 * 3_600_000), at(24 * 3_600_000), at(47 * 3_600_000), at(2 * 86_400_000), at(6.9 * 86_400_000)],
+    ['just now', 'just now', '1 min ago', '59 min ago', '1 h ago', '23 h ago', 'yesterday', 'yesterday', '2 days ago', '6 days ago']
+  )
+  // Older: the date; the year only when it differs. A clock that is slightly behind never shows a negative age.
+  assert.ok(!/ago|2026/.test(at(30 * 86_400_000)) && /\d/.test(at(30 * 86_400_000)), at(30 * 86_400_000))
+  assert.match(at(400 * 86_400_000), /2025/)
+  assert.equal(at(-5000), 'just now')
+  assert.equal(whenAgo(Number.NaN, now), '')
+})
 
 t('provider account helpers: login hint, usage, mode help, model placeholder', () => {
   assert.equal(loginHint({ id: 'codex', label: 'Codex', available: true, account: { loggedIn: false } }), true)
@@ -662,7 +786,8 @@ t('provider account helpers: login hint, usage, mode help, model placeholder', (
   const now = Date.UTC(2026, 9, 2, 12, 0)
   const u = usageInfo({ usedPercent: 12.4, resetsAt: now + 3 * 86_400_000, windowMinutes: 43200 }, now)!
   assert.deepEqual([u.percent, u.label, u.tone], [12, '12%', 'ok'])
-  assert.ok(u.title.includes('12% of the 30-day limit used') && u.title.includes('Resets'), u.title)
+  assert.ok(u.title.includes('12% of the 30-day limit used') && u.title.includes('Resets') && u.title.endsWith('(in 3 days)'), u.title)
+  assert.ok(usageInfo({ usedPercent: 12, resetsAt: now + 90 * 60_000 }, now)!.title.endsWith('(in 1h 30m)'))
   assert.equal(usageInfo({ usedPercent: 81 })!.tone, 'warn')
   assert.equal(usageInfo({ usedPercent: 250 })!.percent, 100)
   assert.equal(usageInfo({ usedPercent: 250 })!.tone, 'danger')
@@ -713,3 +838,5 @@ t('Codex sessions get their own sidebar group and an "All Codex" order target', 
 })
 
 console.log(`\n${pass} chat tests passed`)
+
+await import('./permissionText.test.ts')

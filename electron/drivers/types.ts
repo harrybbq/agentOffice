@@ -12,6 +12,7 @@ import type {
   PermissionOutcome,
   ProviderId,
   ProviderInfo,
+  SessionHistoryEntry,
   SessionState,
   TerminalSnapshot
 } from '../../shared/sessions'
@@ -127,6 +128,8 @@ export interface ProviderDefinition {
   createDriver?(ctx: DriverContext): AgentDriver
   /** Providers with their own account: starts the login flow (system browser). Rejects with a readable message. */
   login?(): Promise<void>
+  /** Earlier conversations in exactly that folder, newest first (see SessionHistoryEntry). */
+  history?(cwd: string): Promise<SessionHistoryEntry[]>
   /** Calls `cb` whenever probe() would now answer differently (login state, usage). */
   onChanged?(cb: () => void): void
   /** App quit: stops whatever the provider keeps running besides its sessions. */

@@ -35,6 +35,7 @@ export function registerSessionIpc(opts: SessionIpcOptions): void {
   handle(IPC.startSession, (req) => manager.start(req))
   handle(IPC.stopSession, (id) => manager.stop(id))
   handle(IPC.interruptSession, (id) => manager.interrupt(id))
+  handle(IPC.sessionHistory, (provider, cwd) => manager.history(provider, cwd))
   handle(IPC.pickFolder, async () => {
     const win = getWindow()
     if (!win || win.isDestroyed()) return null

@@ -4,7 +4,7 @@
 // to their own item, so streaming re-renders one row per frame.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { SessionInfo } from '../../../shared/sessions'
-import { startsTurn, windowTail } from '../chat/state'
+import { awaitsApproval, startsTurn, windowTail } from '../chat/state'
 import type { ChatSessionState, ChatUi } from '../chats'
 import { CHAT_WINDOW } from '../chats'
 import { useApp, useAppState } from '../controller'
@@ -33,6 +33,7 @@ function dayAndTime(ts: number): string {
 const Row = memo(function Row({ store, id, prevId }: { store: Store<ChatSessionState>; id: string; prevId: string | undefined }) {
   const item = useStore(store, (s) => s.items[id])
   const sep = useStore(store, (s) => startsTurn(prevId ? s.items[prevId] : undefined, s.items[id]))
+  const awaiting = useStore(store, (s) => awaitsApproval(s, id))
   if (!item) return null
   return (
     <>
@@ -42,7 +43,7 @@ const Row = memo(function Row({ store, id, prevId }: { store: Store<ChatSessionS
         </div>
       )}
       <div className={cx('chat-row', `kind-${item.kind}`)} data-item={id}>
-        <ItemView item={item} />
+        <ItemView item={item} awaiting={awaiting} />
         <time className="chat-ts" dateTime={new Date(item.ts).toISOString()}>
           {clock(item.ts)}
         </time>

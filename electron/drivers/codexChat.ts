@@ -8,6 +8,8 @@
 // - A `delta` event always refers to an item that an earlier `item` event introduced.
 // - `turn started` comes before the turn's items; `turn completed/interrupted/failed` comes after
 //   every item of the turn was closed (nothing of that turn is `running` or `streaming` any more).
+// - An item of a turn that has ended never opens again: Codex announces a command's process start
+//   (`item/started`, with the output so far) even after the turn it belongs to was interrupted.
 import {
   CHAT_MAX_DIFF_CHARS,
   CHAT_MAX_ITEMS,
@@ -16,6 +18,7 @@ import {
   type ChatItem,
   type ChatItemStatus
 } from '../../shared/chat'
+import type { PermissionRisk } from '../../shared/permissionText'
 import { subagentId } from '../../shared/sessions'
 import { describeToolInput } from '../permissions'
 import { arr, commandIntent, describeTurnError, innerCommand, isRecord, num, str } from './codexProtocol'
@@ -75,6 +78,18 @@ const status = (v: unknown, completed: boolean): ChatItemStatus => {
   const s = STATUS[str(v, 40)]
   // History and `item/completed` never leave an item running.
   return s === undefined || (s === 'running' && completed) ? (completed ? 'done' : 'running') : s
+}
+
+type TurnEnd = 'completed' | 'interrupted' | 'failed'
+/** How many ended turns are remembered (for notifications that arrive after their turn's end). */
+const ENDED_TURNS_KEPT = 50
+
+/** `item` as it is left when its turn ends: nothing keeps spinning. Null = it was not open. */
+function closedAs(item: ChatItem, how: TurnEnd): ChatItem | null {
+  if ((item.kind === 'assistant' || item.kind === 'reasoning') && item.streaming) return { ...item, streaming: false }
+  if ('status' in item && item.status === 'running') return { ...item, status: how === 'completed' ? 'done' : how }
+  if (item.kind === 'approval' && item.outcome === 'pending') return { ...item, outcome: 'resolved-elsewhere' }
+  return null
 }
 
 /** The text of a `userMessage` item: its text parts, with a marker for anything else. */
@@ -147,6 +162,8 @@ export class CodexChat {
   private alias = new Map<string, string>()
   /** Commands over the output cap: when the renderer last got the tail. */
   private refreshedAt = new Map<string, number>()
+  /** How the last turns ended (newest last). */
+  private ended = new Map<string, TurnEnd>()
   private readonly limits: ChatLimits
 
   constructor(
@@ -191,7 +208,10 @@ export class CodexChat {
     return [this.put(item)]
   }
 
-  approvalRequested(a: { requestId: string; subjectId?: string; summary: string; detail: string; turnId?: string }, ctx: ChatContext): ChatEvent[] {
+  approvalRequested(
+    a: { requestId: string; subjectId?: string; summary: string; detail: string; question?: string; risk?: PermissionRisk; riskNote?: string; turnId?: string },
+    ctx: ChatContext
+  ): ChatEvent[] {
     const item: ChatItem = {
       id: `approval:${a.requestId}`,
       sessionId: this.sessionId,
@@ -202,6 +222,11 @@ export class CodexChat {
       summary: a.summary,
       detail: a.detail,
       outcome: 'pending'
+    }
+    if (item.kind === 'approval') {
+      if (a.question) item.question = a.question
+      if (a.risk) item.risk = a.risk
+      if (a.riskNote) item.riskNote = a.riskNote
     }
     if (a.turnId) item.turnId = a.turnId
     if (a.subjectId && this.items.has(a.subjectId)) item.subjectId = a.subjectId
@@ -233,16 +258,20 @@ export class CodexChat {
    * when a turn was interrupted, so the driver calls this for every `turn/completed`.
    * Without a turn id (the server died) everything open is closed.
    */
-  closeOpen(turnId: string | null, how: 'completed' | 'interrupted' | 'failed'): ChatEvent[] {
-    const closed: ChatItemStatus = how === 'completed' ? 'done' : how
+  closeOpen(turnId: string | null, how: TurnEnd): ChatEvent[] {
     const events: ChatEvent[] = []
-    for (const item of this.items.values()) {
+    for (const item of [...this.items.values()]) {
       if (turnId !== null && item.turnId !== turnId) continue
-      if ((item.kind === 'assistant' || item.kind === 'reasoning') && item.streaming) events.push(this.put({ ...item, streaming: false }))
-      else if ('status' in item && item.status === 'running') events.push(this.put({ ...item, status: closed }))
-      else if (item.kind === 'approval' && item.outcome === 'pending') events.push(this.put({ ...item, outcome: 'resolved-elsewhere' }))
+      const closed = closedAs(item, how)
+      if (closed) events.push(this.put(closed))
     }
     return events
+  }
+
+  /** `item`, closed if its turn has already ended (a notification that arrived after `turn/completed`). */
+  private settled(item: ChatItem): ChatItem {
+    const how = item.turnId ? this.ended.get(item.turnId) : undefined
+    return (how && closedAs(item, how)) || item
   }
 
   /** Rebuilds the list from `thread/turns/list` (oldest turn first, `itemsView: "full"`). Returns the reset. */
@@ -285,7 +314,7 @@ export class CodexChat {
         const item = this.convert(params.item, completed, { agentId: ctx.agentId, now: at }, turnId)
         if (!item) return []
         if (completed) this.refreshedAt.delete(item.id)
-        return [this.put(item)]
+        return [this.put(this.settled(item))]
       }
 
       case 'item/agentMessage/delta': {
@@ -294,7 +323,7 @@ export class CodexChat {
         const item = this.items.get(itemId)
         if (!item) {
           // The start was missed: open the message with what we have.
-          return [this.put(this.base(itemId, ctx, turnId, { kind: 'assistant', text: delta, streaming: true }))]
+          return [this.put(this.settled(this.base(itemId, ctx, turnId, { kind: 'assistant', text: delta, streaming: true })))]
         }
         if (item.kind !== 'assistant') return []
         this.items.set(itemId, { ...item, text: tail(item.text + delta, MAX_TEXT_CHARS) })
@@ -334,7 +363,7 @@ export class CodexChat {
         summary[index] = tail(summary[index] + delta, MAX_TEXT_CHARS)
         const next = { ...item, summary }
         // A new part (or a missed start) goes out as the whole item, so a delta never names a part the renderer lacks.
-        if (!prev || !known) return [this.put(next)]
+        if (!prev || !known) return [this.put(prev ? next : this.settled(next))]
         this.items.set(itemId, next)
         return delta ? [{ type: 'delta', sessionId: this.sessionId, itemId, field: 'summary', index, delta }] : []
       }
@@ -392,6 +421,9 @@ export class CodexChat {
         if (!id) return []
         const how = turn.status === 'interrupted' || turn.status === 'failed' ? turn.status : 'completed'
         const events = this.closeOpen(id, how)
+        this.ended.delete(id)
+        this.ended.set(id, how)
+        if (this.ended.size > ENDED_TURNS_KEPT) this.ended.delete(this.ended.keys().next().value as string)
         const event: ChatEvent = { type: 'turn', sessionId: this.sessionId, turnId: id, status: how }
         // A retry notice of this turn has done its job.
         const retry = this.items.get(`retry:${id}`)

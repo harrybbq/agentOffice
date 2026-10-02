@@ -83,6 +83,12 @@ export const IconStop = (p: P) => (
     <rect x="4" y="4" width="8" height="8" rx="1.5" />
   </Svg>
 )
+export const IconPower = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 2.5v5" />
+    <path d="M4.6 4.6a4.8 4.8 0 1 0 6.8 0" />
+  </Svg>
+)
 export const IconInterrupt = (p: P) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="5.5" />

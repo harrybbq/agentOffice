@@ -184,6 +184,21 @@ export function setApprovalOutcome<T extends ChatState>(state: T, requestId: str
   return items ? { ...state, items } : state
 }
 
+/**
+ * Is this command / file change held back by a permission request that is still pending? (It has
+ * not started yet, whatever its `running` status says: the provider announces it before it asks.)
+ */
+export function awaitsApproval(state: ChatState, id: string): boolean {
+  const item = state.items[id]
+  if (!item || (item.kind !== 'command' && item.kind !== 'file-change') || item.status !== 'running') return false
+  // The request follows its subject closely: look at the newest items only.
+  for (let i = state.order.length - 1; i >= 0 && i >= state.order.length - 60; i--) {
+    const x = state.items[state.order[i]]
+    if (x && x.kind === 'approval' && x.subjectId === id && x.outcome === 'pending') return true
+  }
+  return false
+}
+
 /** Does `item` open a new group in the list (a separator goes above it)? */
 export function startsTurn(prev: ChatItem | undefined, item: ChatItem | undefined): boolean {
   if (!prev || !item) return false

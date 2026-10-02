@@ -1,5 +1,6 @@
 // Pure helpers for the shell (no DOM, no React): formatting, order targets, list shaping.
 // Covered by tests/ui.test.ts.
+import type { PermissionRisk } from '../../shared/permissionText'
 import type { AgentEvent, Activity } from '../../shared/events'
 import type { OrderResult } from '../../shared/orders'
 import { PROVIDER_TARGET_PREFIX } from '../../shared/orders'
@@ -256,6 +257,47 @@ export function vanished(
   return prev.filter((p) => !still.has(p.id) && !decidedHere.has(p.id))
 }
 
+/** The line a permission card leads with: the plain question, or the raw summary of an older main process. */
+export function permissionHeadline(p: { question?: string; summary: string }): string {
+  return p.question?.trim() || p.summary
+}
+
+/** A question's text split at its backticks: the quoted command or file is shown as code. */
+export function questionParts(text: string): { text: string; code: boolean }[] {
+  const parts = text.split('`')
+  // An odd number of backticks: the last one is just a character of the text before it.
+  if (parts.length % 2 === 0) {
+    const tail = parts.pop() ?? ''
+    parts[parts.length - 1] += `\`${tail}`
+  }
+  return parts.map((t, i) => ({ text: t, code: i % 2 === 1 })).filter((p) => p.text.length > 0)
+}
+
+export interface RiskBadge {
+  tone: 'caution' | 'danger'
+  text: string
+}
+
+/** The badge next to a request that is not routine; null for a normal one. */
+export function riskBadge(risk: PermissionRisk | undefined, riskNote?: string): RiskBadge | null {
+  const note = riskNote?.trim()
+  if (risk === 'danger') return { tone: 'danger', text: note || 'Dangerous' }
+  if (risk === 'caution') return { tone: 'caution', text: note ? `Careful: ${note}` : 'Careful' }
+  return null
+}
+
+/** A dangerous request is allowed by key only with a second press within this long. */
+export const DANGER_CONFIRM_MS = 3000
+
+/**
+ * Does pressing A allow this request now? Always for normal and caution requests; for a dangerous
+ * one only when A was pressed for the same request a moment ago (`armedAt`).
+ */
+export function allowsByKey(risk: PermissionRisk | undefined, armedAt: number | null, now: number): boolean {
+  if (risk !== 'danger') return true
+  return armedAt !== null && now - armedAt >= 0 && now - armedAt <= DANGER_CONFIRM_MS
+}
+
 /** "Bash: npm test" -> "npm test" when the tool name is already shown as a chip. */
 export function stripToolPrefix(summary: string, toolName: string): string {
   const prefix = `${toolName}:`
@@ -359,7 +401,10 @@ export function usageInfo(usage: ProviderInfo['usage'], now = Date.now()): Usage
     const d = new Date(usage.resetsAt)
     const day = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
     const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-    title += usage.resetsAt > now ? `\nResets ${day}, ${time} (in ${ago(usage.resetsAt - now)})` : `\nResets ${day}, ${time}`
+    const left = usage.resetsAt - now
+    // A 30-day window reads better in days than as "719h 3m".
+    const soon = left >= 2 * 86_400_000 ? `${Math.round(left / 86_400_000)} days` : ago(left)
+    title += left > 0 ? `\nResets ${day}, ${time} (in ${soon})` : `\nResets ${day}, ${time}`
   }
   return { percent, label: `${percent}%`, tone: percent >= 95 ? 'danger' : percent >= 80 ? 'warn' : 'ok', title }
 }
@@ -378,6 +423,28 @@ export function modeHints(provider: ProviderId | null): Record<PermissionMode, s
     acceptEdits: 'File edits run without asking',
     plan: 'Plans first, changes nothing'
   }
+}
+
+/** Providers whose earlier conversations the new-session dialog can list ("Resume previous…"). */
+export function canResume(provider: ProviderId | null): boolean {
+  return provider === 'codex'
+}
+
+/** "just now", "12 min ago", "3 h ago", "yesterday", "5 days ago", then the date ("12 Sep", with the year if it differs). */
+export function whenAgo(ts: number, now = Date.now()): string {
+  const ms = now - ts
+  if (!Number.isFinite(ms)) return ''
+  const min = Math.floor(ms / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min} min ago`
+  const h = Math.floor(min / 60)
+  if (h < 24) return `${h} h ago`
+  const days = Math.floor(h / 24)
+  if (days === 1) return 'yesterday'
+  if (days < 7) return `${days} days ago`
+  const d = new Date(ts)
+  const sameYear = d.getFullYear() === new Date(now).getFullYear()
+  return d.toLocaleDateString(undefined, sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 export function modelPlaceholder(provider: ProviderId | null): string {

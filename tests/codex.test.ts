@@ -13,6 +13,7 @@ import type { AgentEvent } from '../shared/events.ts'
 import { REASON_DISABLED } from '../shared/orders.ts'
 import { subagentId, type PermissionRequestInfo, type ProviderInfo, type SessionInfo } from '../shared/sessions.ts'
 import { ClaudeHookMapper } from '../electron/adapters/claude-code-hooks.ts'
+import { plainPermission } from '../shared/permissionText.ts'
 import { officeBriefing } from '../electron/drivers/briefing.ts'
 import { codexProvider } from '../electron/drivers/codex.ts'
 import { approvalResult, describeServerRequest } from '../electron/drivers/codexApproval.ts'
@@ -27,6 +28,7 @@ import {
   parseWireLine,
   policyFor,
   sandboxMismatch,
+  threadHistory,
   threadIdOf,
   usageInfo
 } from '../electron/drivers/codexProtocol.ts'
@@ -530,6 +532,41 @@ await t('chat: prompts the app sent keep their origin and id; a steer adds a use
   assert.deepEqual(h.view, h.chat.list())
 })
 
+await t('chat: what arrives after a turn ended never reopens it', () => {
+  const h = chatHarness()
+  const TURN = '01a0fcf8-1f33'
+  h.feed(turnStarted(TURN), started(cmdItem('exec-c188', 'node slow.js', { processId: null, source: 'agent' }), TURN), turnCompleted(TURN, 'interrupted'))
+  assert.deepEqual(h.view.map((i) => [i.kind, i.kind === 'command' ? i.status : '']), [['command', 'interrupted'], ['notice', '']])
+  // As recorded with codex-cli 0.160.0: the process start of the interrupted command, 2 s later,
+  // with the output so far. The output is kept; the card stays closed, in its place in the list.
+  h.feed(started(cmdItem('exec-c188', 'node slow.js', { aggregatedOutput: 'line 1\nline 2\n' }), TURN))
+  const cut = h.view[0]
+  assert.ok(cut.kind === 'command' && cut.status === 'interrupted' && cut.output === 'line 1\nline 2\n' && cut.exitCode === null, JSON.stringify(cut))
+  h.feed(['item/commandExecution/outputDelta', { threadId: T, turnId: TURN, itemId: 'exec-c188', delta: 'line 3\n' }])
+  assert.ok(h.view[0].kind === 'command' && h.view[0].status === 'interrupted' && h.view[0].output.endsWith('line 3\n'))
+  // New items of the ended turn (a message, a reasoning part, a file change) come in closed too.
+  h.feed(
+    started(msgItem('msg_late', '', 'final_answer'), TURN),
+    ['item/agentMessage/delta', { threadId: T, turnId: TURN, itemId: 'msg_late2', delta: 'late ' }],
+    ['item/reasoning/summaryTextDelta', { threadId: T, turnId: TURN, itemId: 'rs_late', summaryIndex: 0, delta: 'thinking' }],
+    started({ type: 'fileChange', id: 'fc_late', changes: [], status: 'inProgress' }, TURN)
+  )
+  const byId = (id: string) => h.view.find((i) => i.id === id)
+  assert.ok(byId('msg_late')?.kind === 'assistant' && !(byId('msg_late') as { streaming: boolean }).streaming)
+  assert.ok(byId('msg_late2')?.kind === 'assistant' && !(byId('msg_late2') as { streaming: boolean }).streaming)
+  assert.ok(byId('rs_late')?.kind === 'reasoning' && !(byId('rs_late') as { streaming: boolean }).streaming)
+  assert.ok(byId('fc_late')?.kind === 'file-change' && (byId('fc_late') as { status: string }).status === 'interrupted')
+  // A real `item/completed` still says what happened; a completed or failed turn closes accordingly.
+  h.feed(completed(cmdItem('exec-c188', 'node slow.js', { status: 'failed', exitCode: -1, aggregatedOutput: 'line 1\n' }), TURN))
+  assert.ok(h.view[0].kind === 'command' && h.view[0].status === 'failed')
+  h.feed(turnStarted('t-ok'), turnCompleted('t-ok'), started(cmdItem('exec-ok', 'echo 1'), 't-ok'), turnStarted('t-bad'), turnCompleted('t-bad', 'failed', { message: 'boom' }), started(cmdItem('exec-bad', 'echo 2'), 't-bad'))
+  assert.deepEqual([byId('exec-ok'), byId('exec-bad')].map((i) => i?.kind === 'command' && i.status), ['done', 'failed'])
+  // The next turn is not affected.
+  h.feed(turnStarted('t-next'), started(cmdItem('exec-next', 'echo 3'), 't-next'))
+  assert.ok(byId('exec-next')?.kind === 'command' && (byId('exec-next') as { status: string }).status === 'running')
+  assert.deepEqual(h.view, h.chat.list())
+})
+
 await t('chat: history rebuilt from thread/turns/list', () => {
   const h = chatHarness()
   h.take(h.chat.notice('info', 'stale', h.ctx()))
@@ -651,15 +688,43 @@ await t('approval cards: summary and detail from the request (and the file-chang
     )
   )
   const fc = describeServerRequest('item/fileChange/requestApproval', { threadId: T, turnId: 'turn', itemId: 'exec-dfff31bd', startedAtMs: 1, reason: null, grantRoot: null }, h.chat.get('exec-dfff31bd'))
-  assert.equal(fc.kind === 'card' && fc.card.toolName, 'File change')
-  assert.equal(fc.kind === 'card' && fc.card.summary, `Edit: ${W}\\ao-note.txt (+2 more)`)
+  // Named by what happens to the first file; the chip (toolName) and the summary say the same word.
+  assert.equal(fc.kind === 'card' && fc.card.toolName, 'Create')
+  assert.equal(fc.kind === 'card' && fc.card.summary, `Create: ${W}\\ao-note.txt (+2 more)`)
+  // With the session's folder, paths under it are shown relative to it (the detail keeps the full path).
+  const rel = describeServerRequest('item/fileChange/requestApproval', { threadId: T, turnId: 'turn', itemId: 'exec-dfff31bd' }, h.chat.get('exec-dfff31bd'), W)
+  assert.ok(rel.kind === 'card' && rel.card.summary === 'Create: ao-note.txt (+2 more)' && rel.card.detail.includes(`add ${W}\\ao-note.txt`), JSON.stringify(rel))
+  const verbs = (change: 'add' | 'delete' | 'update') => {
+    const r = describeServerRequest('item/fileChange/requestApproval', { itemId: 'x' }, { id: 'x', sessionId: 'S', agentId: 'S', ts: 1, kind: 'file-change', status: 'running', changes: [{ path: `${W}\\src\\a.ts`, change, diff: '' }] }, W)
+    return r.kind === 'card' ? [r.card.toolName, r.card.summary] : []
+  }
+  assert.deepEqual([verbs('add'), verbs('update'), verbs('delete')], [['Create', 'Create: src\\a.ts'], ['Edit', 'Edit: src\\a.ts'], ['Delete', 'Delete: src\\a.ts']])
   assert.ok(fc.kind === 'card' && fc.card.detail.includes(`add ${W}\\ao-note.txt\n@@ -0,0 +1,2 @@\n+agent office\n+codex spike`))
   assert.ok(fc.kind === 'card' && fc.card.detail.includes(`delete ${W}\\b.txt\n@@ -1,1 +0,0 @@\n-old`))
   const blind = describeServerRequest('item/fileChange/requestApproval', { threadId: T, itemId: 'nope' })
   assert.equal(blind.kind === 'card' && blind.card.summary, 'Edit: files')
 
+  // What each kind hands to the plain-sentence module (shared/permissionText.ts).
+  const plainOf = (r: ReturnType<typeof describeServerRequest>, who = 'gpt-6-luna') => (r.kind === 'card' ? plainPermission({ who, cwd: W, ...r.card.plain }) : null)
+  assert.deepEqual(cmd.kind === 'card' && cmd.card.plain, { tool: 'Command', input: { command: `node -e "require('fs').writeFileSync('ao-escalate.txt','ok')"` } })
+  assert.deepEqual(rel.kind === 'card' && rel.card.plain, { tool: 'Create', input: { path: `${W}\\ao-note.txt`, more: 2 } })
+  assert.deepEqual(plainOf(rel), { question: 'gpt-6-luna wants to create the file ao-note.txt.', risk: 'normal' })
+  const gone = describeServerRequest('item/fileChange/requestApproval', { itemId: 'x' }, { id: 'x', sessionId: 'S', agentId: 'S', ts: 1, kind: 'file-change', status: 'running', changes: [{ path: 'D:\\other\\.env', change: 'delete', diff: '' }] }, W)
+  assert.deepEqual(plainOf(gone, "Sub-agent (gpt-6-luna's team)"), { question: "Sub-agent (gpt-6-luna's team) wants to delete the file .env (D:/other/.env).", risk: 'danger', riskNote: 'Changes a secrets file' })
+  assert.deepEqual(plainOf(describeServerRequest('item/commandExecution/requestApproval', { ...request, command: 'rm -rf dist', commandActions: [{ type: 'unknown', command: 'rm -rf dist' }] })), {
+    question: 'gpt-6-luna wants to delete files or folders permanently (`rm -rf dist`).',
+    risk: 'danger',
+    riskNote: 'Deletes files'
+  })
+
   const perms = describeServerRequest('item/permissions/requestApproval', { threadId: T, itemId: 'i', cwd: W, reason: 'needs the network', permissions: { network: { enabled: true }, fileSystem: null } })
   assert.ok(perms.kind === 'card' && /^Permissions: network access/.test(perms.card.summary) && /needs the network/.test(perms.card.detail))
+
+  assert.deepEqual(perms.kind === 'card' && perms.card.plain, { tool: 'Permissions', input: { wants: ['network access'] } })
+  assert.deepEqual(plainOf(perms), { question: 'gpt-6-luna wants to get more access: network access.', risk: 'caution', riskNote: 'Leaves the sandbox' })
+  const yesNo = describeServerRequest('mcpServer/elicitation/request', { threadId: T, turnId: null, serverName: 'node_repl', mode: 'form', message: 'Allow node_repl to run js?', requestedSchema: { type: 'object', properties: {} } })
+  assert.deepEqual(yesNo.kind === 'card' && yesNo.card.plain, { tool: 'mcp', input: { server: 'node_repl', tool: '' } })
+  assert.deepEqual(plainOf(yesNo), { question: 'gpt-6-luna wants to use a tool from node_repl.', risk: 'normal' })
 
   // A plugin asking yes/no fits a card; a form or a link does not, and is declined with a notice.
   const mcp = describeServerRequest('mcpServer/elicitation/request', { threadId: T, turnId: null, serverName: 'node_repl', mode: 'form', message: 'Allow node_repl to run js?', requestedSchema: { type: 'object', properties: {} } })
@@ -702,6 +767,10 @@ await t('world: Codex items -> activities', () => {
   assert.equal(act({ type: 'commandExecution', command: 'p', commandActions: [{ type: 'read', command: 'cat a', path: 'a' }, { type: 'unknown', command: 'node x' }] }), 'exec|cat a | node x')
   assert.equal(act({ type: 'fileChange', changes: [{ path: 'a.ts' }, { path: 'b.ts' }, { path: 'c.ts' }] }), 'write|a.ts (+2 more)')
   assert.equal(act({ type: 'fileChange', changes: [{ path: 'a.ts' }] }), 'write|a.ts')
+  // A changed file is named as seen from the session's folder.
+  const inW = worldActivityForItem({ type: 'fileChange', changes: [{ path: `${W}\\src\\a.ts` }, { path: `${W}\\b.ts` }] }, W)
+  assert.deepEqual(inW, { activity: 'write', detail: 'src\\a.ts (+1 more)' })
+  assert.equal(worldActivityForItem({ type: 'fileChange', changes: [{ path: 'D:\\elsewhere\\a.ts' }] }, W)?.detail, 'D:\\elsewhere\\a.ts')
   assert.equal(act({ type: 'webSearch', query: '', action: null }), 'web|')
   assert.equal(act({ type: 'webSearch', query: 'electron', action: { type: 'search', query: 'electron' } }), 'web|electron')
   assert.equal(act({ type: 'webSearch', query: '', action: { type: 'openPage', url: 'https://example.com' } }), 'web|https://example.com')
@@ -1091,11 +1160,15 @@ await t('codex session end to end: start, chat, approval allow/deny, order as st
   assert.equal(perm.summary, `Command: node -e "console.log('ao-fake')"`)
   assert.equal(perm.detail, `node -e "console.log('ao-fake')"\n\ncwd: C:\\ws`)
   assert.equal(s.session(id)?.state, 'waiting-permission')
-  assert.deepEqual([s.world[s.world.length - 1].activity, s.world[s.world.length - 1].detail], ['waiting', perm.summary])
+  // One plain sentence leads the card; the world label is its action (the name is next to it).
+  assert.equal(perm.question, `gpt-6-luna wants to run a short script (\`node -e "console.log('ao-fake')"\`).`)
+  assert.deepEqual([perm.risk, perm.riskNote], ['normal', undefined])
+  assert.deepEqual([s.world[s.world.length - 1].activity, s.world[s.world.length - 1].detail], ['waiting', `run a short script (\`node -e "console.log('ao-fake')"\`)`])
   items = s.manager.chatAttach(id)
   const card = items.find((i) => i.kind === 'approval')
   const subject = items.find((i) => i.kind === 'command')
   assert.ok(card?.kind === 'approval' && card.requestId === perm.id && card.outcome === 'pending' && card.subjectId === subject?.id)
+  assert.ok(card?.kind === 'approval' && card.question === perm.question && card.risk === 'normal' && card.riskNote === undefined)
   assert.ok(subject?.kind === 'command' && subject.status === 'running')
   assert.equal(s.manager.decide(perm.id, { behavior: 'allow' }), 'allowed')
   assert.deepEqual(s.permissions(), [])
@@ -1179,9 +1252,17 @@ await t('codex session end to end: start, chat, approval allow/deny, order as st
   s.chat.length = 0
   s.manager.interrupt(id)
   await s.waitState(id, 'idle')
-  items = s.manager.chatAttach(id)
-  const cut = items.filter((i) => i.kind === 'command').pop()
-  assert.ok(cut?.kind === 'command' && cut.status === 'interrupted')
+  // The server announces the command's process start after the turn has ended (seen with the real
+  // one): the output it carries is kept, but the card stays closed and the manager stays idle.
+  const lastCommand = () => s.manager.chatAttach(id).filter((i) => i.kind === 'command').pop()
+  await until(() => {
+    const c = lastCommand()
+    return c?.kind === 'command' && c.output === 'late output\n'
+  }, 'the late item/started of the interrupted command')
+  const cut = lastCommand()
+  assert.ok(cut?.kind === 'command' && cut.status === 'interrupted', JSON.stringify(cut))
+  const late = s.chat.filter((e) => e.type === 'item' && e.item.id === cut.id).pop()
+  assert.ok(late?.type === 'item' && late.item.kind === 'command' && late.item.status === 'interrupted' && late.item.output === 'late output\n')
   assert.ok(s.chat.some((e) => e.type === 'turn' && e.status === 'interrupted'))
   assert.equal(s.world[s.world.length - 1].activity, 'idle')
   // Interrupting an approval that is pending clears its card as resolved-elsewhere.
@@ -1303,6 +1384,96 @@ await t('codex: an app-server crash marks the session, clears its cards, and the
   await until(() => s.manager.chatAttach(id).filter((i) => i.kind === 'assistant' && i.text === 'ok').length === 1, 'a turn after the reconnect')
   await s.manager.shutdown()
   rmSync(dir, { recursive: true, force: true })
+})
+
+await t('thread history: only this app\'s threads, newest activity first, times in ms, one-line previews', () => {
+  const thread = (over: Record<string, unknown>) => ({
+    id: '01a0fcb0-7a8c-74c3-996a-dd3ded22601e', parentThreadId: null, preview: 'Reply with the single word: ok', ephemeral: false, model: 'gpt-6-luna',
+    createdAt: 1790945819, updatedAt: 1790945819, recencyAt: 1790945866, status: { type: 'notLoaded' },
+    path: 'C:\\Users\\Harry\\.codex\\sessions\\rollout.jsonl', cwd: 'C:\\ws', originator: 'agent_office', source: 'vscode', turns: [],
+    ...over
+  })
+  const list = threadHistory(
+    {
+      data: [
+        thread({ id: 'a-old', recencyAt: 1790940000 }),
+        thread({}),
+        thread({ id: 'cli', originator: 'codex_cli_rs' }),
+        thread({ id: 'spike', originator: 'agent_office_spike' }),
+        thread({ id: 'eph', ephemeral: true }),
+        thread({ id: 'child', parentThreadId: 'a-old' }),
+        thread({ id: 'child2', source: { subagent: { thread_spawn: { parent_thread_id: 'a-old' } } } }),
+        thread({ id: '-rf', preview: 'an id that could be read as a flag' }),
+        thread({ id: 'x'.repeat(120) }),
+        thread({ id: 'b-multiline', recencyAt: 1790945900, model: null, preview: `Run the command:\n  node -e "1"\t\u0007now ${'y'.repeat(400)}` }),
+        thread({ id: 'c-no-recency', recencyAt: null, updatedAt: 1790945000, preview: null }),
+        null,
+        'garbage'
+      ],
+      nextCursor: null
+    },
+    { originator: 'agent_office' }
+  )
+  assert.deepEqual(list.map((h) => h.id), ['b-multiline', '01a0fcb0-7a8c-74c3-996a-dd3ded22601e', 'c-no-recency', 'a-old'])
+  // Unix seconds on the wire; `recencyAt` moves with the last turn, `updatedAt` is the fallback.
+  assert.deepEqual(list.map((h) => h.updatedAt), [1790945900000, 1790945866000, 1790945000000, 1790940000000])
+  assert.deepEqual(list[1], { id: '01a0fcb0-7a8c-74c3-996a-dd3ded22601e', preview: 'Reply with the single word: ok', updatedAt: 1790945866000, model: 'gpt-6-luna' })
+  assert.ok(list[0].preview.startsWith('Run the command: node -e "1" now yyy') && list[0].preview.endsWith('…') && list[0].preview.length === 200, list[0].preview)
+  assert.ok(!('model' in list[0]))
+  assert.equal(list[2].preview, '')
+  // Nothing but the four fields leaves the main process (no rollout path, no cwd).
+  for (const h of list) assert.deepEqual(Object.keys(h).filter((k) => !['id', 'preview', 'updatedAt', 'model'].includes(k)), [])
+  assert.deepEqual(threadHistory({ data: [thread({ id: 'a' }), thread({ id: 'b', recencyAt: 1 }), thread({ id: 'c', recencyAt: 2 })] }, { originator: 'agent_office', limit: 2 }).map((h) => h.id), ['a', 'c'])
+  for (const bad of [null, undefined, 'x', 7, [], {}, { data: 'x' }, { data: {} }]) assert.deepEqual(threadHistory(bad, { originator: 'agent_office' }), [])
+})
+
+await t('codex: history lists the folder\'s earlier conversations for "Resume previous…"; the request is validated', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-office-codex-'))
+  const other = mkdtempSync(join(tmpdir(), 'agent-office-codex-'))
+  const s = stack({ FAKE_CODEX_OLD_CWD: other })
+  // Untrusted input: the provider is one of ours and the folder an existing absolute directory.
+  await assert.rejects(s.manager.history('bash', dir), /unknown provider/)
+  await assert.rejects(s.manager.history(null, dir), /unknown provider/)
+  await assert.rejects(s.manager.history('codex', 'relative\\path'), /absolute path/)
+  await assert.rejects(s.manager.history('codex', join(dir, 'missing')), /does not exist/)
+  await assert.rejects(s.manager.history('codex', ''), /invalid folder/)
+  await assert.rejects(s.manager.history('codex', { path: dir }), /invalid folder/)
+  await assert.rejects(s.manager.history('codex', `${dir}\0x`), /invalid folder/)
+  // A provider without a history (or without a driver) has nothing to offer.
+  assert.deepEqual(await s.manager.history('claude-code', dir), [])
+  assert.deepEqual(await s.manager.history('antigravity', dir), [])
+  // Nothing yet in this folder; the other client's thread there is not ours to resume.
+  assert.deepEqual(await s.manager.history('codex', dir), [])
+  const asked = (await s.received()).filter((m) => m.method === 'thread/list')
+  assert.deepEqual(asked.map((m) => [m.params?.cwd, typeof m.params?.limit]), [[dir, 'number']])
+
+  // A thread is listed once it had a turn, but not while a live session has it open.
+  const info = await s.manager.start({ provider: 'codex', cwd: dir })
+  await s.manager.chatSend(info.id, 'hello there')
+  await s.waitState(info.id, 'idle')
+  assert.deepEqual(await s.manager.history('codex', dir), [])
+  await s.manager.stop(info.id)
+  await s.waitState(info.id, 'exited')
+  const list = await s.manager.history('codex', dir)
+  assert.deepEqual(list.map((h) => [h.id, h.preview, h.model]), [[info.providerSessionId, 'hello there', 'gpt-6-luna']])
+  assert.ok(Math.abs(list[0].updatedAt - Date.now()) < 60_000, String(list[0].updatedAt))
+
+  // The entry's id is what `resume` takes: the conversation comes back, and leaves the list again.
+  assert.deepEqual((await s.manager.history('codex', other)).map((h) => h.id), ['thr-old'])
+  const resumed = await s.manager.start({ provider: 'codex', cwd: other, resume: 'thr-old' })
+  assert.equal(resumed.providerSessionId, 'thr-old')
+  assert.ok(s.manager.chatAttach(resumed.id).some((i) => i.kind === 'user' && i.text === 'Create the note'))
+  assert.deepEqual(await s.manager.history('codex', other), [])
+  await s.manager.shutdown()
+  await assert.rejects(s.manager.history('codex', dir), /shutting down/)
+
+  // Logged out: an empty list, not an error (the dialog shows the login prompt instead).
+  const out = stack({ FAKE_CODEX_LOGGED_OUT: '1' })
+  assert.deepEqual(await out.manager.history('codex', dir), [])
+  assert.ok(!(await out.received()).some((m) => m.method === 'thread/list'))
+  await out.manager.shutdown()
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(other, { recursive: true, force: true })
 })
 
 console.log(`\n${pass} codex tests passed`)

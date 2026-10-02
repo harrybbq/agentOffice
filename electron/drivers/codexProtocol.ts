@@ -4,7 +4,7 @@
 // everything here is parsed leniently: unknown fields are ignored and missing ones tolerated.
 //
 // Pure: no Electron, no process handling. Tested in tests/codex.test.ts.
-import type { PermissionMode, ProviderInfo } from '../../shared/sessions'
+import type { PermissionMode, ProviderInfo, SessionHistoryEntry } from '../../shared/sessions'
 
 export type JsonRpcId = number | string
 
@@ -63,6 +63,44 @@ export function parentThreadIdOf(thread: unknown): string | null {
 }
 
 export const textInput = (text: string): unknown[] => [{ type: 'text', text, text_elements: [] }]
+
+// ---- thread history ---------------------------------------------------------------------------------
+
+export const HISTORY_PREVIEW_CHARS = 200
+
+/**
+ * A `thread/list` result as the "Resume previous…" list: the threads this app started (`originator`
+ * is the client name of the `initialize` that created them; the server can't filter on it), newest
+ * activity first. Sub-agent threads and ephemeral ones are left out. Times on the wire are Unix
+ * seconds, and `updatedAt` does not move with later turns: `recencyAt` does.
+ * The rollout path and everything else in the entry stay in the main process.
+ */
+export function threadHistory(result: unknown, opts: { originator: string; limit?: number }): SessionHistoryEntry[] {
+  const out: SessionHistoryEntry[] = []
+  for (const t of arr(isRecord(result) ? result.data : null)) {
+    if (!isRecord(t)) continue
+    const id = str(t.id, 200)
+    // The same shape the session manager accepts for `resume`.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(id)) continue
+    if (t.originator !== opts.originator || t.ephemeral === true || parentThreadIdOf(t)) continue
+    const seconds = num(t.recencyAt) ?? num(t.updatedAt) ?? num(t.createdAt) ?? 0
+    const preview = str(t.preview, 4000)
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    const entry: SessionHistoryEntry = {
+      id,
+      preview: preview.length > HISTORY_PREVIEW_CHARS ? `${preview.slice(0, HISTORY_PREVIEW_CHARS - 1)}…` : preview,
+      updatedAt: Math.round(seconds * 1000)
+    }
+    const model = str(t.model, 100)
+    if (model) entry.model = model
+    out.push(entry)
+  }
+  out.sort((a, b) => b.updatedAt - a.updatedAt)
+  return out.slice(0, opts.limit ?? 20)
+}
 
 // ---- permission mode -> approval policy + sandbox ---------------------------------------------------
 

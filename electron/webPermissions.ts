@@ -8,3 +8,14 @@ const ALLOWED: ReadonlySet<string> = new Set(['clipboard-sanitized-write', 'clip
 export function allowWebPermission(permission: string, ours: boolean): boolean {
   return ours && ALLOWED.has(permission)
 }
+
+/** Absolute http(s) URL without credentials: safe to hand to the system browser. */
+export function isExternalWebUrl(raw: unknown): raw is string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 2048) return false
+  try {
+    const u = new URL(raw)
+    return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password
+  } catch {
+    return false
+  }
+}

@@ -125,6 +125,20 @@ function where(file: string, cwd?: string): string {
 const worst = (a: PermissionRisk, b: PermissionRisk): PermissionRisk =>
   a === 'danger' || b === 'danger' ? 'danger' : a === 'caution' || b === 'caution' ? 'caution' : 'normal'
 
+/**
+ * The action of a question without who asks and without the full stop: "run the tests (`npm test`)".
+ * For places that already show the agent's name (the label over a character, a card's header).
+ */
+export function permissionAction(question: string): string {
+  const i = question.indexOf(' wants to ')
+  return (i >= 0 ? question.slice(i + ' wants to '.length) : question).replace(/\.$/, '')
+}
+
+/** Anything else than the three levels (an older main process, a hand-made request) counts as normal. */
+export function asPermissionRisk(v: unknown): PermissionRisk {
+  return v === 'caution' || v === 'danger' ? v : 'normal'
+}
+
 export function plainPermission(p: PermissionSubject): PlainPermission {
   const who = p.who.trim() || 'An agent'
   const input = obj(p.input)
@@ -186,6 +200,7 @@ export function plainPermission(p: PermissionSubject): PlainPermission {
     const name = (mcp ? mcp[2] : str(input.tool)).replace(/_/g, ' ')
     const screen = /screenshot|computer|click|type|key|mouse|browser|navigate/i.test(mcp ? mcp[2] : name)
     if (screen) return done(`control or look at your screen/browser (${name}, from ${server || 'a plugin'})`, 'caution', 'Controls your screen')
+    if (!name.trim()) return done(`use a tool from ${server || 'a plugin'}`)
     return done(`use the “${clip(name, 40)}” tool from ${server || 'a plugin'}`)
   }
 

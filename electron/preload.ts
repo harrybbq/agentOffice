@@ -20,6 +20,9 @@ const bridge: AgentOfficeBridge = {
   listThemes: () => ipcRenderer.invoke(IPC.listThemes),
   loadTheme: (name) => ipcRenderer.invoke(IPC.loadTheme, name),
   sendOrder: (req) => ipcRenderer.invoke(IPC.sendOrder, req),
+  setAllowOrders: (value) => ipcRenderer.invoke(IPC.setAllowOrders, value),
+  quit: () => ipcRenderer.invoke(IPC.quit),
+  openExternal: (url) => ipcRenderer.invoke(IPC.openExternal, url),
 
   sessions: {
     providers: () => ipcRenderer.invoke(IPC.listProviders),
@@ -30,6 +33,7 @@ const bridge: AgentOfficeBridge = {
     stop: (id) => ipcRenderer.invoke(IPC.stopSession, id),
     interrupt: (id) => ipcRenderer.invoke(IPC.interruptSession, id),
     pickFolder: () => ipcRenderer.invoke(IPC.pickFolder),
+    history: (provider, cwd) => ipcRenderer.invoke(IPC.sessionHistory, provider, cwd),
     onChanged: (cb) => subscribe<SessionInfo[]>(IPC.sessionsChanged, cb)
   },
 

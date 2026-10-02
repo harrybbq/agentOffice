@@ -18,6 +18,7 @@ import type {
   PermissionRequestInfo,
   ProviderId,
   ProviderInfo,
+  SessionHistoryEntry,
   SessionInfo,
   TerminalSnapshot
 } from '../shared/sessions'
@@ -163,6 +164,40 @@ export class SessionManager implements HostedSessions {
     return info
   }
 
+  /** An untrusted folder path -> the existing directory it names. Throws an Error with a message fit for the UI. */
+  private folder(input: unknown): string {
+    if (typeof input !== 'string' || input.length === 0 || input.length > 1024 || input.includes('\0')) throw new Error('invalid folder')
+    if (!isAbsolute(input)) throw new Error('the folder must be an absolute path')
+    const cwd = resolve(input)
+    let isDir = false
+    try {
+      isDir = statSync(cwd).isDirectory()
+    } catch {
+      isDir = false
+    }
+    if (!isDir) throw new Error('that folder does not exist')
+    return cwd
+  }
+
+  /**
+   * Earlier conversations of a provider in a folder, for the new-session dialog's "Resume previous…".
+   * A conversation that a live session of the app already has open is left out. Empty for a
+   * provider that keeps no history the app can list.
+   */
+  async history(provider: unknown, cwd: unknown): Promise<SessionHistoryEntry[]> {
+    if (this.closing) throw new Error('the app is shutting down')
+    if (typeof provider !== 'string' || !Object.hasOwn(PROVIDER_LABELS, provider)) throw new Error('unknown provider')
+    const folder = this.folder(cwd)
+    const def = this.providerTable.get(provider as ProviderId)
+    if (!def?.history) return []
+    const open = new Set<string>()
+    for (const s of this.sessions.values()) {
+      const id = s.driver.state === 'exited' ? undefined : (s.driver.providerSessionId ?? s.start.resume)
+      if (id) open.add(id)
+    }
+    return (await def.history(folder)).filter((h) => !open.has(h.id))
+  }
+
   /** Validates an untrusted start request. Throws an Error with a message fit for the UI. */
   private async validate(input: unknown): Promise<{ start: ValidatedStart; def: ProviderDefinition }> {
     if (!input || typeof input !== 'object') throw new Error('invalid request')
@@ -171,16 +206,7 @@ export class SessionManager implements HostedSessions {
     if (typeof o.provider !== 'string' || !Object.hasOwn(PROVIDER_LABELS, o.provider)) throw new Error('unknown provider')
     if (!def?.createDriver) throw new Error(`${PROVIDER_LABELS[o.provider as ProviderId]}: ${COMING[o.provider as ProviderId] ?? 'no driver'}`)
 
-    if (typeof o.cwd !== 'string' || o.cwd.length === 0 || o.cwd.length > 1024 || o.cwd.includes('\0')) throw new Error('invalid folder')
-    if (!isAbsolute(o.cwd)) throw new Error('the folder must be an absolute path')
-    const cwd = resolve(o.cwd)
-    let isDir = false
-    try {
-      isDir = statSync(cwd).isDirectory()
-    } catch {
-      isDir = false
-    }
-    if (!isDir) throw new Error('that folder does not exist')
+    const cwd = this.folder(o.cwd)
 
     let permissionMode: PermissionMode = 'default'
     if (o.permissionMode !== undefined) {

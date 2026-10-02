@@ -3,6 +3,8 @@
 // streams ChatEvents to the renderer; a late attach gets a `reset` (like TerminalSnapshot for terminals).
 // Nothing here names a provider's tool or method. Design notes: docs/spikes-phase-b.md.
 
+import type { PermissionRisk } from './permissionText'
+
 export type ChatItemStatus = 'running' | 'done' | 'failed' | 'declined' | 'interrupted'
 
 export interface ChatItemBase {
@@ -106,6 +108,10 @@ export type ChatItem = ChatItemBase &
         subjectId?: string
         summary: string
         detail: string
+        /** PermissionRequestInfo.question / risk / riskNote of the request (absent in items of an older main process). */
+        question?: string
+        risk?: PermissionRisk
+        riskNote?: string
         outcome: 'pending' | 'allowed' | 'denied' | 'resolved-elsewhere'
       }
     | {

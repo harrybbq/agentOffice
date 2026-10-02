@@ -52,17 +52,23 @@ The app is your main window onto the agents, not only a viewer:
   **Enter** (**Shift+Enter** adds a line, Esc leaves the field). The CEO says it in a speech
   bubble and a sealed order envelope flies to the manager(s). For more than one session a PA
   banner also runs across the top. The result shows above the bar ("Delivered to 2", or who
-  failed and why). Orders are **on by default**; turn them off with **Allow CEO orders** in the tray.
+  failed and why). Orders are **on by default**; turn them off (and on again) with **Orders: on/off**
+  in the status bar, or **Allow CEO orders** in the tray.
 - **Panel (right, or under the world in a narrow window).** Two tabs. **Terminal** is the
   selected session's real terminal, with **Interrupt** and **Stop** (asks first). **Events** is
   the live event log, filterable by activity and by the selected session. Drag the splitter to
   resize, double-click it to reset; the dock button moves the panel between right and bottom.
 - **CEO inbox.** Permission requests with **Allow** / **Deny** (Deny takes an optional reason
-  that the agent sees). With the list focused: arrows move, **A** allows, **D** denies, **E**
+  that the agent sees). Each card leads with one plain sentence ("Opus 5.5 wants to run the tests
+  (`npm test`)."), made from fixed templates in `shared/permissionText.ts`, never by a model. A
+  request to be careful with has an amber badge ("Careful: Installs software"), a dangerous one a
+  red badge ("Deletes files") and a slower Allow: click **Allow anyway**, or press **A** twice. The
+  raw tool name, command and input are under **Details**. With the list focused: arrows move, **A** allows, **D** denies, **E**
   shows the full request, Enter opens that session's terminal. Requests that only a terminal can
   answer are listed below, with a link to it.
-- **Status bar.** Connection, running sessions, pending requests, event count, light / dark
-  interface, panel toggle.
+- **Status bar.** Connection, running sessions, pending requests, event count, **Orders: on/off**
+  (the same switch as the tray's Allow CEO orders), light / dark interface, panel toggle, and **Quit**
+  (asks first; closing the window only hides the app to the tray, and quitting stops the hosted sessions).
 
 | Shortcut | Does |
 |---|---|
@@ -235,12 +241,20 @@ Codex sessions the same way (target: the session, `provider:codex`, or everyone)
 ordinary user message, without the `[CEO order via Agent Office]` line; the session's briefing
 (sent as the thread's developer instructions, template in `electron/drivers/briefing.ts`) says so.
 Delivery is confirmed by the server's answer, so there is no timeout. Interrupt ends the turn at
-once; the command that was running is shown as interrupted.
+once; the command that was running is shown as interrupted. Codex does not always kill that
+command: one that was only just being started (on Windows the sandbox takes a few seconds) can run
+on to its end, and its card then shows the output and the real exit code. Whatever Codex still
+reports about a turn that has ended never puts the session back to "working". Links in an answer
+open in your system browser.
 
 **Stop and resume.** Stopping a session unsubscribes from its thread; nothing is archived or
 deleted, so the thread stays in your Codex history (`codex resume`, the desktop app). A session
-started with a thread id to resume loads the thread's last turns into the chat. The history Codex
-keeps differs a little from what was live: declined commands and approval cards are not in it.
+started with a thread id to resume loads the thread's last turns into the chat. In the new-session
+dialog, **Resume previous…** lists the conversations this app started in the chosen folder (the
+exact folder; first prompt, model, how long ago), newest first; pick one and the session continues
+it. Threads of the Codex CLI or the desktop app are not listed, and neither is one that a live
+session already has open. The history Codex keeps differs a little from what was live: declined
+commands and approval cards are not in it.
 
 **What the world shows.** Commands are `exec` (or `read` when Codex recognises a read, listing or
 search), file changes `write`, web searches `web`, plugin and MCP tools `exec` (`capture` for
@@ -280,7 +294,10 @@ It holds `{ token, port, theme, alwaysOnTop, overlay, allowOrders, officeWideMin
 
 For testing, `AGENT_OFFICE_USER_DATA=<dir>` runs a second, isolated instance with its own config, and
 `AGENT_OFFICE_SHOW_INACTIVE=1` shows the window without taking focus. In dev builds,
-`__agentOfficeDev.officeWide(true|false)` in devtools toggles office-wide mode.
+`__agentOfficeDev.officeWide(true|false)` in devtools toggles office-wide mode. When the app is not
+packaged, `AGENT_OFFICE_CODEX_SPAWN=<script.cjs>` runs that script with `node` in place of
+`codex app-server` (`tests/fixtures/fake-codex-server.cjs` is one), to drive the real window
+without a model or quota.
 
 - The ingest server listens on **127.0.0.1 only** (default port 47821).
 - Every request must carry a token in the **`X-Agent-Office-Token` header**: the global one from the config file, or a hosted session's own (which only reaches `/hooks/claude-code`, see [Hosted sessions](#hosted-sessions)). A token is never accepted in the URL.

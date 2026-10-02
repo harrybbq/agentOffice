@@ -1,11 +1,11 @@
 // Start an agent CLI in a folder. The renderer only picks a provider id and a folder; the main
 // process resolves the executable.
 import { useEffect, useRef, useState } from 'react'
-import type { PermissionMode, ProviderId } from '../../../shared/sessions'
+import type { PermissionMode, ProviderId, SessionHistoryEntry } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
-import { cleanError, loginHint, modeHints, modelPlaceholder, shortenPath } from '../format'
+import { canResume, cleanError, loginHint, modeHints, modelPlaceholder, shortenPath, whenAgo } from '../format'
 import { cx } from '../hooks'
-import { IconAlert, IconClose, IconFolder } from '../icons'
+import { IconAlert, IconChevron, IconClose, IconFolder } from '../icons'
 import { LoginPrompt } from './ProviderAccount'
 
 /** What each mode means differs per provider: the help line comes from format.modeHints. */
@@ -14,6 +14,101 @@ const MODES: { id: PermissionMode; label: string }[] = [
   { id: 'acceptEdits', label: 'Accept edits' },
   { id: 'plan', label: 'Plan' }
 ]
+
+type History = { status: 'loading' } | { status: 'error'; text: string } | { status: 'ready'; items: SessionHistoryEntry[] }
+
+/**
+ * "Resume previous…": the provider's earlier conversations in the chosen folder. Picking one makes
+ * the new session continue it (its history is loaded into the chat); "Start a new conversation"
+ * takes the choice back. The list is asked for when the disclosure opens and when the folder changes.
+ */
+function ResumePicker({ provider, cwd, value, onChange }: { provider: ProviderId; cwd: string; value: string | null; onChange: (id: string | null) => void }) {
+  const app = useApp()
+  const [open, setOpen] = useState(false)
+  const [history, setHistory] = useState<History>({ status: 'loading' })
+  const folder = cwd.trim()
+
+  useEffect(() => {
+    if (!open) return
+    // Another folder, another list: what was picked is no longer on offer.
+    onChange(null)
+    if (!folder) return setHistory({ status: 'ready', items: [] })
+    let stale = false
+    setHistory({ status: 'loading' })
+    // Typing a path: wait until it stops changing.
+    const timer = window.setTimeout(() => {
+      app.history(provider, folder).then(
+        (items) => !stale && setHistory({ status: 'ready', items }),
+        (err: unknown) => !stale && setHistory({ status: 'error', text: cleanError(err) })
+      )
+    }, 300)
+    return () => {
+      stale = true
+      window.clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app, open, provider, folder])
+
+  return (
+    <div className="resume">
+      <button
+        type="button"
+        className={cx('card-toggle', open && 'is-open')}
+        aria-expanded={open}
+        onClick={() => {
+          if (open) onChange(null)
+          setOpen(!open)
+        }}
+      >
+        <IconChevron size={12} />
+        Resume previous…
+      </button>
+      {open && (
+        <div className="resume-list" role="radiogroup" aria-label="Conversation to resume">
+          {history.status === 'loading' && (
+            <p className="field-hint resume-note" role="status">
+              <span className="spinner" /> Looking for earlier conversations…
+            </p>
+          )}
+          {history.status === 'error' && (
+            <p className="field-hint resume-note is-error" role="alert">
+              {history.text}
+            </p>
+          )}
+          {history.status === 'ready' && history.items.length === 0 && (
+            <p className="field-hint resume-note">{folder ? 'No earlier conversations in this folder.' : 'Choose a folder first.'}</p>
+          )}
+          {history.status === 'ready' && history.items.length > 0 && (
+            <>
+              <button type="button" role="radio" aria-checked={value === null} className={cx('resume-row', value === null && 'is-selected')} onClick={() => onChange(null)}>
+                <span className="resume-preview is-new">Start a new conversation</span>
+              </button>
+              {history.items.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={value === h.id}
+                  className={cx('resume-row', value === h.id && 'is-selected')}
+                  onClick={() => onChange(h.id)}
+                  title={h.preview || h.id}
+                >
+                  <span className={cx('resume-preview', !h.preview && 'is-blank')}>{h.preview || 'No prompt recorded'}</span>
+                  <span className="resume-meta">
+                    {h.model && <span className="resume-model">{h.model}</span>}
+                    <time dateTime={new Date(h.updatedAt).toISOString()} title={new Date(h.updatedAt).toLocaleString()}>
+                      {whenAgo(h.updatedAt)}
+                    </time>
+                  </span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export function NewSessionDialog() {
   const app = useApp()
@@ -27,6 +122,7 @@ export function NewSessionDialog() {
   const [mode, setMode] = useState<PermissionMode>('default')
   const [title, setTitle] = useState('')
   const [model, setModel] = useState('')
+  const [resume, setResume] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const dialog = useRef<HTMLDivElement>(null)
@@ -84,7 +180,8 @@ export function NewSessionDialog() {
         cwd: cwd.trim(),
         permissionMode: mode,
         title: title.trim() || undefined,
-        model: model.trim() || undefined
+        model: model.trim() || undefined,
+        resume: (canResume(provider) && resume) || undefined
       })
     } catch (err) {
       setError(cleanError(err))
@@ -168,6 +265,7 @@ export function NewSessionDialog() {
                 ))}
               </div>
             )}
+            {provider && canResume(provider) && !needsLogin && <ResumePicker key={provider} provider={provider} cwd={cwd} value={resume} onChange={setResume} />}
           </div>
 
           <fieldset className="field">
@@ -209,7 +307,7 @@ export function NewSessionDialog() {
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={busy || !provider || needsLogin}>
-              {busy ? 'Starting…' : 'Start session'}
+              {busy ? 'Starting…' : canResume(provider) && resume ? 'Resume session' : 'Start session'}
             </button>
           </footer>
         </form>

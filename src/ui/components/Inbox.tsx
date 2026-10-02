@@ -5,9 +5,9 @@ import type { KeyboardEvent } from 'react'
 import type { PermissionRequestInfo } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
 import type { ResolvedPermission } from '../controller'
-import { ago, stripToolPrefix, terminalOnlyWaiting } from '../format'
+import { ago, allowsByKey, DANGER_CONFIRM_MS, permissionHeadline, questionParts, riskBadge, stripToolPrefix, terminalOnlyWaiting } from '../format'
 import { cx, useNow } from '../hooks'
-import { IconBan, IconCheck, IconChevron, IconInbox, IconTerminal } from '../icons'
+import { IconAlert, IconBan, IconCheck, IconChevron, IconInbox, IconTerminal } from '../icons'
 import { Swatch } from './Sidebar'
 
 const OUTCOME_TEXT: Record<ResolvedPermission['outcome'], string> = {
@@ -15,6 +15,11 @@ const OUTCOME_TEXT: Record<ResolvedPermission['outcome'], string> = {
   denied: 'Denied',
   'resolved-elsewhere': 'Answered in the terminal',
   'unknown-request': 'No longer pending'
+}
+
+/** A permission question, with the command or file it quotes shown as code. */
+export function QuestionText({ text }: { text: string }) {
+  return <>{questionParts(text).map((p, i) => (p.code ? <code key={i}>{p.text}</code> : p.text))}</>
 }
 
 export function Inbox({ docked = false }: { docked?: boolean }) {
@@ -34,6 +39,8 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
   const [denying, setDenying] = useState<string | null>(null)
   const [reason, setReason] = useState('')
+  /** A dangerous request for which A was pressed once: the second press allows it. */
+  const [armed, setArmed] = useState<{ id: string; at: number } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
   const others = useMemo(() => terminalOnlyWaiting(waiting, permissions, sessions), [waiting, permissions, sessions])
@@ -53,6 +60,13 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   useEffect(() => {
     if (denying && !permissions.some((p) => p.id === denying)) setDenying(null)
   }, [denying, permissions])
+
+  // The first A of a dangerous request is forgotten after a moment.
+  useEffect(() => {
+    if (!armed) return
+    const timer = window.setTimeout(() => setArmed(null), DANGER_CONFIRM_MS)
+    return () => window.clearTimeout(timer)
+  }, [armed])
 
   const colorOf = (sessionId: string) => teams.find((t) => t.id === sessionId)?.color
   const providerName = (id: string) => providers.find((p) => p.id === id)?.label ?? id
@@ -88,7 +102,11 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
       return
     } else if (k === 'a') {
       ev.preventDefault()
-      allow(p)
+      // A dangerous request takes the click, or A twice.
+      if (allowsByKey(p.risk, armed?.id === p.id ? armed.at : null, Date.now())) {
+        setArmed(null)
+        allow(p)
+      } else setArmed({ id: p.id, at: Date.now() })
     } else if (k === 'd') {
       ev.preventDefault()
       startDeny(p)
@@ -129,17 +147,20 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
       </button>
 
       {open && (
-        <div className="inbox-body" ref={listRef} tabIndex={0} onKeyDown={onKey} aria-label="Pending requests. A allows, D denies, arrows move.">
+        <div className="inbox-body" ref={listRef} tabIndex={0} onKeyDown={onKey} aria-label="Pending requests. A allows (twice for a risky one), D denies, arrows move.">
           {total === 0 && resolved.length === 0 && <p className="inbox-empty">Nothing is waiting on you.</p>}
 
           {permissions.map((p, i) => {
             const isOpen = expanded.has(p.id)
             const busy = deciding.has(p.id)
+            const badge = riskBadge(p.risk, p.riskNote)
+            const danger = p.risk === 'danger'
+            const headline = permissionHeadline(p)
             return (
               <article
                 key={p.id}
                 data-card={i}
-                className={cx('card', i === cur && 'is-active')}
+                className={cx('card', i === cur && 'is-active', badge && `risk-${badge.tone}`)}
                 onClick={() => {
                   setActive(i)
                   app.select(p.sessionId)
@@ -153,25 +174,36 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
                     {ago(now - p.createdAt)}
                   </span>
                 </header>
-                <div className="card-summary">
-                  <span className="tool-chip">{p.toolName}</span>
-                  <span className="card-summary-text">{stripToolPrefix(p.summary, p.toolName)}</span>
-                </div>
-                {p.detail && (
-                  <button
-                    type="button"
-                    className={cx('card-toggle', isOpen && 'is-open')}
-                    onClick={(ev) => {
-                      ev.stopPropagation()
-                      toggle(p.id)
-                    }}
-                    aria-expanded={isOpen}
-                  >
-                    <IconChevron size={12} />
-                    {isOpen ? 'Hide details' : 'Details'}
-                  </button>
+                <p className="card-question" title={headline}>
+                  <QuestionText text={headline} />
+                </p>
+                {badge && (
+                  <span className={cx('risk-badge', `is-${badge.tone}`)}>
+                    <IconAlert size={12} />
+                    {badge.text}
+                  </span>
                 )}
-                {isOpen && <pre className="card-detail">{p.detail}</pre>}
+                <button
+                  type="button"
+                  className={cx('card-toggle', isOpen && 'is-open')}
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+                    toggle(p.id)
+                  }}
+                  aria-expanded={isOpen}
+                >
+                  <IconChevron size={12} />
+                  {isOpen ? 'Hide details' : 'Details'}
+                </button>
+                {isOpen && (
+                  <div className="card-raw">
+                    <div className="card-summary">
+                      <span className="tool-chip">{p.toolName}</span>
+                      <span className="card-summary-text">{stripToolPrefix(p.summary, p.toolName)}</span>
+                    </div>
+                    {p.detail && <pre className="card-detail">{p.detail}</pre>}
+                  </div>
+                )}
 
                 {denying === p.id ? (
                   <form
@@ -207,10 +239,16 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
                   </form>
                 ) : (
                   <div className="card-actions" onClick={(ev) => ev.stopPropagation()}>
-                    <button type="button" className="btn btn-allow" disabled={busy} onClick={() => allow(p)}>
+                    <button
+                      type="button"
+                      className={cx('btn btn-allow', danger && 'is-danger')}
+                      disabled={busy}
+                      onClick={() => allow(p)}
+                      title={danger ? 'This one is risky: click to allow, or press A twice' : undefined}
+                    >
                       <IconCheck />
-                      Allow
-                      {i === cur && <kbd>A</kbd>}
+                      {danger ? 'Allow anyway' : 'Allow'}
+                      {i === cur && <kbd>{danger ? (armed?.id === p.id ? 'A again' : 'A A') : 'A'}</kbd>}
                     </button>
                     <button type="button" className="btn btn-deny" disabled={busy} onClick={() => startDeny(p)}>
                       <IconBan />
@@ -227,7 +265,9 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
             <div key={`r-${r.req.id}`} className={cx('card card-resolved', `outcome-${r.outcome}`)} role="status">
               <Swatch color={colorOf(r.req.sessionId)} />
               <span className="card-who">{r.req.displayName}</span>
-              <span className="card-resolved-what">{r.req.summary}</span>
+              <span className="card-resolved-what" title={r.req.summary}>
+                <QuestionText text={permissionHeadline(r.req)} />
+              </span>
               <span className="card-outcome">{OUTCOME_TEXT[r.outcome]}</span>
             </div>
           ))}

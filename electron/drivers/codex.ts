@@ -17,8 +17,10 @@ import {
   type PermissionDecision,
   type PermissionOutcome,
   type ProviderInfo,
+  type SessionHistoryEntry,
   type SessionState
 } from '../../shared/sessions'
+import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { ClaudeHookMapper } from '../adapters/claude-code-hooks'
 import { officeBriefing } from './briefing'
 import { approvalResult, describeServerRequest } from './codexApproval'
@@ -36,11 +38,13 @@ import {
   sandboxTypeOf,
   str,
   textInput,
+  threadHistory,
   usageInfo,
   type CodexPolicy,
   type JsonRpcId
 } from './codexProtocol'
 import {
+  CODEX_CLIENT_NAME,
   CodexRpcError,
   CodexServer,
   codexVersion,
@@ -62,6 +66,9 @@ const LOGIN_TIMEOUT_MS = 10 * 60_000
 const ACCOUNT_TTL_MS = 15_000
 /** How long the provider list waits for the account before answering without it. */
 const PROBE_ACCOUNT_WAIT_MS = 5000
+/** Threads asked of `thread/list` for one folder; of the ones this app started, the newest HISTORY_SHOWN are offered. */
+const HISTORY_LIST_LIMIT = 50
+const HISTORY_SHOWN = 12
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
@@ -411,8 +418,10 @@ export class CodexDriver implements AgentDriver {
         const collab = collabInfo(item)
         if (collab) this.onCollab(collab, method === 'item/completed', now)
         if (isRecord(item) && item.type === 'subAgentActivity') this.onSubAgentActivity(item, now)
-        if (method === 'item/started') {
-          const activity = worldActivityForItem(item)
+        // Not for a turn that is over: Codex announces a command's process start even after the
+        // turn was interrupted, and the character must not go back to work on it.
+        if (method === 'item/started' && !this.endedTurns.has(str(params.turnId, 100))) {
+          const activity = worldActivityForItem(item, this.ctx.start.cwd)
           if (activity) this.emitWorld(this.world.activity(agentId, activity.activity, activity.detail, now))
         }
         break
@@ -577,7 +586,7 @@ export class CodexDriver implements AgentDriver {
     if (this.exited) return conn.respond(rpcId, approvalResult(method, params, null))
     const agentId = this.agentFor(threadId)
     const itemId = str(params.itemId, 200)
-    const handling = describeServerRequest(method, params, itemId ? this.chat.get(itemId) : undefined)
+    const handling = describeServerRequest(method, params, itemId ? this.chat.get(itemId) : undefined, this.ctx.start.cwd)
     if (handling.kind === 'unknown') return conn.respondError(rpcId, -32601, 'not handled by Agent Office')
     if (handling.kind === 'auto') {
       conn.respond(rpcId, handling.result)
@@ -588,17 +597,31 @@ export class CodexDriver implements AgentDriver {
     const pending: PendingApproval = { rpcId, method, params, agentId, void: false, ended: false, permissionId: null }
     this.approvals.set(rpcId, pending)
     const displayName = agentId === this.id ? this.title : 'Sub-agent'
+    // One plain sentence for the card. A sub-agent is named with the team it works for.
+    const who = agentId === this.id ? this.title : `Sub-agent (${this.title}'s team)`
+    const plain = plainPermission({ who, tool: card.plain.tool, input: card.plain.input, cwd: this.ctx.start.cwd })
     const permissionId = this.ctx.permissions.add(
-      { sessionId: this.id, agentId, displayName, provider: 'codex', toolName: card.toolName, summary: card.summary, detail: card.detail },
+      { sessionId: this.id, agentId, displayName, provider: 'codex', toolName: card.toolName, summary: card.summary, detail: card.detail, ...plain },
       { onResolved: (outcome, decision) => this.onApprovalResolved(pending, outcome, decision) }
     )
     if (!permissionId) return // too many pending: onResolved already declined it
     pending.permissionId = permissionId
+    // As the registry holds it (cleaned and capped): the chat card shows the same words as the inbox.
+    const held = this.ctx.permissions.get(permissionId)
     const at = this.at(agentId)
-    this.emitWorld(this.world.waiting(agentId, card.summary, at.now))
+    this.emitWorld(this.world.waiting(agentId, permissionAction(held?.question ?? plain.question), at.now))
     this.emitChat(
       this.chat.approvalRequested(
-        { requestId: permissionId, subjectId: card.itemId || undefined, summary: card.summary, detail: card.detail, turnId: str(params.turnId, 100) || undefined },
+        {
+          requestId: permissionId,
+          subjectId: card.itemId || undefined,
+          summary: card.summary,
+          detail: card.detail,
+          question: held?.question ?? plain.question,
+          risk: held?.risk ?? plain.risk,
+          riskNote: held?.riskNote,
+          turnId: str(params.turnId, 100) || undefined
+        },
         at
       )
     )
@@ -826,6 +849,19 @@ export function codexProvider(opts: CodexProviderOptions): CodexProvider {
       return info
     },
     createDriver: (ctx) => new CodexDriver(ctx, { conn: server, account, effort: opts.effort }),
+    async history(cwd: string): Promise<SessionHistoryEntry[]> {
+      if (!findExe()) return []
+      try {
+        await server.ensureStarted()
+        // The list is the logged-in user's own history: nothing to offer without a login.
+        if (!(await account.read()).loggedIn) return []
+        // `cwd` matches the exact folder only. A thread is listed once it had its first turn.
+        const result = await server.request('thread/list', { cwd, limit: HISTORY_LIST_LIMIT }, 20_000)
+        return threadHistory(result, { originator: CODEX_CLIENT_NAME, limit: HISTORY_SHOWN })
+      } catch (err) {
+        throw new Error(`Codex could not list the earlier conversations: ${message(err)}`)
+      }
+    },
     async login(): Promise<void> {
       if (!findExe()) throw new Error('Codex is not installed')
       try {

@@ -9,6 +9,7 @@ import type {
   PermissionRequestInfo,
   ProviderId,
   ProviderInfo,
+  SessionHistoryEntry,
   SessionInfo,
   StartSessionRequest,
   TerminalSnapshot
@@ -25,6 +26,12 @@ export const IPC = {
   getSettings: 'agent-office:get-settings',
   /** renderer -> main (invoke): CEO order from the speech bar -> session inbox socket(s). */
   sendOrder: 'agent-office:send-order',
+  /** renderer -> main (invoke): the "Allow CEO orders" switch (also in the tray). Returns the new settings. */
+  setAllowOrders: 'agent-office:set-allow-orders',
+  /** renderer -> main (invoke): quit the app (closing the window only hides it to the tray). */
+  quit: 'agent-office:quit',
+  /** renderer -> main (invoke): open an http(s) link of a chat answer in the system browser. */
+  openExternal: 'agent-office:open-external',
 
   // ---- hosted sessions (shared/sessions.ts) ----
   /** invoke */
@@ -34,6 +41,8 @@ export const IPC = {
   stopSession: 'agent-office:sessions:stop',
   interruptSession: 'agent-office:sessions:interrupt',
   pickFolder: 'agent-office:pick-folder',
+  /** invoke: earlier conversations of a provider in a folder (for "Resume previous…") */
+  sessionHistory: 'agent-office:sessions:history',
   /** main -> renderer: full SessionInfo[] whenever anything changes */
   sessionsChanged: 'agent-office:sessions:changed',
 
@@ -87,7 +96,7 @@ export interface ThemeInfo {
 export interface RendererSettings {
   theme: string
   overlay: boolean
-  /** Tray "Allow CEO orders" (off by default: the app starts read-only). */
+  /** Tray "Allow CEO orders" (on by default; untick to make the app watch-only). */
   allowOrders: boolean
   /** Office-wide mode ends after this long at the latest. */
   officeWideTimeoutMs: number
@@ -102,6 +111,14 @@ export interface AgentOfficeBridge {
   listThemes(): Promise<ThemeInfo[]>
   loadTheme(name: string): Promise<LoadedTheme>
   sendOrder(req: OrderRequest): Promise<OrderResult>
+  /** Turns CEO orders on or off (the tray's "Allow CEO orders"). Resolves with the settings that
+   *  now apply; onSettings fires as well. Rejects if `value` is not a boolean. */
+  setAllowOrders(value: boolean): Promise<RendererSettings>
+  /** Quits Agent Office: hosted sessions are stopped, as with the tray's Quit. */
+  quit(): Promise<void>
+  /** Opens an absolute http(s) URL in the system browser. Resolves false if the main process
+   *  refused it. Absent in the browser stub, where a link opens in a new tab instead. */
+  openExternal?(url: string): Promise<boolean>
 
   sessions: {
     providers(): Promise<ProviderInfo[]>
@@ -119,6 +136,10 @@ export interface AgentOfficeBridge {
     interrupt(id: string): Promise<void>
     /** Native folder picker; null if cancelled. */
     pickFolder(): Promise<string | null>
+    /** Earlier conversations of `provider` in exactly that folder, newest first, that a new session
+     *  can continue (StartSessionRequest.resume). Empty when the provider keeps no history, is not
+     *  logged in, or the folder has none. Rejects with a readable message if it could not be read. */
+    history(provider: ProviderId, cwd: string): Promise<SessionHistoryEntry[]>
     onChanged(cb: (sessions: SessionInfo[]) => void): () => void
   }
 

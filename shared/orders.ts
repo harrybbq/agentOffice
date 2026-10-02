@@ -24,9 +24,17 @@ export interface OrderResult {
   failed: OrderFailure[]
 }
 
-export const REASON_DISABLED = 'CEO orders are disabled (tray → Allow CEO orders)'
+export const REASON_DISABLED = 'CEO orders are off (turn them on in the status bar, or tray → Allow CEO orders)'
 export const REASON_NOT_CONNECTED = 'not hosted by Agent Office (start the session from the app to send it orders)'
 export const REASON_NO_SESSIONS = 'no active sessions'
+
+/**
+ * The value of an untrusted "allow CEO orders" request from the renderer: a real boolean, or null
+ * when it is anything else (no truthiness: "false", 0 and {} are not answers).
+ */
+export function parseAllowOrders(value: unknown): boolean | null {
+  return value === true || value === false ? value : null
+}
 
 /** A live top-level session. A bare string is a session id whose provider is unknown. */
 export type KnownSession = string | { id: string; provider: string }

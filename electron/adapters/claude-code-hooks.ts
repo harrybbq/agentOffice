@@ -9,6 +9,7 @@
 //
 // No Electron imports here: the tests load this file under plain Node.
 import type { Activity, AgentEvent } from '../../shared/events'
+import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { subagentId } from '../../shared/sessions'
 import type { EventSink, HttpAdapter, RequestContext } from './types'
 
@@ -220,9 +221,10 @@ export class ClaudeHookMapper {
 
       case 'PermissionRequest': {
         const tool = str(body.tool_name, 200)
-        const detail = toolDetail(tool, body.tool_input)
         this.ensureSub(subId, agentType)
-        events.push(...this.waiting(actorId, oneLine(detail ? `${tool}: ${detail}` : tool), now))
+        // What it asks, in plain words; the character's name is next to it already.
+        const asked = plainPermission({ who: 'It', tool, input: body.tool_input, cwd: str(body.cwd, 2000) || undefined })
+        events.push(...this.waiting(actorId, oneLine(permissionAction(asked.question)), now))
         return out('permission', actorId)
       }
 

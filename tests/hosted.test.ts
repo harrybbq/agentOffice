@@ -11,7 +11,7 @@ import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent } from '../shared/events.ts'
-import { planOrder, REASON_DISABLED, REASON_NO_SESSIONS, REASON_NOT_CONNECTED } from '../shared/orders.ts'
+import { parseAllowOrders, planOrder, REASON_DISABLED, REASON_NO_SESSIONS, REASON_NOT_CONNECTED } from '../shared/orders.ts'
 import { subagentId, type PermissionOutcome, type PermissionRequestInfo, type SessionInfo } from '../shared/sessions.ts'
 import {
   activityForTool,
@@ -50,7 +50,7 @@ import { startIngestServer } from '../electron/ingest/server.ts'
 import { parsePermissionDecision, PermissionRegistry, PERMISSION_DETAIL_MAX } from '../electron/permissions.ts'
 import { windowsBuildNumber } from '../electron/ptyProtocol.ts'
 import type { PtySpawnOptions } from '../electron/ptyProtocol.ts'
-import { allowWebPermission } from '../electron/webPermissions.ts'
+import { allowWebPermission, isExternalWebUrl } from '../electron/webPermissions.ts'
 import { ExtraModes } from '../electron/ptyModes.ts'
 import { SessionInbox } from '../electron/sessionInbox.ts'
 import { SessionManager } from '../electron/sessions.ts'
@@ -233,7 +233,7 @@ await t('mapping: PermissionRequest -> waiting, resolved -> previous activity or
   let r = m.handle(perm, 3)
   assert.equal(r.kind, 'permission')
   assert.equal(r.agentId, 'S')
-  assert.deepEqual(brief(r.events), ['S|-|waiting|PowerShell: node -e "1"'])
+  assert.deepEqual(brief(r.events), ['S|-|waiting|run a short script (`node -e "1"`)'])
   // Hosted: it stays waiting until resume(), whatever else arrives.
   assert.deepEqual(m.handle(common('PostToolUse', { tool_name: 'PowerShell' }), 4).events, [])
   assert.deepEqual(brief(m.resume('S', 5)), ['S|-|exec|node -e "1"'])
@@ -451,6 +451,21 @@ await t('permission registry: decide / disconnect / unknown id', () => {
   assert.equal(info.summary, 'Bash: npm test')
   assert.equal(info.detail.length, PERMISSION_DETAIL_MAX) // truncated to ~4 KB
   assert.equal(info.provider, 'claude-code')
+  // Without a plain question the summary stands in; the risk is normal and carries no note.
+  assert.deepEqual([info.question, info.risk, 'riskNote' in info], ['Bash: npm test', 'normal', false])
+  // With one: a single cleaned line, capped; an unknown risk level counts as normal, and only a
+  // request that is not routine keeps its note.
+  const plainReg = new PermissionRegistry()
+  const ask = (extra: Record<string, unknown>) => {
+    const pid = plainReg.add({ sessionId: 's', agentId: 's', displayName: 'p', provider: 'codex', toolName: 'Command', summary: 'Command: x', detail: '', ...extra }, { onResolved: () => {} })!
+    return plainReg.get(pid)!
+  }
+  const risky = ask({ question: 'Opus 5.5 wants to delete files or folders permanently\n (`rm -rf dist`).', risk: 'danger', riskNote: ' Deletes   files ' })
+  assert.deepEqual([risky.question, risky.risk, risky.riskNote], ['Opus 5.5 wants to delete files or folders permanently (`rm -rf dist`).', 'danger', 'Deletes files'])
+  assert.equal(ask({ question: 'q'.repeat(1000) }).question.length, 240)
+  assert.deepEqual([ask({ risk: 'catastrophic' }).risk, ask({ risk: 'caution' }).risk], ['normal', 'caution'])
+  assert.equal('riskNote' in ask({ risk: 'normal', riskNote: 'nothing to see' }), false)
+  assert.equal(plainReg.get('perm-nope'), undefined)
 
   // decide: allow / deny, and the full pending list is broadcast on every change.
   assert.equal(reg.decide(a, { behavior: 'allow' }), 'allowed')
@@ -928,6 +943,11 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   assert.equal(pending.toolName, 'Bash')
   assert.equal(pending.summary, 'Bash: node -e "console.log(1)"')
   assert.match(pending.detail, /"description": "print"/)
+  // The card leads with one plain sentence that starts with the manager's name; the world label has the action.
+  assert.equal(pending.question, `${pending.displayName} wants to run a short script (\`node -e "console.log(1)"\`).`)
+  assert.equal(pending.question.startsWith(`${manager.list()[0].title} wants to `), true)
+  assert.deepEqual([pending.risk, pending.riskNote], ['normal', undefined])
+  assert.equal(world[world.length - 1].detail, 'run a short script (`node -e "console.log(1)"`)')
   assert.equal(pending.provider, 'claude-code')
   assert.equal(state(), 'waiting-permission')
   assert.equal(world[world.length - 1].activity, 'waiting')
@@ -1243,6 +1263,26 @@ await t('only the clipboard is allowed, and only for the app window', () => {
   for (const p of ['media', 'geolocation', 'notifications', 'openExternal', 'fullscreen', 'fileSystem', '']) {
     assert.equal(allowWebPermission(p, true), false, p)
   }
+})
+
+await t('the in-app orders switch takes a real boolean and nothing else', () => {
+  assert.equal(parseAllowOrders(true), true)
+  assert.equal(parseAllowOrders(false), false)
+  for (const bad of ['true', 'false', 1, 0, null, undefined, {}, [], [true], { value: true }, Number.NaN, 'on']) {
+    assert.equal(parseAllowOrders(bad), null, JSON.stringify(bad))
+  }
+})
+
+await t('only plain web addresses are handed to the system browser', () => {
+  for (const ok of ['https://example.com', 'http://example.com/a?b=c#d', 'https://developers.openai.com/codex/app-server', 'HTTPS://EXAMPLE.COM/']) {
+    assert.equal(isExternalWebUrl(ok), true, ok)
+  }
+  const bad: unknown[] = [
+    'file:///C:/Windows/System32/calc.exe', 'javascript:alert(1)', 'ms-settings:privacy', 'vscode://file/x', 'data:text/html,hi', 'mailto:a@b.c',
+    'https://user:pass@example.com/', 'https://user@example.com/', '//example.com', 'example.com', '/etc/passwd', 'C:\\Windows', '',
+    `https://example.com/${'a'.repeat(2100)}`, null, undefined, 7, {}, ['https://example.com']
+  ]
+  for (const b of bad) assert.equal(isExternalWebUrl(b), false, String(b).slice(0, 60))
 })
 
 console.log(`\n${pass} hosted-session tests passed`)

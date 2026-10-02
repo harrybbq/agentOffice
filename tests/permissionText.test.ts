@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { plainPermission } from '../shared/permissionText'
+import { asPermissionRisk, permissionAction, plainPermission } from '../shared/permissionText'
 
 let n = 0
 const t = (name: string, fn: () => void) => {
@@ -79,6 +79,23 @@ t('hostile input stays one short sentence', () => {
   assert.ok(!r.question.includes('\n'))
   assert.doesNotThrow(() => q('Bash', null))
   assert.doesNotThrow(() => q('', { command: 5 }))
+})
+
+t('the action of a question, for places that already show who asks', () => {
+  assert.equal(permissionAction(q('Bash', { command: 'npm test' }).question), 'run the tests (`npm test`)')
+  assert.equal(permissionAction("Explore (Opus 5.5's team) wants to change the file app.ts."), 'change the file app.ts')
+  // Not one of ours (an older main process sent the raw summary): unchanged.
+  assert.equal(permissionAction('Bash: npm test'), 'Bash: npm test')
+  assert.equal(permissionAction(''), '')
+})
+
+t('an MCP request without a tool name still reads as a sentence', () => {
+  assert.equal(q('mcp', { server: 'node_repl', tool: '' }).question, 'Sonnet 5.5 wants to use a tool from node_repl.')
+  assert.equal(q('mcp', { server: 'github', tool: 'create_issue' }).question, 'Sonnet 5.5 wants to use the “create issue” tool from github.')
+})
+
+t('only the three risk levels exist', () => {
+  assert.deepEqual(['normal', 'caution', 'danger', 'DANGER', '', null, undefined, 3, {}].map(asPermissionRisk), ['normal', 'caution', 'danger', 'normal', 'normal', 'normal', 'normal', 'normal', 'normal'])
 })
 
 console.log(`${n} permission-text tests passed`)

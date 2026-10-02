@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react'
 import { useApp, useAppState } from '../controller'
 import type { AppState } from '../controller'
 import { ago } from '../format'
 import { cx, useNow } from '../hooks'
-import { IconInbox, IconMoon, IconSun, IconTerminal } from '../icons'
+import { IconInbox, IconMegaphone, IconMoon, IconPower, IconSun, IconTerminal } from '../icons'
 
 const CONNECTION: Record<AppState['connection'], { label: string; tone: string; title: string }> = {
   connecting: { label: 'Connecting', tone: 'warn', title: 'Waiting for the app' },
@@ -20,9 +21,24 @@ export function StatusBar() {
   const pending = useAppState((s) => s.permissions.length)
   const themeName = useAppState((s) => s.themeName)
   const layout = useAppState((s) => s.layout)
+  const allowOrders = useAppState((s) => s.settings?.allowOrders ?? false)
+  const hasSettings = useAppState((s) => s.settings !== null)
   const now = useNow(1000)
   const c = CONNECTION[connection]
   const running = sessions.filter((s) => s.state !== 'exited').length
+  const [confirmQuit, setConfirmQuit] = useState(false)
+
+  // The question goes away by itself, and with Esc.
+  useEffect(() => {
+    if (!confirmQuit) return
+    const timer = window.setTimeout(() => setConfirmQuit(false), 8000)
+    const onKey = (ev: KeyboardEvent) => ev.key === 'Escape' && setConfirmQuit(false)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [confirmQuit])
 
   return (
     <footer className="statusbar">
@@ -38,13 +54,30 @@ export function StatusBar() {
         {pending} pending
       </button>
       <span className="status-item">
-        {eventCount} events{lastEventAt ? ` · last ${ago(now - lastEventAt)} ago` : ''}
+        {eventCount} {eventCount === 1 ? 'event' : 'events'}{lastEventAt ? ` · last ${ago(now - lastEventAt)} ago` : ''}
       </span>
       <span className="status-spacer" />
       <span className="status-item status-keys">
         <kbd>Ctrl K</kbd> order
         <kbd>Ctrl 1-9</kbd> session
       </span>
+      {hasSettings && (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={allowOrders}
+          className={cx('status-item status-btn status-orders', allowOrders ? 'is-on' : 'is-off')}
+          onClick={() => void app.setAllowOrders(!allowOrders)}
+          title={
+            allowOrders
+              ? 'CEO orders are on: the order bar can send prompts to your sessions. Click to turn them off (watch only).'
+              : 'CEO orders are off: the order bar sends nothing. Click to turn them on.'
+          }
+        >
+          <IconMegaphone size={14} />
+          Orders: {allowOrders ? 'on' : 'off'}
+        </button>
+      )}
       {themeName && (
         <span className="status-item" title="World theme (tray menu → Theme)">
           {themeName} theme
@@ -70,6 +103,28 @@ export function StatusBar() {
         <IconTerminal size={14} />
         Panel
       </button>
+      {app.canQuit &&
+        (confirmQuit ? (
+          <span className="status-item status-confirm" role="group" aria-label="Quit Agent Office?">
+            {running > 0 ? `Quit and stop ${running} ${running === 1 ? 'session' : 'sessions'}?` : 'Quit Agent Office?'}
+            <button type="button" className="btn btn-danger btn-sm" autoFocus onClick={() => app.quit()}>
+              Quit
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmQuit(false)}>
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="status-item status-btn"
+            onClick={() => setConfirmQuit(true)}
+            title="Quit Agent Office (closing the window only hides it to the tray)"
+          >
+            <IconPower size={14} />
+            Quit
+          </button>
+        ))}
     </footer>
   )
 }

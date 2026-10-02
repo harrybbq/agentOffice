@@ -108,7 +108,7 @@ export function OrderBar() {
           placeholder={
             allowOrders
               ? `Order for ${(options.find((o) => o.value === value)?.label ?? 'everyone').replace(/^(Everyone|All )/, (m) => m.toLowerCase())}…`
-              : 'Orders are off (tray menu → Allow CEO orders)'
+              : 'Orders are off (turn them on below, or in the status bar)'
           }
           onChange={(ev) => setText(ev.target.value)}
           onKeyDown={(ev) => {
@@ -128,7 +128,10 @@ export function OrderBar() {
       </div>
       {!allowOrders && (
         <p className="order-off">
-          Orders are off: the app starts read-only. Tray menu → <strong>Allow CEO orders</strong>.
+          Orders are off: the app only watches.
+          <button type="button" className="link" onClick={() => void app.setAllowOrders(true)}>
+            Turn on
+          </button>
         </p>
       )}
     </form>

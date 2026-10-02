@@ -3,10 +3,15 @@
 // What a turn does is chosen by words in the prompt:
 //   "approve"  a command that needs approval (server request, ids start at 0); accept runs it, decline doesn't
 //   "patch"    a file change that needs approval
-//   "slow"     a command that runs until the turn is steered (then it finishes) or interrupted
+//   "slow"     a command that runs until the turn is steered (then it finishes) or interrupted. As the
+//              real server does when the process had not been spawned yet, an interrupt is followed
+//              by a late `item/started` of that command, AFTER `turn/completed`
 //   "fail"     a retry notice, then a failed turn (401)
 //   "crash"    the process exits with code 1
 //   otherwise  a streamed one-line answer
+// `thread/list` answers with the threads of this process that had a turn (as the real server does),
+// one thread of another client in the same folder, and, in the folder FAKE_CODEX_OLD_CWD, "thr-old"
+// (the thread with the recorded HISTORY).
 // Environment: FAKE_CODEX_LOGGED_OUT=1, FAKE_CODEX_AUTH_URL=<url>, FAKE_CODEX_READONLY=1 (downgrade
 // workspace-write, as an unconfigured Windows sandbox does), FAKE_CODEX_MARK=<file> (append a line per start).
 // Extra methods for the tests: fake/log (everything received), fake/login/complete, fake/notify.
@@ -22,7 +27,7 @@ let nextTurn = 1
 let nextItem = 1
 let nextRequest = 0
 let nextLogin = 1
-/** threadId -> { turn: { id, onSteer, onInterrupt } | null, turns: [] } */
+/** threadId -> { turn: { id, onSteer, steers } | null, cwd, preview, recencyAt } (preview: the first prompt; null until then) */
 const threads = new Map()
 /** server request id -> { resolve(result), threadId } */
 const waiting = new Map()
@@ -206,6 +211,8 @@ async function runTurn(threadId, turnId, params) {
     const inner = `node -e "setTimeout(()=>console.log('slow-done'),25000)"`
     const id = `exec-${nextItem++}`
     notify('item/started', { item: command(id, inner, { processId: '2', source: 'unifiedExecStartup' }), threadId, turnId, startedAtMs: Date.now() })
+    // Seen with codex-cli 0.160.0: the command's process start is announced after the interrupted turn ended.
+    t.turn.afterInterrupt = () => notify('item/started', { item: command(id, inner, { processId: '2', source: 'unifiedExecStartup', aggregatedOutput: 'late output\n' }), threadId, turnId, startedAtMs: Date.now() })
     t.turn.onSteer = (steer) => {
       notify('item/commandExecution/outputDelta', { threadId, turnId, itemId: id, delta: 'slow-done\n' })
       notify('item/completed', { item: command(id, inner, { processId: '2', source: 'unifiedExecStartup', status: 'completed', aggregatedOutput: 'slow-done\n', exitCode: 0, durationMs: 25116 }), threadId, turnId, completedAtMs: Date.now() })
@@ -265,15 +272,29 @@ function handle(msg) {
       return notify(params.method, params.params)
     case 'thread/start': {
       const threadId = `thr-${process.pid}-${nextThread++}`
-      threads.set(threadId, { turn: null })
+      threads.set(threadId, { turn: null, cwd: params.cwd ?? null, preview: null, recencyAt: 0 })
       reply(id, threadResponse(threadId, params))
       return notify('thread/started', { thread: { id: threadId, parentThreadId: null } })
     }
     case 'thread/resume': {
       if (params.threadId === 'thr-missing') return fail(id, `no rollout found for thread id ${params.threadId}`)
-      if (!threads.has(params.threadId)) threads.set(params.threadId, { turn: null })
+      if (!threads.has(params.threadId)) threads.set(params.threadId, { turn: null, cwd: params.cwd ?? null, preview: params.threadId === 'thr-old' ? 'Create the note' : null, recencyAt: 1790945866 })
       notify('thread/status/changed', { threadId: params.threadId, status: { type: 'idle' } })
       return reply(id, threadResponse(params.threadId, params))
+    }
+    case 'thread/list': {
+      if (!loggedIn) return fail(id, 'codex account authentication required')
+      const entry = (threadId, t, originator) => ({
+        id: threadId, sessionId: threadId, parentThreadId: null, preview: t.preview, ephemeral: false, model: 'gpt-6-luna',
+        createdAt: t.recencyAt - 60, updatedAt: t.recencyAt - 60, recencyAt: t.recencyAt, status: { type: 'notLoaded' },
+        path: String.raw`C:\fake\.codex\sessions\rollout-${threadId}.jsonl`, cwd: t.cwd, cliVersion: '0.160.0', originator, source: 'vscode', turns: []
+      })
+      const data = [...threads].filter(([tid, t]) => t.preview !== null && tid !== 'thr-old').map(([tid, t]) => entry(tid, t, 'agent_office'))
+      // Somebody else's thread in the same folder (the CLI, the desktop app): not ours to offer.
+      data.push(entry('thr-desktop', { preview: 'A desktop app thread', recencyAt: 1790945000, cwd: params.cwd ?? null }, 'Codex Desktop'))
+      if (process.env.FAKE_CODEX_OLD_CWD) data.push(entry('thr-old', { preview: 'Create the note', recencyAt: 1790945866, cwd: process.env.FAKE_CODEX_OLD_CWD }, 'agent_office'))
+      const same = (a, b) => String(a).toLowerCase() === String(b).toLowerCase()
+      return reply(id, { data: data.filter((d) => params.cwd === undefined || same(d.cwd, params.cwd)).slice(0, params.limit ?? 50), nextCursor: null, backwardsCursor: null })
     }
     case 'thread/turns/list': {
       const data = params.threadId === 'thr-old' ? HISTORY : []
@@ -287,6 +308,8 @@ function handle(msg) {
       if (!loggedIn) return fail(id, 'not logged in')
       const turnId = `turn-${nextTurn++}`
       t.turn = { id: turnId, onSteer: null, steers: [] }
+      if (t.preview === null) t.preview = params.input.map((i) => i.text ?? '').join(' ')
+      t.recencyAt = Math.floor(Date.now() / 1000)
       reply(id, { turn: { id: turnId, items: [], itemsView: 'notLoaded', status: 'inProgress', error: null, startedAt: null, completedAt: null, durationMs: null } })
       return void runTurn(params.threadId, turnId, params)
     }
@@ -313,7 +336,10 @@ function handle(msg) {
         notify('serverRequest/resolved', { threadId: params.threadId, requestId: rid })
         w.resolve(null)
       }
-      return endTurn(params.threadId, t.turn.id, 'interrupted')
+      const late = t.turn.afterInterrupt
+      endTurn(params.threadId, t.turn.id, 'interrupted')
+      if (late) late()
+      return
     }
     default:
       if (id !== undefined) fail(id, `unknown method ${method}`, -32601)

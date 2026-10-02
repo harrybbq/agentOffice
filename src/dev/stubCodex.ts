@@ -6,7 +6,7 @@
 import type { ChatEvent, ChatItem } from '../../shared/chat'
 import type { AgentOfficeBridge } from '../../shared/ipc'
 import type { Activity } from '../../shared/events'
-import type { SessionInfo, SessionState } from '../../shared/sessions'
+import type { PermissionRequestInfo, SessionInfo, SessionState } from '../../shared/sessions'
 import { applyEvents, EMPTY_CHAT } from '../ui/chat/state'
 import type { ChatState } from '../ui/chat/state'
 
@@ -17,6 +17,8 @@ export interface CodexHost {
   activity(id: string, activity: Activity, detail: string): void
   /** Adds a request to the CEO inbox; resolves through `settled`. Returns the request id. */
   requestPermission(id: string, tool: string, summary: string, detail: string): string
+  /** The pending request with that id, as the inbox shows it. */
+  permission(requestId: string): PermissionRequestInfo | undefined
   /** Removes pending requests of a session (interrupt, exit). */
   dropPermissions(id: string): void
 }
@@ -237,7 +239,8 @@ export function createCodexStub(host: CodexHost, opts: { speed: number }) {
       const summary = 'Edit: src/ui/format.ts, tests/recent.test.ts'
       const detail = JSON.stringify({ files: changes.map((x) => ({ path: x.path, change: x.change })), reason: 'Sort sessions by recent activity' }, null, 2)
       const requestId = host.requestPermission(id, 'Edit', summary, detail)
-      const approval: ChatItem = { ...base(id, c, `approval-${requestId}`), kind: 'approval', requestId, subjectId: fc.id, summary, detail, outcome: 'pending' }
+      const asked = host.permission(requestId)
+      const approval: ChatItem = { ...base(id, c, `approval-${requestId}`), kind: 'approval', requestId, subjectId: fc.id, summary, detail, question: asked?.question, risk: asked?.risk, riskNote: asked?.riskNote, outcome: 'pending' }
       put(id, approval)
       const how = await new Promise<How>((resolve) => waiters.set(requestId, resolve))
       waiters.delete(requestId)

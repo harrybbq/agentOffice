@@ -11,6 +11,7 @@ import type {
   PermissionRequestInfo,
   ProviderId,
   ProviderInfo,
+  SessionHistoryEntry,
   SessionInfo,
   StartSessionRequest
 } from '../../shared/sessions'
@@ -377,12 +378,40 @@ export class AppController {
     }
   }
 
+  /** The "Allow CEO orders" switch. The main process pushes the new settings (onSettings) as well. */
+  async setAllowOrders(on: boolean): Promise<void> {
+    if (typeof this.bridge.setAllowOrders !== 'function') return
+    try {
+      this.applySettings(await this.bridge.setAllowOrders(on))
+    } catch (err) {
+      console.warn('[agent-office] could not change the orders setting', err)
+    }
+  }
+
+  /** Is there an in-app Quit (a preload that has it)? */
+  get canQuit(): boolean {
+    return typeof this.bridge.quit === 'function'
+  }
+
+  /** Quits the app; hosted sessions are stopped. */
+  quit(): void {
+    if (typeof this.bridge.quit === 'function') void this.bridge.quit().catch(() => undefined)
+  }
+
   closeDialog(): void {
     this.store.set({ dialog: null })
   }
 
   pickFolder(): Promise<string | null> {
     return this.bridge.sessions.pickFolder()
+  }
+
+  /** Earlier conversations of a provider in a folder (newest first). Rejects with a readable message. */
+  async history(provider: ProviderId, cwd: string): Promise<SessionHistoryEntry[]> {
+    // An older preload has no history: the dialog then simply offers nothing to resume.
+    if (typeof this.bridge.sessions.history !== 'function') return []
+    const list = await this.bridge.sessions.history(provider, cwd)
+    return Array.isArray(list) ? list : []
   }
 
   /** Rejects with a readable message; the dialog shows it inline. */

@@ -10,6 +10,7 @@
 // Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id),
 // codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout()).
 // The Codex side (chat sessions, the scripted turn) lives in ./stubCodex.ts.
+import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { parseAgentEvent } from '../../shared/events'
 import type { Activity, AgentEvent } from '../../shared/events'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
@@ -59,6 +60,7 @@ export function createStubBridge(): AgentOfficeBridge {
     windowsBuild: 0
   }
 
+  const settingsCbs = new Set<(s: RendererSettings) => void>()
   const loggedOut = params.get('codex') === 'loggedout'
   let PROVIDERS: ProviderInfo[] = [
     { id: 'claude-code', label: 'Claude Code', available: true, version: '2.1.284 (stub)' },
@@ -130,6 +132,7 @@ export function createStubBridge(): AgentOfficeBridge {
         const s = sessions.get(id)
         if (s) emit({ agentId: id, parentId: null, provider: 'codex', displayName: s.info.title, activity, detail })
       },
+      permission: (requestId) => pending.find((p) => p.id === requestId),
       requestPermission: (id, tool, summary, detail) => {
         const s = sessions.get(id)!
         return requestPermission(s, id, s.info.title, tool, summary, detail).id
@@ -253,6 +256,11 @@ export function createStubBridge(): AgentOfficeBridge {
   }
 
   const requestPermission = (s: FakeSession, agentId: string, displayName: string, tool: string, summary: string, detail: string) => {
+    // The same sentence the main process would make of it.
+    const what = summary.slice(summary.indexOf(':') + 1).trim()
+    const input = /^(bash|command|powershell)$/i.test(tool) ? { command: what } : { file_path: what.split(',')[0].trim(), more: what.split(',').length - 1 }
+    const who = agentId === s.info.id ? displayName : `${displayName} (${s.info.title}'s team)`
+    const plain = plainPermission({ who, tool, input, cwd: s.info.cwd })
     const req: PermissionRequestInfo = {
       id: `perm-${++counter}`,
       sessionId: s.info.id,
@@ -262,10 +270,11 @@ export function createStubBridge(): AgentOfficeBridge {
       toolName: tool,
       summary,
       detail,
+      ...plain,
       createdAt: Date.now()
     }
     pending = [...pending, req]
-    emit({ agentId, parentId: agentId === s.info.id ? null : s.info.id, provider: s.info.provider, displayName, activity: 'waiting', detail: summary })
+    emit({ agentId, parentId: agentId === s.info.id ? null : s.info.id, provider: s.info.provider, displayName, activity: 'waiting', detail: permissionAction(plain.question) })
     out(
       s,
       `\r\n${fg(221, '╭─')} ${bold(tool)} ${dim('needs permission')}\r\n${fg(221, '│')}  ${summary}\r\n${fg(221, '│')}  Do you want to proceed?\r\n${fg(221, '│')}  ${fg(75, '❯ 1. Yes')}   2. Yes, and don't ask again   3. No\r\n${fg(221, '╰─')}\r\n`
@@ -373,6 +382,12 @@ export function createStubBridge(): AgentOfficeBridge {
         )
       )
 
+      // ?risk=1: one request to be careful with and one dangerous one, next to the routine ones.
+      if (params.get('risk') === '1') {
+        later(b, 3200, () => requestPermission(b, b.info.id, b.info.title, 'Bash', 'Bash: npm install left-pad', JSON.stringify({ command: 'npm install left-pad' }, null, 2)))
+        later(b, 3800, () => requestPermission(b, b.info.id, b.info.title, 'Bash', 'Bash: rm -rf dist build', JSON.stringify({ command: 'rm -rf dist build', description: 'Clean the build output' }, null, 2)))
+      }
+
       // Keep the office moving a little.
       const acts: [Activity, string][] = [
         ['read', 'src/world/layout.ts'],
@@ -421,8 +436,17 @@ export function createStubBridge(): AgentOfficeBridge {
 
   return {
     onEvent: (cb) => (eventCbs.add(cb), () => eventCbs.delete(cb)),
-    onSettings: () => () => undefined,
-    getSettings: async () => settings,
+    onSettings: (cb) => (settingsCbs.add(cb), () => settingsCbs.delete(cb)),
+    getSettings: async () => ({ ...settings }),
+    setAllowOrders: async (value) => {
+      if (typeof value !== 'boolean') throw new Error('invalid value: expected true or false')
+      settings.allowOrders = value
+      settingsCbs.forEach((cb) => cb({ ...settings }))
+      return { ...settings }
+    },
+    quit: async () => {
+      document.body.innerHTML = '<p style="margin:40px;font:14px sans-serif;color:#888">Agent Office has quit (preview).</p>'
+    },
     listThemes: async () => [{ name: 'office', displayName: 'Office' }],
     loadTheme: async (name) => {
       const baseUrl = `/themes/${encodeURIComponent(name)}/`
@@ -497,7 +521,7 @@ export function createStubBridge(): AgentOfficeBridge {
         if (!req.cwd.trim()) throw new Error('Pick a folder first')
         if (/missing|nope/i.test(req.cwd)) throw new Error(`Folder not found: ${req.cwd}`)
         const s = create(req.provider === 'codex' && !req.title?.trim() ? { ...req, title: req.model?.trim() || 'gpt-6-luna', model: req.model?.trim() || 'gpt-6-luna' } : req)
-        if (s.info.surface === 'chat') codex.add(s.info.id)
+        if (s.info.surface === 'chat') codex.add(s.info.id, req.resume ? { history: true, autoplay: false } : undefined)
         pushSessions()
         // Only the terminal stub has a folder-trust question.
         const untrusted = s.info.surface === 'terminal' && /untrusted/i.test(req.cwd)
@@ -528,6 +552,17 @@ export function createStubBridge(): AgentOfficeBridge {
       pickFolder: async () => {
         const samples = ['C:\\Users\\Harry\\source\\repos\\new-project', 'C:\\Users\\Harry\\source\\repos\\untrusted-demo', 'D:\\work\\api-server']
         return samples[counter % samples.length]
+      },
+      history: async (provider, cwd) => {
+        await new Promise((r) => setTimeout(r, 350))
+        if (provider !== 'codex' || /empty|new-project/i.test(cwd)) return []
+        if (/broken/i.test(cwd)) throw new Error('Codex could not list the earlier conversations: the Codex app-server is not running')
+        const now = Date.now()
+        return [
+          { id: 'thr-old', preview: 'Create a file hello.txt containing the word hi', updatedAt: now - 12 * 60_000, model: 'gpt-6-luna' },
+          { id: 'thr-older', preview: 'Explain how this project is put together, then list the three riskiest modules and say why each one is risky', updatedAt: now - 26 * 3_600_000, model: 'gpt-6.1-sol' },
+          { id: 'thr-oldest', preview: '', updatedAt: now - 40 * 86_400_000 }
+        ]
       },
       onChanged: (cb) => (sessionCbs.add(cb), () => sessionCbs.delete(cb))
     },

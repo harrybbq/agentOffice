@@ -13,8 +13,11 @@ import type {
   PermissionRequestInfo,
   ProviderId
 } from '../shared/sessions'
+import { asPermissionRisk, type PermissionRisk } from '../shared/permissionText'
 
 export const PERMISSION_DETAIL_MAX = 4096
+export const PERMISSION_QUESTION_MAX = 240
+export const PERMISSION_RISK_NOTE_MAX = 60
 export const PERMISSION_SUMMARY_MAX = 200
 export const DENY_MESSAGE_MAX = 1000
 export const DEFAULT_DENY_MESSAGE = 'Denied from the Agent Office CEO desk.'
@@ -29,6 +32,10 @@ export interface NewPermission {
   toolName: string
   summary: string
   detail: string
+  /** The plain one-sentence question (shared/permissionText.ts). Default: the summary. */
+  question?: string
+  risk?: PermissionRisk
+  riskNote?: string
 }
 
 export interface PermissionHandlers {
@@ -86,6 +93,12 @@ export class PermissionRegistry {
     return [...this.pending.values()].map((p) => ({ ...p.info }))
   }
 
+  /** One pending request, as the renderer sees it. */
+  get(id: string): PermissionRequestInfo | undefined {
+    const p = this.pending.get(id)
+    return p ? { ...p.info } : undefined
+  }
+
   count(sessionId: string): number {
     let n = 0
     for (const p of this.pending.values()) if (p.info.sessionId === sessionId) n++
@@ -104,18 +117,25 @@ export class PermissionRegistry {
     const id = `perm-${Date.now().toString(36)}-${(++this.seq).toString(36)}`
     const onAbort = () => this.resolveElsewhere(id)
     handlers.signal?.addEventListener('abort', onAbort, { once: true })
+    const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
+    const summary = truncate(oneLine(req.summary), PERMISSION_SUMMARY_MAX)
+    const info: PermissionRequestInfo = {
+      id,
+      sessionId: req.sessionId,
+      agentId: req.agentId,
+      displayName: truncate(req.displayName, 100),
+      provider: req.provider,
+      toolName: truncate(req.toolName, 200),
+      summary,
+      detail: truncate(req.detail, PERMISSION_DETAIL_MAX),
+      question: truncate(oneLine(req.question ?? '') || summary, PERMISSION_QUESTION_MAX),
+      risk: asPermissionRisk(req.risk),
+      createdAt: Date.now()
+    }
+    const note = oneLine(req.riskNote ?? '')
+    if (note && info.risk !== 'normal') info.riskNote = truncate(note, PERMISSION_RISK_NOTE_MAX)
     this.pending.set(id, {
-      info: {
-        id,
-        sessionId: req.sessionId,
-        agentId: req.agentId,
-        displayName: truncate(req.displayName, 100),
-        provider: req.provider,
-        toolName: truncate(req.toolName, 200),
-        summary: truncate(req.summary.replace(/\s+/g, ' ').trim(), PERMISSION_SUMMARY_MAX),
-        detail: truncate(req.detail, PERMISSION_DETAIL_MAX),
-        createdAt: Date.now()
-      },
+      info,
       handlers,
       unlisten: () => handlers.signal?.removeEventListener('abort', onAbort)
     })

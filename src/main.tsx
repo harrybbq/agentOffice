@@ -26,6 +26,7 @@ function watchOnly(real: Partial<AgentOfficeBridge>): AgentOfficeBridge {
       stop: async () => undefined,
       interrupt: async () => undefined,
       pickFolder: async () => null,
+      history: async () => [],
       onChanged: none
     },
     terminal: {

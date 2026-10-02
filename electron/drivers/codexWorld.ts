@@ -4,6 +4,7 @@
 //
 // Sub-agents were not exercised in the spikes, so everything about them is parsed defensively.
 import type { Activity } from '../../shared/events'
+import { relativeTo } from '../../shared/paths'
 import { CAPTURE_TOOL_PATTERN } from '../adapters/claude-code-hooks'
 import { arr, commandIntent, innerCommand, isRecord, str } from './codexProtocol'
 
@@ -14,8 +15,11 @@ export interface WorldActivity {
   detail: string
 }
 
-/** What `item/started` means for the world, or null when the item is not an activity (messages, reasoning, plans). */
-export function worldActivityForItem(item: unknown): WorldActivity | null {
+/**
+ * What `item/started` means for the world, or null when the item is not an activity (messages,
+ * reasoning, plans). `cwd` is the session's folder: changed files under it are named relative to it.
+ */
+export function worldActivityForItem(item: unknown, cwd?: string): WorldActivity | null {
   if (!isRecord(item)) return null
   switch (item.type) {
     case 'commandExecution': {
@@ -28,7 +32,7 @@ export function worldActivityForItem(item: unknown): WorldActivity | null {
     }
     case 'fileChange': {
       const paths = arr(item.changes)
-        .map((c) => (isRecord(c) ? str(c.path) : ''))
+        .map((c) => (isRecord(c) ? relativeTo(str(c.path), cwd) : ''))
         .filter((p) => p.length > 0)
       const more = paths.length > 1 ? ` (+${paths.length - 1} more)` : ''
       return { activity: 'write', detail: paths.length > 0 ? `${paths[0]}${more}` : '' }
