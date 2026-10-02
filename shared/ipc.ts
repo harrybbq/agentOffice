@@ -2,6 +2,7 @@
 import type { AgentEvent } from './events'
 import type { ThemeManifest } from './theme'
 import type { OrderRequest, OrderResult } from './orders'
+import type { ApprovalMode, AutoAllowed, HeldRequest } from './approvals'
 import type { BoardSettings, BoardSnapshot } from './board'
 import type { ChatEvent, ChatItem } from './chat'
 import type { AgentDetails } from './inspector'
@@ -33,6 +34,8 @@ export const IPC = {
   sendOrder: 'agent-office:send-order',
   /** renderer -> main (invoke): the "Allow CEO orders" switch (also in the tray). Returns the new settings. */
   setAllowOrders: 'agent-office:set-allow-orders',
+  /** invoke: 'all' | 'important' | 'auto' -> RendererSettings (shared/approvals.ts) */
+  setApprovalMode: 'agent-office:set-approval-mode',
   /** renderer -> main (invoke): quit the app (closing the window only hides it to the tray). */
   quit: 'agent-office:quit',
   /** renderer -> main (invoke): open an http(s) link of a chat answer in the system browser. */
@@ -121,6 +124,17 @@ export const IPC = {
   /** invoke */
   listPermissions: 'agent-office:permissions:list',
   decidePermission: 'agent-office:permissions:decide',
+  /** invoke: requests the app allowed without asking, newest first */
+  recentAutoAllowed: 'agent-office:permissions:auto',
+  /** main -> renderer: one AutoAllowed */
+  autoAllowed: 'agent-office:permissions:auto-allowed',
+  /** invoke: dangerous requests saved for the user (auto mode) */
+  heldList: 'agent-office:permissions:held',
+  /** invoke: the user approves / dismisses a held request */
+  heldApprove: 'agent-office:permissions:held-approve',
+  heldDismiss: 'agent-office:permissions:held-dismiss',
+  /** main -> renderer: full HeldRequest[] */
+  heldChanged: 'agent-office:permissions:held-changed',
   /** main -> renderer: full PermissionRequestInfo[] of pending requests */
   permissionsChanged: 'agent-office:permissions:changed'
 } as const
@@ -144,6 +158,8 @@ export interface RendererSettings {
   overlay: boolean
   /** Tray "Allow CEO orders" (on by default; untick to make the app watch-only). */
   allowOrders: boolean
+  /** What the user is asked about: everything, important things only, or nothing but the dangerous (auto). */
+  approvalMode?: ApprovalMode
   /** Office-wide mode ends after this long at the latest. */
   officeWideTimeoutMs: number
   /** The Windows build number (e.g. 26200) for xterm's ConPTY handling; 0 on other platforms. */
@@ -160,6 +176,8 @@ export interface AgentOfficeBridge {
   /** Turns CEO orders on or off (the tray's "Allow CEO orders"). Resolves with the settings that
    *  now apply; onSettings fires as well. Rejects if `value` is not a boolean. */
   setAllowOrders(value: boolean): Promise<RendererSettings>
+  /** What the user is asked about (shared/approvals.ts). Requests already waiting are settled by the new rule. */
+  setApprovalMode?(mode: ApprovalMode): Promise<RendererSettings>
   /** Quits Agent Office: hosted sessions are stopped, as with the tray's Quit. */
   quit(): Promise<void>
   /** Opens an absolute http(s) URL in the system browser. Resolves false if the main process
@@ -251,6 +269,16 @@ export interface AgentOfficeBridge {
     list(): Promise<PermissionRequestInfo[]>
     decide(id: string, decision: PermissionDecision): Promise<PermissionOutcome>
     onChanged(cb: (pending: PermissionRequestInfo[]) => void): () => void
+    /** What the app allowed without asking (the "Handled for you" list), newest first. */
+    recentAuto?(): Promise<AutoAllowed[]>
+    onAuto?(cb: (entry: AutoAllowed) => void): () => void
+    /** Dangerous requests that were refused for now and saved for the user while auto-approving. */
+    held?(): Promise<HeldRequest[]>
+    onHeld?(cb: (held: HeldRequest[]) => void): () => void
+    /** Approve a held request: the agent is told it may do it now. Resolves with a reason if it could not be told. */
+    approveHeld?(id: string): Promise<{ ok: boolean; reason?: string }>
+    /** Drop a held request without doing it. */
+    dismissHeld?(id: string): Promise<boolean>
   }
 
   /** Progress bars (shared/progress.ts). Absent with a main process from before them. */

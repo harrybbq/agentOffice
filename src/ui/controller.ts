@@ -30,6 +30,7 @@ import { appendLog, cleanError, orderSummary, orderTargets, pushRecent, retainEx
 import type { LogEntry, OrderSummary } from './format'
 import { approvalsBridge, isApprovalMode, pushHandled, toggleMute, wantsAttention } from './approvals'
 import type { ApprovalMode, AutoAllowed } from './approvals'
+import type { HeldRequest } from '../../shared/approvals'
 import { cleanSnapshot, progressById, signBars } from './progress'
 import { EMPTY_RECENT, recentReducer, restoreSelection, restoreSummary } from './restore'
 import type { RecentState, RestoreSummary } from './restore'
@@ -147,6 +148,11 @@ export interface AppState {
   // ---- approvals: what the app allowed without asking ----
   /** Routine requests allowed automatically, newest first (the inbox's "Handled for you"). */
   handled: AutoAllowed[]
+  /** Dangerous requests that were not done and wait for the user ("Held for you"), newest first. */
+  held: HeldRequest[]
+  /** Held requests being approved/dismissed right now, and the last error per request. */
+  heldBusy: ReadonlySet<string>
+  heldError: Readonly<Record<string, string>>
 
   // ---- progress bars (shared/progress.ts) ----
   /** Each live session's progress, by session id (empty with a main process from before them). */
@@ -290,6 +296,9 @@ export class AppController {
       agentDetails: null,
       agentStatus: 'none',
       handled: [],
+      held: [],
+      heldBusy: new Set<string>(),
+      heldError: {},
       progress: {},
       orders: []
     })
@@ -378,6 +387,20 @@ export class AppController {
         if (Array.isArray(list)) this.store.set((s) => ({ handled: pushHandled(pushedAuto ? s.handled : [], list) }))
       })
       .catch((err) => console.warn('[agent-office] could not read the handled requests', err))
+
+    // Dangerous requests held for the user while the app approves the rest.
+    const perms = b.permissions
+    let pushedHeld = false
+    perms.onHeld?.((held) => {
+      pushedHeld = true
+      this.store.set({ held: Array.isArray(held) ? held : [] })
+    })
+    void perms
+      .held?.()
+      .then((held) => {
+        if (!pushedHeld && Array.isArray(held)) this.store.set({ held })
+      })
+      .catch((err) => console.warn('[agent-office] could not read the held requests', err))
 
     try {
       this.applySettings(await b.getSettings())
@@ -713,6 +736,47 @@ export class AppController {
         console.warn('[agent-office] could not read the agent details', err)
         if (this.watching === want && this.store.get().agentId === want) this.store.set({ agentStatus: 'unknown' })
       })
+  }
+
+  // ---- held: dangerous requests saved for the user ----------------------------------------------
+
+  private heldBusy(id: string, on: boolean): void {
+    this.store.set((s) => {
+      const next = new Set(s.heldBusy)
+      if (on) next.add(id)
+      else next.delete(id)
+      return { heldBusy: next }
+    })
+  }
+
+  /** The user approves a held request: the team is told and may do it now. */
+  async approveHeld(id: string): Promise<void> {
+    const api = this.bridge.permissions.approveHeld
+    if (!api) return
+    this.heldBusy(id, true)
+    this.store.set((s) => ({ heldError: { ...s.heldError, [id]: '' } }))
+    try {
+      const r = await api.call(this.bridge.permissions, id)
+      if (!r.ok) this.store.set((s) => ({ heldError: { ...s.heldError, [id]: r.reason ?? 'Could not approve it' } }))
+    } catch (err) {
+      this.store.set((s) => ({ heldError: { ...s.heldError, [id]: cleanError(err) } }))
+    } finally {
+      this.heldBusy(id, false)
+    }
+  }
+
+  /** The user does not want a held request done. */
+  async dismissHeld(id: string): Promise<void> {
+    const api = this.bridge.permissions.dismissHeld
+    if (!api) return
+    this.heldBusy(id, true)
+    try {
+      await api.call(this.bridge.permissions, id)
+    } catch (err) {
+      this.store.set((s) => ({ heldError: { ...s.heldError, [id]: cleanError(err) } }))
+    } finally {
+      this.heldBusy(id, false)
+    }
   }
 
   // ---- approvals: ask about everything, or only about what matters ------------------------------

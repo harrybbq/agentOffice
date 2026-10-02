@@ -231,17 +231,17 @@ t('handled rows: who + the action phrase; a tag says why it was allowed', () => 
 })
 
 t('approval modes: labels for the control, the status bar and the help line', () => {
-  assert.deepEqual(APPROVAL_MODES.map((m) => [m.value, m.label]), [['important', 'Important things only'], ['all', 'Everything'], ['auto', 'Nothing (muted)']])
+  assert.deepEqual(APPROVAL_MODES.map((m) => [m.value, m.label]), [['important', 'Important things only'], ['all', 'Everything'], ['auto', 'Only dangerous things']])
   assert.equal(approvalStatus('important'), 'Approvals: important only')
   assert.equal(approvalStatus('all'), 'Approvals: everything')
-  assert.equal(approvalStatus('auto'), 'Approvals: muted (auto-allowing)')
+  assert.equal(approvalStatus('auto'), 'Approvals: automatic')
   assert.match(approvalHelp('important'), /^Routine work inside the project \(reading and editing files, tests, builds, searches\) is allowed automatically\. Installs, deletes, pushes, anything outside the project and anything unusual still comes to you\.$/)
-  assert.match(approvalHelp('auto'), /Dangerous ones still ask/)
+  assert.match(approvalHelp('auto'), /Held for you/)
   assert.ok(isApprovalMode('auto') && isApprovalMode('all') && isApprovalMode('important'))
   assert.ok(!isApprovalMode('none') && !isApprovalMode(undefined) && !isApprovalMode(1))
   assert.ok(isMuted('auto') && !isMuted('important') && !isMuted('all') && !isMuted(null))
-  assert.equal(MUTE_TITLE, 'Mute: allow requests for me (dangerous ones still ask)')
-  assert.equal(UNMUTE_TITLE, 'Unmute: ask me again')
+  assert.equal(MUTE_TITLE, 'Approve for me (dangerous requests are held for you, not done)')
+  assert.equal(UNMUTE_TITLE, 'Ask me again before things are done')
 })
 
 t('mute: remembers the mode that was active and goes back to it', () => {

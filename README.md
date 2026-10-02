@@ -458,6 +458,21 @@ scratch folder: it starts a session, leaves a permission request pending, kills 
 tree, and has a new process bring the session back, wake it and ask it what it was doing (two short
 Claude turns on Haiku; with `--codex` two short Codex turns as well).
 
+## Approvals: what you are asked about
+
+Set in the CEO inbox ("Ask me about"), with the inbox's mute button, or in the tray. Rules: `shared/approvals.ts`.
+
+| Level | What happens |
+|---|---|
+| **Only dangerous things** (default) | Every request is allowed for you and listed under "Handled for you". A dangerous request is **not done and does not block the team**: it is refused for now with a fixed "held for the user" message, saved under **Held for you**, and the team carries on with its other work. Approve it and the team is told and may do it (its retry is let through once, within 30 minutes); dismiss it and nothing happens. |
+| Important things only | Routine work inside the project (reading and editing files, tests, builds, read-only and local git commands, web lookups, helper agents) is allowed for you. Everything else comes to you and the team waits. |
+| Everything | Every request comes to you. |
+
+Dangerous = deleting folders, force-pushing, discarding uncommitted work, running downloaded code, administrator
+rights, secrets files, agent settings (the red badge; see `shared/permissionText.ts`). A dangerous request is never
+allowed without you, in any level. The decision is made by fixed rules on the request as the card would show it,
+never by a model. Held requests live in memory: they are gone when the app closes or the session ends.
+
 ## Office board
 
 Teams that work in the same repository tell each other what they are doing, so no work is done

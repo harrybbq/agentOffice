@@ -37,6 +37,10 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   const open = useAppState((s) => s.layout.inboxOpen)
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
   const handled = useAppState((s) => s.handled)
+  const held = useAppState((s) => s.held)
+  const heldBusy = useAppState((s) => s.heldBusy)
+  const heldError = useAppState((s) => s.heldError)
+  const heldOpen = held.filter((h) => !h.approvedAt)
   const handledOpen = useAppState((s) => s.layout.handledOpen)
   // Re-read with every settings change: null with a main process that has no approval modes.
   useAppState((s) => s.settings)
@@ -53,10 +57,11 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   const listRef = useRef<HTMLDivElement>(null)
 
   const others = useMemo(() => terminalOnlyWaiting(waiting, permissions, sessions), [waiting, permissions, sessions])
-  const total = permissions.length + others.length
+  // Held requests are the ones that still need the user, so they count like pending ones.
+  const total = permissions.length + others.length + heldOpen.length
   const cur = Math.min(active, Math.max(0, permissions.length - 1))
   // While muted only a dangerous request asks for attention; what was handled never does.
-  const attention = muted ? permissions.some((p) => wantsAttention(mode, p.risk)) : total > 0
+  const attention = muted ? heldOpen.length > 0 || permissions.some((p) => wantsAttention(mode, p.risk)) : total > 0
   const shown = handledRows(handled)
 
   useEffect(() => {
@@ -193,6 +198,48 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
       {open && (
         <div className="inbox-body" ref={listRef} tabIndex={0} onKeyDown={onKey} aria-label="Pending requests. A allows (twice for a risky one), Shift+A allows all that are not risky, D denies, arrows move.">
           {total === 0 && resolved.length === 0 && <p className="inbox-empty">{muted ? 'Nothing is waiting on you. Requests are being allowed for you.' : 'Nothing is waiting on you.'}</p>}
+
+          {held.length > 0 && (
+            <div className="held">
+              <h3 className="inbox-sub">Held for you ({heldOpen.length})</h3>
+              <p className="held-help">High-risk requests that were not done. The team is carrying on with its other work.</p>
+              {held.map((h) => {
+                const badge = riskBadge(h.risk, h.riskNote)
+                const busy = heldBusy.has(h.id)
+                const error = heldError[h.id]
+                const parts = questionParts(permissionHeadline(h))
+                return (
+                  <div key={h.id} className={cx('card held-card', badge && `risk-${badge.tone}`, !!h.approvedAt && 'is-approved')}>
+                    <div className="card-top">
+                      <span className="card-swatch" style={{ background: colorOf(h.sessionId) }} />
+                      <button type="button" className="card-who card-who-btn" onClick={() => app.select(h.sessionId)} title="Show this team">
+                        {h.displayName}
+                      </button>
+                      <span className="card-provider">{providerName(h.provider)}</span>
+                      <span className="card-age">{ago(now - h.heldAt)}</span>
+                    </div>
+                    <p className="card-question" title={h.question}>
+                      {parts.map((part, k) => (part.code ? <code key={k}>{part.text}</code> : <span key={k}>{part.text}</span>))}
+                    </p>
+                    {badge && <span className={cx('risk-badge', `is-${badge.tone}`)}>{badge.text}</span>}
+                    {h.approvedAt ? (
+                      <p className="held-state">Approved. The team has been told and may do it now.</p>
+                    ) : (
+                      <div className="card-actions">
+                        <button type="button" className="btn btn-allow is-danger" disabled={busy} onClick={() => void app.approveHeld(h.id)} title="Tell the team it may do this now">
+                          Approve anyway
+                        </button>
+                        <button type="button" className="btn btn-deny" disabled={busy} onClick={() => void app.dismissHeld(h.id)} title="Do not do this">
+                          Dismiss
+                        </button>
+                      </div>
+                    )}
+                    {error && <p className="held-error">{error}</p>}
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
           {permissions.length >= 2 && bulk.allow.length >= 1 && (
             <div className="inbox-bulk">

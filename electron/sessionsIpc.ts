@@ -84,6 +84,10 @@ export function registerSessionIpc(opts: SessionIpcOptions): SessionIpc {
 
   handle(IPC.listPermissions, () => manager.listPermissions())
   handle(IPC.decidePermission, (id, decision) => manager.decide(id, decision))
+  handle(IPC.recentAutoAllowed, () => manager.recentAuto())
+  handle(IPC.heldList, () => manager.listHeld())
+  handle(IPC.heldApprove, (id) => manager.approveHeld(id))
+  handle(IPC.heldDismiss, (id) => manager.dismissHeld(id))
 
   // The inspector panel: read-only. One watch per window (keyed by its webContents id); a new watch
   // replaces the old one. Pushes only go to the app's current window.

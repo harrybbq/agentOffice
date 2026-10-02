@@ -38,6 +38,8 @@ import type { ProgressTracker } from './progress'
 import { PTY_MAX_WRITE_CHARS } from './ptyProtocol'
 import { assignTitles } from './sessionTitles'
 import { promptPreview, type SessionStore } from './sessionStore'
+import { heldApprovedMessage, type ApprovalMode, type AutoAllowed, type HeldRequest } from '../shared/approvals'
+import { permissionAction } from '../shared/permissionText'
 
 export const MAX_LIVE_SESSIONS = 8
 /** An exited session stays in the list this long, so its last screen and exit code can be seen. */
@@ -70,6 +72,12 @@ export interface SessionManagerOptions {
   worldTopLevel: () => { id: string; provider: string }[]
   onSessionsChanged(sessions: SessionInfo[]): void
   onPermissionsChanged(pending: PermissionRequestInfo[]): void
+  /** What the user is asked about (shared/approvals.ts). Absent = everything. */
+  approvals?: {
+    mode: () => ApprovalMode
+    onAuto?(entry: AutoAllowed): void
+    onHeld?(held: HeldRequest[]): void
+  }
   /** Output of a terminal the renderer is attached to. */
   onTerminalData(id: string, data: string): void
   /** A chat event of a session the renderer is attached to. */
@@ -177,11 +185,14 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
       this.providerTable.set(p.id, p)
       p.onChanged?.(() => this.providersChanged())
     }
-    this.permissions = new PermissionRegistry((pending) => {
-      opts.onPermissionsChanged(pending)
-      // The pending questions are part of what is saved about a session.
-      for (const s of this.sessions.values()) this.save(s)
-    })
+    this.permissions = new PermissionRegistry(
+      (pending) => {
+        opts.onPermissionsChanged(pending)
+        // The pending questions are part of what is saved about a session.
+        for (const s of this.sessions.values()) this.save(s)
+      },
+      opts.approvals ? { mode: opts.approvals.mode, onAuto: opts.approvals.onAuto, onHeld: opts.approvals.onHeld } : {}
+    )
     this.store = opts.restore?.store
     this.loadSaved()
   }
@@ -606,6 +617,8 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     const s = this.sessions.get(id)
     if (!s) return
     s.exitCode = exitCode
+    // A held request can only be approved by telling the agent, and this agent is gone.
+    this.permissions.dropHeld(id)
     this.leaveBoard(id, undefined)
     s.removeTimer = setTimeout(() => this.remove(id), EXITED_RETENTION_MS)
     s.removeTimer.unref?.()
@@ -1166,6 +1179,47 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     const driver = pending ? this.sessions.get(pending.sessionId)?.driver : undefined
     // Not pending any more (or never was): the registry knows which.
     return driver ? driver.answerPermission(id, parsed) : this.permissions.decide(id, parsed)
+  }
+
+  // ---- approvals: allowed without asking, and dangerous requests held for the user ----
+
+  recentAuto(): AutoAllowed[] {
+    return this.permissions.recentAuto()
+  }
+
+  listHeld(): HeldRequest[] {
+    return this.permissions.listHeld()
+  }
+
+  /** The user changed what they want to be asked about: settle what is already waiting. */
+  applyApprovalMode(): void {
+    this.permissions.applyMode()
+  }
+
+  /**
+   * The user approved a held request (renderer IPC only). The agent is told through its normal
+   * prompt path and its retry of that request is let through once. This is the user's own decision
+   * about one request, so it is not gated by "Allow CEO orders".
+   */
+  async approveHeld(id: unknown): Promise<{ ok: boolean; reason?: string }> {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 200) throw new Error('invalid request id')
+    const before = this.permissions.listHeld().find((h) => h.id === id)
+    if (!before) return { ok: false, reason: 'That request is no longer held' }
+    const s = this.sessions.get(before.sessionId)
+    if (!s || s.driver.state === 'exited') return { ok: false, reason: 'That session has ended, so it cannot be told. Dismiss the request, or wake the session first.' }
+    const held = this.permissions.approveHeld(id)
+    if (!held) return { ok: false, reason: 'That request was already approved' }
+    try {
+      const r = await s.driver.sendPrompt(heldApprovedMessage(permissionAction(held.question)), 'order')
+      return r.ok ? { ok: true } : { ok: false, reason: `Approved, but the session could not be told (${r.reason}). Ask it to try again.` }
+    } catch {
+      return { ok: false, reason: 'Approved, but the session could not be told. Ask it to try again.' }
+    }
+  }
+
+  dismissHeld(id: unknown): boolean {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 200) throw new Error('invalid request id')
+    return this.permissions.dismissHeld(id)
   }
 
   // ---- orders ----

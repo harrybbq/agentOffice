@@ -51,6 +51,7 @@ import { registerSessionIpc } from './sessionsIpc'
 import { ClaudeTranscripts } from './transcriptUsage'
 import { allowWebPermission, isExternalWebUrl } from './webPermissions'
 import { isValidThemeName, listThemes, loadTheme, registerThemeProtocol, registerThemeScheme } from './themes'
+import { isApprovalMode, type ApprovalMode } from '../shared/approvals'
 
 const HERE = dirname(fileURLToPath(import.meta.url)) // out/main
 const PRELOAD = join(HERE, '../preload/index.cjs')
@@ -239,6 +240,7 @@ function rendererSettings(): RendererSettings {
     theme: c.theme,
     overlay: c.overlay,
     allowOrders: c.allowOrders,
+    approvalMode: c.approvals.mode,
     officeWideTimeoutMs: c.officeWideMinutes * 60_000,
     windowsBuild: windowsBuildNumber(process.platform, release())
   }
@@ -322,6 +324,11 @@ function createSessions(): void {
     },
     onChatTap: (e) => preview?.observeChat(e),
     onPermissionsChanged: (pending) => toRenderer(IPC.permissionsChanged, pending),
+    approvals: {
+      mode: () => getConfig().approvals.mode,
+      onAuto: (entry) => toRenderer(IPC.autoAllowed, entry),
+      onHeld: (held) => toRenderer(IPC.heldChanged, held)
+    },
     onTerminalData: (id, data) => toRenderer(IPC.termData, { id, data }),
     onChatEvent: (e) => toRenderer(IPC.chatEvent, e),
     onProvidersChanged: (list) => toRenderer(IPC.providersChanged, list),
@@ -368,6 +375,15 @@ function registerIpc(): void {
       const on = parseAllowOrders(value)
       if (on === null) throw new Error('invalid value: expected true or false')
       setAllowOrders(on)
+      return rendererSettings()
+    })
+  )
+  // What the user is asked about. The inbox control, the mute button and the tray all end up here.
+  ipcMain.handle(
+    IPC.setApprovalMode,
+    guard((value: unknown) => {
+      if (!isApprovalMode(value)) throw new Error("invalid value: expected 'all', 'important' or 'auto'")
+      setApprovalMode(value)
       return rendererSettings()
     })
   )
@@ -578,6 +594,14 @@ function setAlwaysOnTop(on: boolean): void {
   rebuildTrayMenu()
 }
 
+function setApprovalMode(mode: ApprovalMode): void {
+  saveConfig({ approvals: { mode } })
+  pushSettings()
+  rebuildTrayMenu()
+  // Requests already waiting are settled by the new rule (allowed, or held if dangerous in auto mode).
+  sessions?.applyApprovalMode()
+}
+
 function setAllowOrders(on: boolean): void {
   saveConfig({ allowOrders: on })
   pushSettings()
@@ -692,6 +716,14 @@ function rebuildTrayMenu(): void {
         },
         { label: 'Theme', submenu: themeItems },
         { type: 'separator' },
+        {
+          label: 'Ask me about',
+          submenu: [
+            { label: 'Only dangerous things (approve the rest for me)', type: 'radio', checked: cfg.approvals.mode === 'auto', click: () => setApprovalMode('auto') },
+            { label: 'Important things only', type: 'radio', checked: cfg.approvals.mode === 'important', click: () => setApprovalMode('important') },
+            { label: 'Everything', type: 'radio', checked: cfg.approvals.mode === 'all', click: () => setApprovalMode('all') }
+          ]
+        },
         {
           label: 'Allow CEO orders',
           type: 'checkbox',

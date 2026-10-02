@@ -8,6 +8,7 @@ import type { AgentDetails } from '../shared/inspector'
 import type { ProgressSnapshot } from '../shared/progress'
 import { PREVIEW_IPC, type PreviewBlocked, type PreviewInfo } from '../shared/preview'
 import type { PermissionRequestInfo, ProviderInfo, SessionInfo } from '../shared/sessions'
+import type { AutoAllowed, HeldRequest } from '../shared/approvals'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_evt: IpcRendererEvent, payload: T) => cb(payload)
@@ -25,6 +26,7 @@ const bridge: AgentOfficeBridge = {
   loadTheme: (name) => ipcRenderer.invoke(IPC.loadTheme, name),
   sendOrder: (req) => ipcRenderer.invoke(IPC.sendOrder, req),
   setAllowOrders: (value) => ipcRenderer.invoke(IPC.setAllowOrders, value),
+  setApprovalMode: (mode) => ipcRenderer.invoke(IPC.setApprovalMode, mode),
   quit: () => ipcRenderer.invoke(IPC.quit),
   openExternal: (url) => ipcRenderer.invoke(IPC.openExternal, url),
 
@@ -83,7 +85,13 @@ const bridge: AgentOfficeBridge = {
   permissions: {
     list: () => ipcRenderer.invoke(IPC.listPermissions),
     decide: (id, decision) => ipcRenderer.invoke(IPC.decidePermission, id, decision),
-    onChanged: (cb) => subscribe<PermissionRequestInfo[]>(IPC.permissionsChanged, cb)
+    onChanged: (cb) => subscribe<PermissionRequestInfo[]>(IPC.permissionsChanged, cb),
+    recentAuto: () => ipcRenderer.invoke(IPC.recentAutoAllowed),
+    onAuto: (cb) => subscribe<AutoAllowed>(IPC.autoAllowed, cb),
+    held: () => ipcRenderer.invoke(IPC.heldList),
+    onHeld: (cb) => subscribe<HeldRequest[]>(IPC.heldChanged, cb),
+    approveHeld: (id) => ipcRenderer.invoke(IPC.heldApprove, id),
+    dismissHeld: (id) => ipcRenderer.invoke(IPC.heldDismiss, id)
   },
 
   progress: {

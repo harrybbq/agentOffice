@@ -8,6 +8,7 @@ import type { BoardSettings } from '../shared/board'
 import type { RestoreMode, RestoreSettings } from '../shared/restore'
 import { DEFAULT_BOARD_SETTINGS, normaliseBoardSettings } from './board'
 import { parseWindowStates, type WindowStates } from './windowState'
+import { DEFAULT_APPROVAL_MODE, isApprovalMode, type ApprovalMode } from '../shared/approvals'
 
 // Must run before app 'ready' and before anything reads userData. main.ts imports this module first.
 // AGENT_OFFICE_USER_DATA (testing): run a second, isolated instance with its own config/token/port.
@@ -21,6 +22,8 @@ export interface AppConfig {
   overlay: boolean
   /** Tray "Allow CEO orders": the speech bar may write to session inboxes. Off = read-only. */
   allowOrders: boolean
+  /** What the user is asked about (shared/approvals.ts). */
+  approvals: { mode: ApprovalMode }
   /** Office-wide CEO orders end after this many minutes at the latest. */
   officeWideMinutes: number
   /** The office board: the master switch and what happens on a conflicting edit (shared/board.ts). */
@@ -51,6 +54,7 @@ function defaults(): AppConfig {
     alwaysOnTop: false,
     overlay: false,
     allowOrders: true,
+    approvals: { mode: DEFAULT_APPROVAL_MODE },
     officeWideMinutes: 10,
     board: { ...DEFAULT_BOARD_SETTINGS },
     restore: { mode: 'last' },
@@ -77,6 +81,7 @@ function normalise(raw: unknown): { cfg: AppConfig; changed: boolean } {
     alwaysOnTop: pick(typeof o.alwaysOnTop === 'boolean', o.alwaysOnTop, d.alwaysOnTop),
     overlay: pick(typeof o.overlay === 'boolean', o.overlay, d.overlay),
     allowOrders: pick(typeof o.allowOrders === 'boolean', o.allowOrders, d.allowOrders),
+    approvals: pick(typeof o.approvals === 'object' && o.approvals !== null && isApprovalMode((o.approvals as { mode?: unknown }).mode), o.approvals, d.approvals),
     officeWideMinutes: pick(
       typeof o.officeWideMinutes === 'number' && o.officeWideMinutes >= 1 && o.officeWideMinutes <= 240,
       o.officeWideMinutes,

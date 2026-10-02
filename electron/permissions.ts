@@ -14,6 +14,17 @@ import type {
   ProviderId
 } from '../shared/sessions'
 import { asPermissionRisk, type PermissionRisk } from '../shared/permissionText'
+import {
+  approvalVerdict,
+  DEFAULT_APPROVAL_MODE,
+  HELD_APPROVAL_TTL_MS,
+  HELD_MESSAGE,
+  MAX_AUTO_KEPT,
+  MAX_HELD,
+  type ApprovalMode,
+  type AutoAllowed,
+  type HeldRequest
+} from '../shared/approvals'
 
 export const PERMISSION_DETAIL_MAX = 4096
 export const PERMISSION_QUESTION_MAX = 240
@@ -36,6 +47,19 @@ export interface NewPermission {
   question?: string
   risk?: PermissionRisk
   riskNote?: string
+  /** Routine work inside the project (PlainPermission.routine): may be allowed without asking. */
+  routine?: boolean
+}
+
+/** How the registry is told what the user wants to be asked about (shared/approvals.ts). */
+export interface ApprovalOptions {
+  /** The current mode; read on every request so a change applies to the next one. */
+  mode?: () => ApprovalMode
+  /** A request was allowed without asking. */
+  onAuto?: (entry: AutoAllowed) => void
+  /** The list of held (dangerous, saved for the user) requests changed. */
+  onHeld?: (held: HeldRequest[]) => void
+  now?: () => number
 }
 
 export interface PermissionHandlers {
@@ -52,7 +76,12 @@ interface Pending {
   info: PermissionRequestInfo
   handlers: PermissionHandlers
   unlisten: () => void
+  routine: boolean
 }
+
+/** Identifies "the same request again" (an agent retrying a held action the user approved). */
+const retryKey = (info: { sessionId: string; toolName: string; summary: string }): string =>
+  `${info.sessionId}\n${info.toolName}\n${info.summary}`
 
 const truncate = (s: string, max: number): string => (s.length > max ? `${s.slice(0, max - 1)}…` : s)
 
@@ -85,8 +114,177 @@ export class PermissionRegistry {
   /** Ids that were resolved recently, so a late click gets a precise answer. */
   private resolved = new Map<string, PermissionOutcome>()
   private seq = 0
+  /** Allowed without asking, newest first. */
+  private auto: AutoAllowed[] = []
+  /** Dangerous requests refused for now and saved for the user (auto mode). */
+  private held = new Map<string, HeldRequest>()
+  /** Held requests the user approved: the agent's retry is let through once, until the grant expires. */
+  private grants = new Map<string, number>()
 
-  constructor(private onChange: (pending: PermissionRequestInfo[]) => void = () => {}) {}
+  constructor(
+    private onChange: (pending: PermissionRequestInfo[]) => void = () => {},
+    private approvals: ApprovalOptions = {}
+  ) {}
+
+  private now(): number {
+    return this.approvals.now ? this.approvals.now() : Date.now()
+  }
+
+  /** What the user wants to be asked about. Without options: everything (the old behaviour). */
+  mode(): ApprovalMode {
+    return this.approvals.mode ? this.approvals.mode() : 'all'
+  }
+
+  // ---- allowed / held without the user ---------------------------------------------------------
+
+  recentAuto(): AutoAllowed[] {
+    return this.auto.map((e) => ({ ...e }))
+  }
+
+  listHeld(): HeldRequest[] {
+    return [...this.held.values()].map((h) => ({ ...h })).sort((a, b) => b.heldAt - a.heldAt)
+  }
+
+  /**
+   * The user approved a held request. The caller tells the agent; this lets the agent's retry of
+   * the same request through once. Returns the request, or null if it is not held (any more).
+   * Only reachable from renderer IPC.
+   */
+  approveHeld(id: unknown): HeldRequest | null {
+    if (typeof id !== 'string') return null
+    const h = this.held.get(id)
+    if (!h || h.approvedAt) return null
+    h.approvedAt = this.now()
+    this.grants.set(retryKey(h), h.approvedAt + HELD_APPROVAL_TTL_MS)
+    this.heldChanged()
+    return { ...h }
+  }
+
+  /** The user does not want it done (or it is no longer relevant). Only reachable from renderer IPC. */
+  dismissHeld(id: unknown): boolean {
+    if (typeof id !== 'string') return false
+    const h = this.held.get(id)
+    if (!h) return false
+    this.held.delete(id)
+    this.grants.delete(retryKey(h))
+    this.heldChanged()
+    return true
+  }
+
+  /** Held requests of a session that ended can no longer be approved. */
+  dropHeld(sessionId: string): void {
+    let n = 0
+    for (const [id, h] of [...this.held]) {
+      if (h.sessionId !== sessionId) continue
+      this.held.delete(id)
+      this.grants.delete(retryKey(h))
+      n++
+    }
+    if (n > 0) this.heldChanged()
+  }
+
+  /**
+   * The user changed the mode: requests already waiting are settled by the new rule (allowed, or
+   * held if dangerous in auto mode). Asking for more never un-answers anything.
+   */
+  applyMode(): void {
+    const mode = this.mode()
+    for (const [id, p] of [...this.pending]) {
+      const verdict = approvalVerdict(mode, { risk: p.info.risk, routine: p.routine })
+      if (verdict === 'allow') {
+        this.recordAuto(p.info, mode === 'auto' ? 'auto' : 'important')
+        this.finish(id, p, 'allowed', { behavior: 'allow' }, false)
+      } else if (verdict === 'hold') {
+        this.hold(p.info)
+        this.finish(id, p, 'denied', { behavior: 'deny', message: HELD_MESSAGE }, false)
+      }
+    }
+    this.changed()
+  }
+
+  /**
+   * What `add()` would do with such a request, without doing it: lets a driver skip the "waiting on
+   * the user" animation for something the user is not going to be asked about.
+   */
+  peek(req: { sessionId: string; toolName: string; summary: string; risk?: PermissionRisk; routine?: boolean }): 'ask' | 'allow' | 'hold' {
+    const summary = truncate(req.summary.replace(/\s+/g, ' ').trim(), PERMISSION_SUMMARY_MAX)
+    const until = this.grants.get(retryKey({ sessionId: req.sessionId, toolName: truncate(req.toolName, 200), summary }))
+    if (until !== undefined && until >= this.now()) return 'allow'
+    return approvalVerdict(this.mode(), { risk: asPermissionRisk(req.risk), routine: req.routine === true })
+  }
+
+  private takeGrant(key: string): boolean {
+    const until = this.grants.get(key)
+    if (until === undefined) return false
+    this.grants.delete(key)
+    for (const [id, h] of this.held) {
+      if (h.approvedAt && retryKey(h) === key) {
+        this.held.delete(id)
+        this.heldChanged()
+        break
+      }
+    }
+    return until >= this.now()
+  }
+
+  private recordAuto(info: PermissionRequestInfo, mode: AutoAllowed['mode']): void {
+    const entry: AutoAllowed = {
+      id: `auto-${this.now().toString(36)}-${(++this.seq).toString(36)}`,
+      sessionId: info.sessionId,
+      agentId: info.agentId,
+      displayName: info.displayName,
+      provider: info.provider,
+      question: info.question,
+      toolName: info.toolName,
+      at: this.now(),
+      mode
+    }
+    this.auto.unshift(entry)
+    if (this.auto.length > MAX_AUTO_KEPT) this.auto.length = MAX_AUTO_KEPT
+    try {
+      this.approvals.onAuto?.({ ...entry })
+    } catch (err) {
+      console.error('[agent-office] auto-approval listener failed:', err instanceof Error ? err.message : err)
+    }
+  }
+
+  private hold(info: PermissionRequestInfo): void {
+    const key = retryKey(info)
+    // The agent asked again although it was told to wait: one row, not two.
+    for (const h of this.held.values()) {
+      if (!h.approvedAt && retryKey(h) === key) {
+        h.heldAt = this.now()
+        this.heldChanged()
+        return
+      }
+    }
+    const id = `held-${this.now().toString(36)}-${(++this.seq).toString(36)}`
+    const h: HeldRequest = {
+      id,
+      sessionId: info.sessionId,
+      agentId: info.agentId,
+      displayName: info.displayName,
+      provider: info.provider,
+      toolName: info.toolName,
+      question: info.question,
+      risk: info.risk,
+      summary: info.summary,
+      detail: info.detail,
+      heldAt: this.now()
+    }
+    if (info.riskNote) h.riskNote = info.riskNote
+    this.held.set(id, h)
+    while (this.held.size > MAX_HELD) this.held.delete(this.held.keys().next().value as string)
+    this.heldChanged()
+  }
+
+  private heldChanged(): void {
+    try {
+      this.approvals.onHeld?.(this.listHeld())
+    } catch (err) {
+      console.error('[agent-office] held-request listener failed:', err instanceof Error ? err.message : err)
+    }
+  }
 
   /** Pending requests, oldest first. */
   list(): PermissionRequestInfo[] {
@@ -134,9 +332,30 @@ export class PermissionRegistry {
     }
     const note = oneLine(req.riskNote ?? '')
     if (note && info.risk !== 'normal') info.riskNote = truncate(note, PERMISSION_RISK_NOTE_MAX)
+
+    // What the user asked to be bothered with (shared/approvals.ts). The rule looks at the request
+    // exactly as the card would show it; a dangerous one is never allowed here.
+    const routine = req.routine === true
+    const mode = this.mode()
+    const granted = this.takeGrant(retryKey(info)) // the user approved this held request: its retry
+    const verdict = granted ? 'allow' : approvalVerdict(mode, { risk: info.risk, routine })
+    if (verdict !== 'ask') {
+      handlers.signal?.removeEventListener('abort', onAbort)
+      if (verdict === 'allow') this.recordAuto(info, granted ? 'held' : mode === 'auto' ? 'auto' : 'important')
+      else this.hold(info)
+      try {
+        if (verdict === 'allow') handlers.onResolved('allowed', { behavior: 'allow' })
+        else handlers.onResolved('denied', { behavior: 'deny', message: HELD_MESSAGE })
+      } catch (err) {
+        console.error('[agent-office] permission handler failed:', err instanceof Error ? err.message : err)
+      }
+      return null
+    }
+
     this.pending.set(id, {
       info,
       handlers,
+      routine,
       unlisten: () => handlers.signal?.removeEventListener('abort', onAbort)
     })
     this.changed()

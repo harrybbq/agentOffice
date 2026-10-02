@@ -437,7 +437,10 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     }
 
     const mapped = this.mapper.handle(body)
-    for (const e of mapped.events) this.ctx.sink.emit(e)
+    // A request that is answered without the user (routine, auto-approved or held) must not send
+    // anyone to the CEO's reception: drop the mapper's `waiting` events for it.
+    const quiet = mapped.kind === 'permission' && this.settlesWithoutUser(body, mapped.agentId, mapped.displayName)
+    for (const e of mapped.events) if (!(quiet && e.activity === 'waiting')) this.ctx.sink.emit(e)
     this.observer.observe(body, mapped)
     const steps = this.plan.observe(body, mapped)
     if (steps) this.progress({ kind: 'plan', steps })
@@ -563,8 +566,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     }
   }
 
-  /** Keeps the PermissionRequest hook open until the CEO office decides or Claude hangs up. */
-  private holdPermission(body: Record<string, unknown>, agentId: string, displayName: string, req: RequestContext): Promise<unknown> {
+  /** The request as the card would show it: the plain sentence, risk, and the board's conflict note. */
+  private describeRequest(body: Record<string, unknown>, agentId: string, displayName: string): { toolName: string; plain: PlainPermission; detail: string } {
     const toolName = typeof body.tool_name === 'string' ? body.tool_name : 'tool'
     // One plain sentence for the card. A subagent is named with the team it works for.
     const who = agentId === this.id ? displayName : `${displayName} (${this.title}'s team)`
@@ -576,7 +579,23 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       plain = conflict.plain
       detail = `${conflict.line}\n\n${detail}`
     }
-    // The `waiting` world event was emitted by the mapper already.
+    return { toolName, plain, detail }
+  }
+
+  /** Will this request be settled by the approval rules, with no card for the user? */
+  private settlesWithoutUser(body: Record<string, unknown>, agentId: string, displayName: string): boolean {
+    try {
+      const { toolName, plain } = this.describeRequest(body, agentId, displayName)
+      return this.ctx.permissions.peek({ sessionId: this.id, toolName, summary: summarise(toolName, body.tool_input), risk: plain.risk, routine: plain.routine }) !== 'ask'
+    } catch {
+      return false
+    }
+  }
+
+  /** Keeps the PermissionRequest hook open until the CEO office decides or Claude hangs up. */
+  private holdPermission(body: Record<string, unknown>, agentId: string, displayName: string, req: RequestContext): Promise<unknown> {
+    const { toolName, plain, detail } = this.describeRequest(body, agentId, displayName)
+    // The `waiting` world event was emitted by the mapper already (unless no card will be shown).
     return new Promise<unknown>((resolve) => {
       const id = this.ctx.permissions.add(
         {

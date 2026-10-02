@@ -64,9 +64,11 @@ export const APPROVAL_MODES: readonly { value: ApprovalMode; label: string; stat
   { value: 'all', label: 'Everything', status: 'Approvals: everything', help: 'Every permission request comes to you, routine ones too.' },
   {
     value: 'auto',
-    label: 'Nothing (muted)',
-    status: 'Approvals: muted (auto-allowing)',
-    help: 'Muted: requests are allowed for you and listed below. Dangerous ones still ask.'
+    label: 'Only dangerous things',
+    status: 'Approvals: automatic',
+    help:
+      'Requests are allowed for you and listed below. A dangerous one is not done: it is saved under "Held for you" ' +
+      'and the team carries on with its other work until you approve or dismiss it.'
   }
 ]
 
@@ -84,9 +86,9 @@ export function approvalHelp(mode: ApprovalMode): string {
 
 export const isMuted = (mode: ApprovalMode | null | undefined): boolean => mode === 'auto'
 
-export const MUTE_TITLE = 'Mute: allow requests for me (dangerous ones still ask)'
-export const UNMUTE_TITLE = 'Unmute: ask me again'
-export const MUTED_HEAD = 'Muted · allowing for you'
+export const MUTE_TITLE = 'Approve for me (dangerous requests are held for you, not done)'
+export const UNMUTE_TITLE = 'Ask me again before things are done'
+export const MUTED_HEAD = 'Approving for you'
 
 /** The mode to go back to when nothing (valid) was remembered. */
 export const DEFAULT_UNMUTED: Exclude<ApprovalMode, 'auto'> = 'important'

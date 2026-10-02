@@ -2537,3 +2537,37 @@ body.resizing-y .side {
   font-size: 12px;
   color: var(--text-dim, #9aa0b4);
 }
+
+/* CEO inbox: dangerous requests held for the user while the app approves the rest */
+.held {
+  margin-bottom: 10px;
+}
+.held-help {
+  margin: 2px 2px 8px;
+  font-size: 12px;
+  color: var(--text-3, #9aa0b4);
+}
+.held-card.is-approved {
+  opacity: 0.75;
+}
+.held-state {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-2, #c4c8d8);
+}
+.held-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger, #e5484d);
+}
+.card-who-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.card-who-btn:hover {
+  text-decoration: underline;
+}

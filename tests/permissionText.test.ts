@@ -152,3 +152,5 @@ t('routine: anything important still asks', () => {
 })
 
 console.log(`${n} permission-text tests passed`)
+
+await import('./approvals.test.ts')
