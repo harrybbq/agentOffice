@@ -514,3 +514,14 @@ export function duration(ms: number): string {
   if (s < 60) return `${s}s`
   return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
 }
+
+/**
+ * "Allow all" in the CEO inbox: everything except dangerous requests, which always need their own
+ * deliberate click. Returns what a bulk allow would approve and what it leaves behind.
+ */
+export function bulkAllowSplit<T extends { risk?: string }>(pending: readonly T[]): { allow: T[]; keep: T[] } {
+  const allow: T[] = []
+  const keep: T[] = []
+  for (const p of pending) (p.risk === 'danger' ? keep : allow).push(p)
+  return { allow, keep }
+}

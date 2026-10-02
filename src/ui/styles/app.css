@@ -2539,3 +2539,18 @@ body.resizing-y .side {
     display: none;
   }
 }
+
+/* CEO inbox: "Allow all" (never includes risky requests) */
+.inbox-bulk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 2px 8px;
+}
+.inbox-bulk-btn {
+  flex: 0 0 auto;
+}
+.inbox-bulk-note {
+  font-size: 12px;
+  color: var(--text-dim, #9aa0b4);
+}

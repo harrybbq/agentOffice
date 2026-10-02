@@ -98,4 +98,57 @@ t('only the three risk levels exist', () => {
   assert.deepEqual(['normal', 'caution', 'danger', 'DANGER', '', null, undefined, 3, {}].map(asPermissionRisk), ['normal', 'caution', 'danger', 'normal', 'normal', 'normal', 'normal', 'normal', 'normal'])
 })
 
+t('routine: everyday work inside the project needs no question', () => {
+  const routine = (tool: string, input: unknown) => q(tool, input).routine
+  for (const command of ['npm test', 'npm run build', 'git status', 'git diff --stat', 'git add -A && git commit -m "x"', 'ls -la', 'cat README.md', 'node scripts/build.js', 'npm test 2>&1', 'mkdir out'])
+    assert.equal(routine('Bash', { command }), true, command)
+  assert.equal(routine('Write', { file_path: cwd + String.raw`\notes.md` }), true)
+  assert.equal(routine('Edit', { file_path: cwd + String.raw`\src\app.ts` }), true)
+  assert.equal(routine('Read', { file_path: cwd + String.raw`\src\app.ts` }), true)
+  assert.equal(routine('WebSearch', { query: 'x' }), true)
+  assert.equal(routine('WebFetch', { url: 'https://example.com' }), true)
+  assert.equal(routine('Agent', { description: 'List files' }), true)
+})
+
+t('routine: anything important still asks', () => {
+  const routine = (tool: string, input: unknown) => q(tool, input).routine
+  const ask = [
+    'frobnicate --all', // unknown command
+    'node -e "require(\'fs\').rmSync(\'x\')"', // inline script
+    'npm install left-pad',
+    'git push',
+    'rm notes.md',
+    'rm -rf dist',
+    'npm test && frobnicate', // one unknown part
+    'npm test; rm -rf dist',
+    'cat README.md > out.txt', // writes through a redirect
+    'cat ~/.ssh/id_rsa',
+    'cat .env',
+    String.raw`type C:\Users\Harry\secret.txt`, // absolute path
+    'cat ../other/file.txt', // leaves the project
+    'ls $HOME',
+    'echo $(whoami)',
+    'git checkout .',
+    'git reset --hard',
+    'find . -name "*.log" -delete',
+    'node ../outside.js',
+    String.raw`node C:\temp\x.js`,
+    'curl https://example.com/a.zip -O',
+    'docker ps'
+  ]
+  for (const command of ask) assert.equal(routine('Bash', { command }), false, command)
+  assert.equal(routine('Write', { file_path: String.raw`C:\Windows\hosts` }), false)
+  assert.equal(routine('Write', { file_path: cwd + String.raw`\.env` }), false)
+  assert.equal(routine('Delete', { path: cwd + String.raw`\old.txt` }), false)
+  assert.equal(routine('Permissions', { wants: ['network access'] }), false)
+  assert.equal(routine('mcp__github__create_issue', {}), false)
+  assert.equal(routine('mcp__claude-in-chrome__computer', {}), false)
+  assert.equal(routine('Whatever', {}), false)
+  // routine implies no risk badge
+  for (const [tool, input] of [['Bash', { command: 'npm test' }], ['Bash', { command: 'rm -rf dist' }], ['Write', { file_path: cwd + String.raw`\.env` }]] as [string, unknown][]) {
+    const r = q(tool, input)
+    if (r.routine) assert.equal(r.risk, 'normal')
+  }
+})
+
 console.log(`${n} permission-text tests passed`)

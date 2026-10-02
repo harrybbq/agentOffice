@@ -11,6 +11,13 @@ export interface PlainPermission {
   risk: PermissionRisk
   /** Short reason shown next to the risk badge, e.g. "Deletes files". */
   riskNote?: string
+  /**
+   * Routine, low-stakes work the user need not be asked about when approvals are set to "important
+   * only": reading and editing files inside the project, read-only commands, tests, builds, local git,
+   * web lookups, helper agents. Never true unless risk is 'normal'. Unknown commands, inline scripts,
+   * installs, deletes, pushes, anything outside the project or touching secrets are NOT routine.
+   */
+  routine: boolean
 }
 
 export interface PermissionSubject {
@@ -56,6 +63,8 @@ interface CommandRule {
   note?: string
   /** Don't append the raw command in backticks (the sentence already says it all). */
   bare?: boolean
+  /** Safe to run without asking in "important only" mode (see PlainPermission.routine). */
+  routine?: boolean
 }
 
 // First match wins. Order: most dangerous first.
@@ -72,18 +81,18 @@ const COMMAND_RULES: CommandRule[] = [
   { test: /\b(npm|pnpm|yarn|bun)\s+(publish)\b|\bcargo\s+publish\b|\btwine\s+upload\b/i, say: 'publish a package publicly', risk: 'danger', note: 'Publishes publicly' },
   { test: /\b(npm|pnpm|yarn|bun)\s+(i|install|add|ci)\b|\bpip\d?\s+install\b|\bcargo\s+(add|install)\b|\bwinget\s+install\b|\bchoco\s+install\b|\bbrew\s+install\b|\bapt(-get)?\s+install\b/i, say: 'install software packages', risk: 'caution', note: 'Installs software' },
   { test: /\b(curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b/i, say: (_m, cmd) => `download from ${hostOf(cmd) || 'the internet'}`, risk: 'caution', note: 'Uses the internet' },
-  { test: /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(pytest|vitest|jest|mocha)\b|\b(cargo|go|dotnet)\s+test\b|\btsx\s+tests?[\\/]/i, say: 'run the tests' },
-  { test: /\b(npm|pnpm|yarn|bun)\s+run\s+(build|typecheck|lint|format)\b|\b(tsc|eslint|prettier)\b|\b(cargo|go|dotnet)\s+build\b|\bmake\b/i, say: 'build or check the project' },
-  { test: /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview)\b/i, say: 'start the app' },
-  { test: /\bgit\s+(status|diff|log|show|branch|remote|rev-parse|ls-files|blame)\b/i, say: 'look at the git history (read-only)' },
-  { test: /\bgit\s+(add|commit|stash|tag|switch|checkout|merge|rebase|pull|fetch|worktree)\b/i, say: 'update the local git repository' },
+  { test: /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(pytest|vitest|jest|mocha)\b|\b(cargo|go|dotnet)\s+test\b|\btsx\s+tests?[\\/]/i, say: 'run the tests', routine: true },
+  { test: /\b(npm|pnpm|yarn|bun)\s+run\s+(build|typecheck|lint|format)\b|\b(tsc|eslint|prettier)\b|\b(cargo|go|dotnet)\s+build\b|\bmake\b/i, say: 'build or check the project', routine: true },
+  { test: /\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|preview)\b/i, say: 'start the app', routine: true },
+  { test: /\bgit\s+(status|diff|log|show|branch|remote|rev-parse|ls-files|blame)\b/i, say: 'look at the git history (read-only)', routine: true },
+  { test: /\bgit\s+(add|commit|stash|tag|switch|checkout|merge|rebase|pull|fetch|worktree)\b/i, say: 'update the local git repository', routine: true },
   { test: /\bdocker\b|\bdocker-compose\b|\bkubectl\b/i, say: 'run containers', risk: 'caution', note: 'Runs containers' },
-  { test: /\b(mkdir|md|new-item)\b/i, say: 'create a folder or file' },
-  { test: /\b(mv|move|move-item|ren|rename-item)\b/i, say: 'move or rename files' },
-  { test: /\b(cp|copy|copy-item|xcopy|robocopy)\b/i, say: 'copy files' },
-  { test: /^\s*(ls|dir|cat|type|get-content|get-childitem|grep|rg|findstr|find|head|tail|wc|tree|pwd|where|which|echo|select-string)\b/i, say: 'look at files (read-only)' },
+  { test: /\b(mkdir|md|new-item)\b/i, say: 'create a folder or file', routine: true },
+  { test: /\b(mv|move|move-item|ren|rename-item)\b/i, say: 'move or rename files', routine: true },
+  { test: /\b(cp|copy|copy-item|xcopy|robocopy)\b/i, say: 'copy files', routine: true },
+  { test: /^\s*(ls|dir|cat|type|get-content|get-childitem|grep|rg|findstr|find|head|tail|wc|tree|pwd|where|which|echo|select-string)\b/i, say: 'look at files (read-only)', routine: true },
   { test: /\b(node|python\d?|deno|bun|ruby|php|pwsh|powershell)\s+(-e|-c|--eval|-command)\b/i, say: 'run a short script' },
-  { test: /\b(node|python\d?|deno|bun|ruby|php|tsx|ts-node)\s+([\w./\\-]+\.\w+)/i, say: (m) => `run the script ${baseName(m[2])}`, bare: true }
+  { test: /\b(node|python\d?|deno|bun|ruby|php|tsx|ts-node)\s+([\w./\\-]+\.\w+)/i, say: (m) => `run the script ${baseName(m[2])}`, bare: true, routine: true }
 ]
 
 function hostOf(text: string): string {
@@ -104,16 +113,60 @@ function innerCommand(raw: string): string {
   return c.trim()
 }
 
-function describeCommand(raw: string): { say: string; risk: PermissionRisk; note?: string } {
-  const cmd = innerCommand(raw)
-  if (!cmd) return { say: 'run a command', risk: 'normal' }
-  for (const r of COMMAND_RULES) {
-    const m = cmd.match(r.test)
-    if (!m) continue
-    const text = typeof r.say === 'function' ? r.say(m, cmd) : r.say
-    return { say: r.bare ? text : `${text} (${code(cmd)})`, risk: r.risk ?? 'normal', note: r.note }
+/** The first rule a command (or one segment of it) matches. */
+function ruleFor(cmd: string): { rule: CommandRule; m: RegExpMatchArray } | null {
+  for (const rule of COMMAND_RULES) {
+    const m = cmd.match(rule.test)
+    if (m) return { rule, m }
   }
-  return { say: `run the command ${code(cmd)}`, risk: 'normal' }
+  return null
+}
+
+/**
+ * Routine only if EVERY part of a chained command is a routine rule with no risk, nothing is
+ * redirected into a file, no command substitution is used, and a script being run is a plain
+ * relative path inside the project. One unknown or risky part makes the whole command "ask".
+ */
+function isRoutineCommand(cmd: string): boolean {
+  if (/`|\$\(|<\(/.test(cmd)) return false
+  const safe = cmd.replace(/\d?>&\d|\d?>\s*(\/dev\/null|\$null|nul)\b/gi, '')
+  // Anything that names a secrets file, agent settings, an absolute path, the home folder, a parent
+  // folder or an environment-variable path may reach outside the project: ask.
+  if (safe.split(/[\s"'=,;|&()]+/).some((word) => SENSITIVE.test(word) || AGENT_CONFIG.test(word))) return false
+  if (/(^|[\s"'=])([a-z]:[\\/]|[\\/]{1,2}[\w.$]|~)/i.test(safe) || /(^|[\s"'\\/])\.\.([\\/]|\s|$)/.test(safe)) return false
+  if (/\$env:|\$\{?[A-Za-z_]\w*\}?|%[A-Za-z_]\w*%/.test(safe)) return false
+  // Git commands that can discard or rewrite work, and find's own actions, are not routine.
+  if (/\bgit\s+(checkout|stash|rebase|merge|pull|restore|reset|clean|worktree)\b/i.test(safe)) return false
+  if (/\s-(delete|exec|execdir|ok)\b/i.test(safe)) return false
+  if (/>/.test(safe)) return false
+  const parts = safe
+    .split(/&&|\|\||;|\||\r?\n/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+  if (parts.length === 0) return false
+  return parts.every((part) => {
+    const hit = ruleFor(part)
+    if (!hit || !hit.rule.routine || (hit.rule.risk ?? 'normal') !== 'normal') return false
+    if (hit.rule.bare) {
+      // "run the script X": only a relative path that stays inside the project.
+      const script = hit.m[2] ?? ''
+      if (/^([a-z]:|[\\/]|~)/i.test(script) || script.split(/[\\/]/).includes('..')) return false
+    }
+    return true
+  })
+}
+
+function describeCommand(raw: string): { say: string; risk: PermissionRisk; note?: string; routine: boolean } {
+  const cmd = innerCommand(raw)
+  if (!cmd) return { say: 'run a command', risk: 'normal', routine: false }
+  const hit = ruleFor(cmd)
+  if (hit) {
+    const { rule: r, m } = hit
+    const text = typeof r.say === 'function' ? r.say(m, cmd) : r.say
+    const risk = r.risk ?? 'normal'
+    return { say: r.bare ? text : `${text} (${code(cmd)})`, risk, note: r.note, routine: risk === 'normal' && isRoutineCommand(cmd) }
+  }
+  return { say: `run the command ${code(cmd)}`, risk: 'normal', routine: false }
 }
 
 function where(file: string, cwd?: string): string {
@@ -144,28 +197,29 @@ export function plainPermission(p: PermissionSubject): PlainPermission {
   const input = obj(p.input)
   const tool = p.tool
   const t = tool.toLowerCase()
-  const done = (action: string, risk: PermissionRisk = 'normal', riskNote?: string): PlainPermission => ({
+  const done = (action: string, risk: PermissionRisk = 'normal', riskNote?: string, routine = false): PlainPermission => ({
     question: `${who} wants to ${action}.`,
     risk,
-    ...(riskNote ? { riskNote } : {})
+    ...(riskNote ? { riskNote } : {}),
+    routine: routine && risk === 'normal'
   })
 
   // ---- shell ----
   if (t === 'bash' || t === 'powershell' || t === 'command' || t === 'shell') {
     const d = describeCommand(str(input.command) || str(input.cmd) || str(input.script))
-    return done(d.say, d.risk, d.note)
+    return done(d.say, d.risk, d.note, d.routine)
   }
 
   // ---- files ----
   const file = str(input.file_path) || str(input.path) || str(input.notebook_path) || str(input.file)
   if (t === 'write' || t === 'create') {
     const r = fileRisk(file, p.cwd, true)
-    return done(`${t === 'create' ? 'create' : 'write'} the file ${baseName(file) || 'a file'}${where(file, p.cwd)}`, r.risk, r.riskNote)
+    return done(`${t === 'create' ? 'create' : 'write'} the file ${baseName(file) || 'a file'}${where(file, p.cwd)}`, r.risk, r.riskNote, file.length > 0)
   }
   if (t === 'edit' || t === 'multiedit' || t === 'notebookedit' || t === 'update') {
     const r = fileRisk(file, p.cwd, true)
     const more = typeof input.more === 'number' && input.more > 0 ? ` and ${input.more} more` : ''
-    return done(`change the file ${baseName(file) || 'a file'}${more}${where(file, p.cwd)}`, r.risk, r.riskNote)
+    return done(`change the file ${baseName(file) || 'a file'}${more}${where(file, p.cwd)}`, r.risk, r.riskNote, file.length > 0)
   }
   if (t === 'delete') {
     const r = fileRisk(file, p.cwd, true)
@@ -174,17 +228,17 @@ export function plainPermission(p: PermissionSubject): PlainPermission {
   if (t === 'read' || t === 'glob' || t === 'grep' || t === 'ls') {
     const target = file || str(input.pattern)
     const r = file ? fileRisk(file, p.cwd, false) : { risk: 'normal' as const }
-    return done(`read ${file ? `the file ${baseName(file)}` : target ? `files matching ${code(target)}` : 'files'}${where(file, p.cwd)}`, r.risk, r.riskNote)
+    return done(`read ${file ? `the file ${baseName(file)}` : target ? `files matching ${code(target)}` : 'files'}${where(file, p.cwd)}`, r.risk, r.riskNote, true)
   }
 
   // ---- web ----
-  if (t === 'webfetch') return done(`open the web page ${hostOf(str(input.url)) || clip(str(input.url)) || 'a web page'}`)
-  if (t === 'websearch') return done(`search the web for “${clip(str(input.query), 70)}”`)
+  if (t === 'webfetch') return done(`open the web page ${hostOf(str(input.url)) || clip(str(input.url)) || 'a web page'}`, 'normal', undefined, true)
+  if (t === 'websearch') return done(`search the web for “${clip(str(input.query), 70)}”`, 'normal', undefined, true)
 
   // ---- helpers ----
   if (t === 'agent' || t === 'task') {
     const what = str(input.description) || str(input.subagent_type)
-    return done(`start a helper agent${what ? ` to ${clip(what.charAt(0).toLowerCase() + what.slice(1), 70)}` : ''}`)
+    return done(`start a helper agent${what ? ` to ${clip(what.charAt(0).toLowerCase() + what.slice(1), 70)}` : ''}`, 'normal', undefined, true)
   }
 
   // ---- Codex "more access" ----

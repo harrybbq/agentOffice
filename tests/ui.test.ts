@@ -24,6 +24,7 @@ import {
   windowsPtyOption
 } from '../src/ui/format.ts'
 import type { LogEntry, TeamLike } from '../src/ui/format.ts'
+import { bulkAllowSplit } from '../src/ui/format.ts'
 import { appChord } from '../src/ui/keys.ts'
 import { Store } from '../src/ui/store.ts'
 
@@ -281,6 +282,14 @@ t('store notifies only on real changes and keeps untouched slices', () => {
   off()
   store.set({ a: 9 })
   assert.equal(calls, 2)
+})
+
+t('allow all never includes dangerous requests', () => {
+  const pending = [{ id: 'a', risk: 'normal' }, { id: 'b', risk: 'danger' }, { id: 'c', risk: 'caution' }, { id: 'd' }]
+  const { allow, keep } = bulkAllowSplit(pending)
+  assert.deepEqual(allow.map((p) => p.id), ['a', 'c', 'd'])
+  assert.deepEqual(keep.map((p) => p.id), ['b'])
+  assert.deepEqual(bulkAllowSplit([{ id: 'x', risk: 'danger' }]).allow, [])
 })
 
 console.log(`\n${pass} ui tests passed`)

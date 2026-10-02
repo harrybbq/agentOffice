@@ -5,7 +5,7 @@ import type { KeyboardEvent } from 'react'
 import type { PermissionRequestInfo } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
 import type { ResolvedPermission } from '../controller'
-import { ago, allowsByKey, DANGER_CONFIRM_MS, permissionHeadline, questionParts, riskBadge, stripToolPrefix, terminalOnlyWaiting } from '../format'
+import { ago, allowsByKey, bulkAllowSplit, DANGER_CONFIRM_MS, permissionHeadline, questionParts, riskBadge, stripToolPrefix, terminalOnlyWaiting } from '../format'
 import { cx, useNow } from '../hooks'
 import { IconAlert, IconBan, IconCheck, IconChevron, IconInbox, IconTerminal } from '../icons'
 import { Swatch } from './Sidebar'
@@ -78,6 +78,12 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
       return next
     })
   const allow = (p: PermissionRequestInfo) => void app.decide(p, { behavior: 'allow' })
+  // "Allow all" never includes dangerous requests: those keep their own deliberate click.
+  const bulk = bulkAllowSplit(permissions.filter((p) => !deciding.has(p.id)))
+  const allowAll = () => {
+    for (const p of bulk.allow) allow(p)
+    listRef.current?.focus()
+  }
   const startDeny = (p: PermissionRequestInfo) => {
     setReason('')
     setDenying(p.id)
@@ -100,6 +106,9 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
       listRef.current?.querySelector(`[data-card="${next}"]`)?.scrollIntoView({ block: 'nearest' })
     } else if (!p) {
       return
+    } else if (k === 'a' && ev.shiftKey) {
+      ev.preventDefault()
+      allowAll()
     } else if (k === 'a') {
       ev.preventDefault()
       // A dangerous request takes the click, or A twice.
@@ -147,8 +156,21 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
       </button>
 
       {open && (
-        <div className="inbox-body" ref={listRef} tabIndex={0} onKeyDown={onKey} aria-label="Pending requests. A allows (twice for a risky one), D denies, arrows move.">
+        <div className="inbox-body" ref={listRef} tabIndex={0} onKeyDown={onKey} aria-label="Pending requests. A allows (twice for a risky one), Shift+A allows all that are not risky, D denies, arrows move.">
           {total === 0 && resolved.length === 0 && <p className="inbox-empty">Nothing is waiting on you.</p>}
+
+          {permissions.length >= 2 && bulk.allow.length >= 1 && (
+            <div className="inbox-bulk">
+              <button type="button" className="btn btn-allow inbox-bulk-btn" onClick={allowAll} title="Allow every request that is not marked risky (Shift+A)">
+                Allow all {bulk.allow.length}
+              </button>
+              {bulk.keep.length > 0 && (
+                <span className="inbox-bulk-note">
+                  {bulk.keep.length} risky {bulk.keep.length === 1 ? 'request stays' : 'requests stay'} for you to check
+                </span>
+              )}
+            </div>
+          )}
 
           {permissions.map((p, i) => {
             const isOpen = expanded.has(p.id)
