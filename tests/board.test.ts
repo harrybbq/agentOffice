@@ -389,16 +389,26 @@ await t('board digest: content, framing, only when there is news (hash), capped,
   const all = m.board.read('B')
   assert.ok(all.length <= BOARD_READ_MAX_CHARS && all.length > BOARD_DIGEST_MAX_CHARS)
 
-  // No other LIVE team: nothing (an ended one is still listed by board_read for a while).
+  // A team that just ended is still news for ten minutes (what it changed matters to whoever comes
+  // next); after that, alone in the project, there is nothing to send.
   const solo = model()
   solo.add('A', 'Backend')
   solo.add('B', 'Frontend')
   solo.board.fileChanged('A', 'x.ts')
-  assert.ok(solo.board.digest('B'))
   solo.board.end('A')
+  const after = solo.board.digest('B')
+  assert.match(after?.text ?? '', /- Team "Backend" \[ended\]: no task announced; changed: x\.ts \(0 s ago\)/)
+  solo.board.digestSent('B', after!.hash)
   assert.equal(solo.board.digest('B'), null)
   assert.match(solo.board.read('B'), /Team "Backend" \[ended\]/)
-  assert.equal(solo.board.digest('A'), null)
+  assert.equal(solo.board.digest('A'), null) // an ended session gets nothing
+  solo.add('C', 'Late')
+  solo.tick(BOARD_ENDED_RETENTION_MS + 1000)
+  assert.match(solo.board.digest('C')?.text ?? '', /Team "Frontend"/)
+  assert.ok(!/Backend/.test(solo.board.digest('C')?.text ?? ''))
+  solo.board.end('B')
+  solo.tick(BOARD_ENDED_RETENTION_MS + 1000)
+  assert.equal(solo.board.digest('C'), null)
   assert.equal(solo.board.digest('nobody'), null)
 })
 

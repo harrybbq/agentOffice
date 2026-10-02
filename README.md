@@ -286,7 +286,7 @@ never goes on the board: a team's task is whatever it claimed.
 
 | | Claude Code | Codex |
 |---|---|---|
-| A **digest** with each new prompt (at most 1,500 characters; only when something changed since the last one; only when another live team shares the project) | the `UserPromptSubmit` hook's `additionalContext` (that hook gets a 2 s timeout) | a developer message added to the thread (`thread/inject_items`) before the turn starts; if that fails the turn starts without it |
+| A **digest** with each new prompt (at most 1,500 characters; only when something changed since the last one; only when another team shares the project, live or ended within the last 10 minutes) | the `UserPromptSubmit` hook's `additionalContext` (that hook gets a 2 s timeout) | a developer message added to the thread (`thread/inject_items`) before the turn starts; if that fails the turn starts without it |
 | A **warning** before changing a file another team changed in the last 30 minutes | the edit is denied once with the warning as the reason; the retry goes through (main thread and subagents) | `default` mode: the change is declined once and the warning follows as a message; `acceptEdits`: no approval exists to decline, so the warning arrives right after the change started |
 | **Tools** to read and write the board | MCP server `agent-office` (`--mcp-config`, added to your own servers), pre-allowed, so no permission prompt | MCP server `agent_office` in that thread's own config; no approval needed |
 

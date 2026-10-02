@@ -244,6 +244,8 @@ export class AppController {
         pushedBoard = true
         this.setBoard(snapshot)
       })
+      // The switches changed in the main process (the tray, or this panel): follow.
+      b.board.onSettingsChanged?.((settings) => this.store.set({ boardSettings: settings }))
     }
 
     try {

@@ -460,18 +460,20 @@ export class Board {
 
   /**
    * The digest for a session's next prompt, or null when there is nothing to send: the board is off,
-   * no other live team shares the project, or nothing changed since the digest it last got.
+   * no other team shares the project (live, or ended within the last ten minutes: what it changed is
+   * still news), or nothing changed since the digest it last got.
    */
   digest(sessionId: string): BoardDigest | null {
     if (!this.enabled) return null
     const me = this.branches.get(sessionId)
     if (!me || me.status === 'ended') return null
     this.sweep()
-    const live = this.others(me, false)
-    if (live.length === 0) return null
+    const everyone = this.others(me, true)
+    if (everyone.length === 0) return null
     const now = this.now()
-    // Live teams first; a team that ended a moment ago is still listed (what it changed is still news).
-    const all = [...live, ...this.others(me, true).filter((b) => b.status === 'ended')]
+    // Live teams first, then the ones that ended a moment ago.
+    const live = everyone.filter((b) => b.status !== 'ended')
+    const all = [...live, ...everyone.filter((b) => b.status === 'ended')]
     const teams = all.slice(0, DIGEST_TEAMS)
     const claims = this.projectClaims(me.project).filter((c) => c.sessionId !== sessionId)
     const notes = this.projectNotes(me.project).filter((n) => n.sessionId !== sessionId)

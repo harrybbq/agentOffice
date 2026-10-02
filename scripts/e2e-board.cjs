@@ -5,10 +5,11 @@
 //   npx electron-vite build            (the pty host is taken from out/main/ptyHost.js)
 //   npx electron scripts/e2e-board.cjs [--no-codex] [--skip-ask]      (--skip-ask leaves out step 2: one Claude turn less)
 //
-// Quota: 4 short Claude turns on `--model haiku` (two sessions), 1 short Codex turn at low effort.
+// Quota: 4 short Claude turns on `--model haiku` (two sessions, one after the other), 1 short Codex turn at low effort.
 //
 // What it checks:
 //   1. Team Alpha (Claude) creates notes.txt                -> the board lists the file
+//      Alpha is stopped (one session at a time: an ended team stays on the board for ten minutes)
 //   2. Team Beta (Claude) is asked what the board says      -> its prompt carried the digest, the answer names the file
 //   3. Beta is asked to edit notes.txt                      -> stopped ONCE with the warning, the retry reaches the user's card (with the conflict on it) and passes
 //   4. Beta is asked to claim a task and read the board     -> board_claim / board_read run with no permission prompt, as Beta
@@ -29,7 +30,7 @@ const { pathToFileURL } = require('node:url')
 const REPO = path.resolve(__dirname, '..')
 const ROOT = path.join(os.tmpdir(), 'agent-office-e2e-board')
 // Always the same folder (wiped at the start), so Claude Code's own folder-trust entry is written once.
-const WORK = path.join(ROOT, 'repo')
+let WORK = path.join(ROOT, 'repo')
 const USER_DATA = path.join(ROOT, 'userData')
 const BUNDLE_DIR = path.join(REPO, 'out', 'e2e') // inside the repo so `ws`, node-pty etc. resolve
 const PTY_HOST = path.join(REPO, 'out', 'main', 'ptyHost.js')
@@ -38,8 +39,14 @@ const WITH_CODEX = !process.argv.includes('--no-codex')
 const SKIP_ASK = process.argv.includes('--skip-ask')
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 
-fs.rmSync(WORK, { recursive: true, force: true })
-fs.mkdirSync(WORK, { recursive: true })
+try {
+  // Emptied, not removed: on Windows a folder some process still has open can't be deleted.
+  fs.mkdirSync(WORK, { recursive: true })
+  for (const name of fs.readdirSync(WORK)) fs.rmSync(path.join(WORK, name), { recursive: true, force: true })
+} catch {
+  WORK = path.join(ROOT, `repo-${Date.now().toString(36)}`)
+  fs.mkdirSync(WORK, { recursive: true })
+}
 fs.mkdirSync(USER_DATA, { recursive: true })
 app.setPath('userData', USER_DATA)
 app.on('window-all-closed', () => {})
@@ -332,19 +339,12 @@ async function main() {
     return info.id
   }
 
-  // ------------------------------------------------------------------ two Claude sessions, one repository
-  const alpha = await startClaude('Alpha', 'acceptEdits')
-  const beta = await startClaude('Beta', 'default')
-  await sleep(1500)
+  // ------------------------------------------------------------------ 1. Alpha, alone: changes a file, then leaves
+  // One session at a time (memory): an ended team stays on the board for ten minutes, and what it
+  // changed is still news and still a conflict for whoever comes next.
   const sessionsDir = path.join(USER_DATA, 'sessions')
-  const mcpFile = path.join(sessionsDir, `${beta}.mcp.json`)
-  const mcpText = fs.existsSync(mcpFile) ? fs.readFileSync(mcpFile, 'utf8') : ''
-  check('each Claude session got an MCP config naming the env var, not the token', /"agent-office"/.test(mcpText) && mcpText.includes('${AO_BOARD_TOKEN}') && !issued.get(beta).some((tok) => mcpText.includes(tok)))
-  const snap0 = board.snapshot()
-  check('both teams are on the board in ONE project (the git common dir)', snap0.branches.length === 2 && snap0.branches[0].project === snap0.branches[1].project && /\.git$/.test(snap0.branches[0].project), `${snap0.branches[0].projectLabel}: ${snap0.branches[0].project}`)
-  check('the board server was initialised by both sessions (their own tokens)', await until(() => [alpha, beta].every((id) => mcp.some((m) => m.sessionId === id && m.method === 'initialize')), 'MCP initialize', 20000))
-
-  // ------------------------------------------------------------------ 1. Alpha changes a file
+  const alpha = await startClaude('Alpha', 'acceptEdits')
+  await sleep(1500)
   let t = Date.now()
   await typePrompt(alpha, 'Create a file named notes.txt in the current folder that contains exactly one line: alpha. Use the Write tool, nothing else. Then reply with the single word: done')
   await waitStop(alpha, t, 120000)
@@ -353,8 +353,18 @@ async function main() {
   const alphaFiles = (branch(alpha) || { files: [] }).files
   check('1. the board lists notes.txt as changed by Alpha (project-relative)', alphaFiles.some((f) => f.path === 'notes.txt'), JSON.stringify(alphaFiles))
   check('1. notes.txt exists on disk', fs.existsSync(path.join(WORK, 'notes.txt')))
-  const alphaPrompt = hookSince(alpha, 'UserPromptSubmit', t)
-  log(`   (Alpha's own prompt got: ${alphaPrompt && alphaPrompt.res && alphaPrompt.res.hookSpecificOutput ? 'a digest naming Beta' : 'no digest'})`)
+  await manager.stop(alpha)
+  check('1. Alpha stopped: ended on the board, its board token is dead, its temp files are gone', (branch(alpha) || {}).status === 'ended' && issued.get(alpha).every((tok) => boardTokens.sessionOf(tok) === null) && !fs.existsSync(path.join(sessionsDir, `${alpha}.mcp.json`)))
+
+  // ------------------------------------------------------------------ Beta, in the same repository
+  const beta = await startClaude('Beta', 'default')
+  await sleep(1500)
+  const mcpFile = path.join(sessionsDir, `${beta}.mcp.json`)
+  const mcpText = fs.existsSync(mcpFile) ? fs.readFileSync(mcpFile, 'utf8') : ''
+  check('the Claude session got an MCP config naming the env var, not the token', /"agent-office"/.test(mcpText) && mcpText.includes('${AO_BOARD_TOKEN}') && !issued.get(beta).some((tok) => mcpText.includes(tok)))
+  const snap0 = board.snapshot()
+  check('both teams are on the board in ONE project (the git common dir)', snap0.branches.length === 2 && snap0.branches[0].project === snap0.branches[1].project && /\.git$/.test(snap0.branches[0].project), `${snap0.branches[0].projectLabel}: ${snap0.branches[0].project}`)
+  check('the board server was initialised by both sessions (their own tokens)', await until(() => [alpha, beta].every((id) => mcp.some((m) => m.sessionId === id && m.method === 'initialize')), 'MCP initialize', 20000))
 
   // ------------------------------------------------------------------ 2. Beta's next prompt carries the digest
   const digestOf = async (since) => {
@@ -414,9 +424,9 @@ async function main() {
   check('4. in the world a board call is "checking the board" (read), not exec', world.some((e) => e.agentId === beta && e.ts >= t && e.activity === 'read' && e.detail === 'checking the board'))
   await waitState(beta, 'idle', 5000)
 
-  // Alpha is no longer needed: one session less in memory. Its row stays on the board as "ended".
-  await manager.stop(alpha)
-  check('Alpha stopped: ended on the board, its board token is dead, its temp files are gone', (branch(alpha) || {}).status === 'ended' && issued.get(alpha).every((tok) => boardTokens.sessionOf(tok) === null) && !fs.existsSync(path.join(sessionsDir, `${alpha}.mcp.json`)))
+  // Beta leaves before Codex starts: one session at a time.
+  await manager.stop(beta)
+  check('Beta stopped: ended on the board, its board token is dead', (branch(beta) || {}).status === 'ended' && issued.get(beta).every((tok) => boardTokens.sessionOf(tok) === null))
 
   // ------------------------------------------------------------------ 5. a Codex session in the same repository
   if (codex) {
@@ -434,7 +444,7 @@ async function main() {
       await until(() => mcp.some((m) => m.sessionId === gamma && m.method === 'initialize'), 'Codex MCP initialize', 15000)
       check('5. the thread connected to the board with its own token (per-thread config)', mcp.some((m) => m.sessionId === gamma && m.method === 'initialize'))
       const pending = board.digest(gamma)
-      check('5. a digest is waiting for Gamma (Beta is live in the project; Alpha, just ended, is still listed)', pending && /Team "Beta"/.test(pending.text) && /notes\.txt/.test(pending.text))
+      check('5. a digest is waiting for Gamma (Alpha and Beta, both ended a moment ago, and what they changed)', pending && /Team "Beta" \[ended\]/.test(pending.text) && /Team "Alpha" \[ended\]/.test(pending.text) && /notes\.txt/.test(pending.text))
       if (pending) log(`---- digest for Gamma ----\n${pending.text}\n----`)
       t = Date.now()
       const cardsBefore5 = cards.length
@@ -469,7 +479,6 @@ async function main() {
   }
 
   // ------------------------------------------------------------------ the end
-  await manager.stop(beta)
   check('everything stopped: no hook token and no board token is left', tokens.size === 0 && boardTokens.size === 0)
   check('no temp file is left under userData/sessions', fs.readdirSync(sessionsDir).length === 0, fs.readdirSync(sessionsDir).join(' '))
   const all = fs.readFileSync(logFile, 'utf8')
