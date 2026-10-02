@@ -1,16 +1,18 @@
 // The resizable panel next to (or under) the world: the session's Terminal (or Chat, for sessions
-// without a terminal UI), the Events tab and the office Board (when the main process has one).
+// without a terminal UI), the agent inspector, the Events tab and the office Board (the last two
+// tabs only when the main process has them).
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { DEFAULT_LAYOUT, useApp, useAppState } from '../controller'
 import type { PanelTab } from '../controller'
 import { clampSplit } from '../format'
 import { cx } from '../hooks'
 import { overlapBadge } from '../board'
-import { IconBoard, IconChat, IconClose, IconDockBottom, IconDockRight, IconList, IconTerminal } from '../icons'
+import { IconBoard, IconChat, IconClose, IconDockBottom, IconDockRight, IconInspect, IconList, IconTerminal } from '../icons'
 import { panelContent } from '../restore'
 import { BoardView } from './BoardView'
 import { ChatView } from './ChatView'
 import { EventLog } from './EventLog'
+import { InspectView } from './InspectView'
 import { WakeView } from './Restore'
 import { TerminalView } from './TerminalView'
 
@@ -86,7 +88,8 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   const content = panelContent(selected)
   const overlaps = useAppState((s) => s.boardOverlaps)
   // A stored 'board' tab with a main process that has no board falls back to the first tab.
-  const current: PanelTab = layout.tab === 'board' && !app.hasBoard ? 'terminal' : layout.tab
+  // The same for 'inspect' and a main process that keeps no agent details.
+  const current: PanelTab = (layout.tab === 'board' && !app.hasBoard) || (layout.tab === 'inspect' && !app.hasInspector) ? 'terminal' : layout.tab
 
   const tab = (id: PanelTab, label: string, icon: ReactNode, extra?: ReactNode) => (
     <button
@@ -103,10 +106,11 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   )
 
   return (
-    <section className="panel" aria-label={chat ? 'Chat, events and board' : 'Terminal, events and board'}>
+    <section className="panel" aria-label={chat ? 'Chat, inspector, events and board' : 'Terminal, inspector, events and board'}>
       <header className="panel-head">
         <div className="tabs" role="tablist">
           {chat ? tab('terminal', 'Chat', <IconChat />) : tab('terminal', 'Terminal', <IconTerminal />)}
+          {app.hasInspector && tab('inspect', 'Inspect', <IconInspect />)}
           {tab('events', 'Events', <IconList />, eventCount > 0 && <span className="tab-count">{eventCount > 999 ? '999+' : eventCount}</span>)}
           {app.hasBoard &&
             tab(
@@ -140,6 +144,7 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
         <TerminalView hidden={current !== 'terminal' || content === 'chat' || content === 'wake'} />
         <ChatView hidden={current !== 'terminal' || content !== 'chat' || !layout.panelOpen} />
         {content === 'wake' && selected && <WakeView key={selected.id} session={selected} hidden={current !== 'terminal' || !layout.panelOpen} />}
+        {app.hasInspector && <InspectView hidden={current !== 'inspect' || !layout.panelOpen} />}
         <EventLog hidden={current !== 'events' || !layout.panelOpen} />
         {app.hasBoard && <BoardView hidden={current !== 'board' || !layout.panelOpen} />}
       </div>

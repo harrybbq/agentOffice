@@ -18,6 +18,7 @@ import type {
   TerminalSnapshot
 } from '../../shared/sessions'
 import type { EventSink } from '../adapters/types'
+import type { AgentFact } from '../agentStats'
 import type { BoardAccess } from '../board'
 import type { SessionTokens } from '../ingest/auth'
 import type { PermissionRegistry } from '../permissions'
@@ -84,6 +85,12 @@ export interface DriverEvents {
   onChat(e: ChatEvent): void
   /** The user sent a prompt (typed, or an order): never a synthetic one. For the saved preview (shared/restore.ts). */
   onPrompt?(text: string): void
+  /**
+   * Something the inspector shows about one of the session's agents (electron/agentStats.ts): a
+   * turn, token usage, a changed file, a worker's task. Read-only bookkeeping; never needed for the
+   * session to work.
+   */
+  onFact?(fact: AgentFact): void
 }
 
 export interface DriverContext {

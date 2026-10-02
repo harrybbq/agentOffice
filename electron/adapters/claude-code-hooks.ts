@@ -9,6 +9,7 @@
 //
 // No Electron imports here: the tests load this file under plain Node.
 import type { Activity, AgentEvent } from '../../shared/events'
+import { DETAIL_BOARD, DETAIL_DELEGATING, DETAIL_PLANNING, DETAIL_QUESTION, fileDetail } from '../../shared/details'
 import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { subagentId } from '../../shared/sessions'
 import { isClaudeBoardTool } from '../boardMcp'
@@ -46,6 +47,16 @@ export const TOOL_ACTIVITY: Record<string, Activity> = {
 /** Tools that hand work to a subagent: shown as `exec` with the detail "delegating". */
 export const DELEGATING_TOOLS: readonly string[] = ['Agent', 'Task']
 
+/** Plan and todo-list tools: shown as `write` with a detail that starts with "planning: " (shared/details.ts). */
+export const PLANNING_TOOLS: readonly string[] = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'EnterPlanMode', 'ExitPlanMode']
+export const PLANNING_ACTIVITY: Activity = 'write'
+
+/** Tools that ask the user something: shown as `waiting` with the detail "question: …" until answered. */
+export const QUESTION_TOOLS: readonly string[] = ['AskUserQuestion']
+
+/** Tools whose detail is a file: a secrets-like path gets the "secrets: " prefix. */
+const FILE_TOOLS: readonly string[] = ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'NotebookRead']
+
 /** Tool names that take a picture of something (any provider, any MCP server). */
 export const CAPTURE_TOOL_PATTERN = /screen[_-]?shot|screen[_-]?cap|capture[_-]?screen|take[_-]?snapshot/i
 
@@ -57,11 +68,13 @@ const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slic
 
 /** What a character is shown doing while its agent uses an office-board tool (any provider). */
 export const BOARD_ACTIVITY: Activity = 'read'
-export const BOARD_ACTIVITY_DETAIL = 'checking the board'
+export const BOARD_ACTIVITY_DETAIL = DETAIL_BOARD
 
 export function activityForTool(toolName: string, toolInput?: unknown): Activity {
   // The app's own board tools: looking something up, not a trip to the server room.
   if (isClaudeBoardTool(toolName)) return BOARD_ACTIVITY
+  if (PLANNING_TOOLS.includes(toolName)) return PLANNING_ACTIVITY
+  if (QUESTION_TOOLS.includes(toolName)) return 'waiting'
   if (CAPTURE_TOOL_PATTERN.test(toolName)) return 'capture'
   // Computer-use / browser MCP tools take the action as an argument: { action: "screenshot" }.
   if (toolName.startsWith('mcp__') && isRecord(toolInput)) {
@@ -76,14 +89,59 @@ const oneLine = (s: string, max = DETAIL_MAX): string => {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
-/** The file path / command / URL of a tool call, on one line, truncated. */
+/** What a plan / todo tool call is about, in a few words. */
+export function planningSummary(toolName: string, toolInput: unknown): string {
+  const input = isRecord(toolInput) ? toolInput : {}
+  switch (toolName) {
+    case 'TodoWrite': {
+      const todos = (Array.isArray(input.todos) ? input.todos : []).filter(isRecord)
+      if (todos.length === 0) return 'updating the to-do list'
+      const done = todos.filter((t) => t.status === 'completed').length
+      const now = todos.find((t) => t.status === 'in_progress') ?? todos.find((t) => t.status !== 'completed')
+      const what = now ? str(now.content, 200) || str(now.activeForm, 200) : ''
+      return `${what || 'to-do list'} (${done}/${todos.length} done)`
+    }
+    case 'TaskCreate':
+      return `new task: ${str(input.subject, 200) || str(input.description, 200) || 'a task'}`
+    case 'TaskUpdate': {
+      const what = str(input.subject, 200) || (str(input.taskId, 40) ? `task ${str(input.taskId, 40)}` : 'a task')
+      return str(input.status, 40) ? `${what} is ${str(input.status, 40).replace(/_/g, ' ')}` : `updating ${what}`
+    }
+    case 'TaskList':
+    case 'TaskGet':
+      return 'checking the task list'
+    case 'EnterPlanMode':
+      return 'starting a plan'
+    case 'ExitPlanMode':
+      return 'presenting the plan'
+    default:
+      return 'planning'
+  }
+}
+
+/** The first question of a question tool's input (AskUserQuestion: `questions[].question`). */
+export function questionText(toolInput: unknown): string {
+  const input = isRecord(toolInput) ? toolInput : {}
+  const first = (Array.isArray(input.questions) ? input.questions : []).find(isRecord)
+  return (first ? str(first.question, 400) || str(first.header, 100) : '') || str(input.question, 400) || 'asks you something'
+}
+
+/**
+ * The file path / command / URL of a tool call, on one line, truncated. Plan tools, questions,
+ * board tools, delegation and secrets-like files get the stable texts of shared/details.ts.
+ */
 export function toolDetail(toolName: string, toolInput: unknown): string {
-  if (DELEGATING_TOOLS.includes(toolName)) return 'delegating'
+  if (DELEGATING_TOOLS.includes(toolName)) return DETAIL_DELEGATING
   if (isClaudeBoardTool(toolName)) return BOARD_ACTIVITY_DETAIL
+  if (PLANNING_TOOLS.includes(toolName)) return oneLine(`${DETAIL_PLANNING}${planningSummary(toolName, toolInput)}`)
+  if (QUESTION_TOOLS.includes(toolName)) return oneLine(`${DETAIL_QUESTION}${questionText(toolInput)}`)
   if (!isRecord(toolInput)) return ''
   for (const key of ['file_path', 'notebook_path', 'path', 'command', 'url', 'query', 'pattern']) {
     const v = toolInput[key]
-    if (typeof v === 'string' && v.length > 0) return oneLine(v)
+    if (typeof v !== 'string' || v.length === 0) continue
+    // A secrets-like file (read or changed with a file tool, or searched in): said in front of the path.
+    const isFile = key === 'file_path' || key === 'notebook_path' || (key === 'path' && (FILE_TOOLS.includes(toolName) || toolName === 'Grep' || toolName === 'Glob'))
+    return oneLine(isFile ? fileDetail(v) : v)
   }
   return ''
 }
@@ -223,6 +281,11 @@ export class ClaudeHookMapper {
         if (a && a.waiting > 0 && !this.holdWaiting) {
           a.waiting = 1
           events.push(...this.resume(actorId, now))
+        }
+        // The user answered the agent's question (it is not a permission request, so nothing else
+        // ends the wait): the agent thinks again until its next tool call.
+        else if (a && a.waiting === 0 && a.activity === 'waiting' && QUESTION_TOOLS.includes(str(body.tool_name, 200))) {
+          events.push(this.put(actorId, 'idle', '', now))
         }
         return out('post-tool', actorId)
       }
@@ -423,6 +486,11 @@ export interface HostedSessions {
 
 const MAX_EXTERNAL = 100
 
+/** Observes the hooks of one external session for the inspector (adapters/claudeInspect.ts). */
+export interface ExternalHookObserver {
+  observe(body: Record<string, unknown>, mapped: MappedHook): void
+}
+
 const folderName = (cwd: unknown): string => {
   if (typeof cwd !== 'string') return ''
   const parts = cwd.split(/[\\/]+/).filter(Boolean)
@@ -433,8 +501,9 @@ const folderName = (cwd: unknown): string => {
  * The `/hooks/claude-code` adapter. It never returns a permission decision unless a hosted
  * session's driver does, and a decision only ever comes from the renderer over IPC.
  */
-export function createClaudeCodeHooksAdapter(hosted?: HostedSessions): HttpAdapter {
+export function createClaudeCodeHooksAdapter(hosted?: HostedSessions, observer?: (rootId: string) => ExternalHookObserver): HttpAdapter {
   const external = new Map<string, ClaudeHookMapper>()
+  const observers = new Map<string, ExternalHookObserver>()
 
   return {
     route: CLAUDE_HOOKS_ROUTE,
@@ -453,13 +522,23 @@ export function createClaudeCodeHooksAdapter(hosted?: HostedSessions): HttpAdapt
       let mapper = external.get(sessionId)
       if (!mapper) {
         if (body.hook_event_name === 'SessionEnd') return {}
-        if (external.size >= MAX_EXTERNAL) external.delete(external.keys().next().value as string)
+        if (external.size >= MAX_EXTERNAL) {
+          const oldest = external.keys().next().value as string
+          external.delete(oldest)
+          observers.delete(oldest)
+        }
         mapper = new ClaudeHookMapper({ rootId: sessionId, displayName: folderName(body.cwd) || sessionId.slice(0, 8) })
         external.set(sessionId, mapper)
+        if (observer) observers.set(sessionId, observer(sessionId))
       }
       const mapped = mapper.handle(body)
       for (const e of mapped.events) sink.emit(e)
-      if (mapped.kind === 'session-end') external.delete(sessionId)
+      // What the inspector learns from the payload (turns, a worker's task, files, token usage). Read-only.
+      observers.get(sessionId)?.observe(body, mapped)
+      if (mapped.kind === 'session-end') {
+        external.delete(sessionId)
+        observers.delete(sessionId)
+      }
       return {} // including PermissionRequest: the terminal's own dialog decides
     }
   }

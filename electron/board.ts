@@ -322,6 +322,13 @@ export class Board {
     this.changed()
   }
 
+  /** The newest claim of a session (what its team says it is working on), for the inspector. */
+  claimOf(sessionId: string): { task: string; ts: number } | undefined {
+    let newest: Claim | undefined
+    for (const c of this.claims) if (c.sessionId === sessionId && (!newest || c.ts > newest.ts)) newest = c
+    return newest ? { task: newest.task, ts: newest.ts } : undefined
+  }
+
   /** The session changed a file (seen by the app: a hook or a completed file-change item). */
   fileChanged(sessionId: string, path: unknown, kind: BoardFile['kind'] = 'edit'): void {
     const b = this.branches.get(sessionId)

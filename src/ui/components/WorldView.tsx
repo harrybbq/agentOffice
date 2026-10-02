@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react'
 import { useApp, useAppState } from '../controller'
 import { ago } from '../format'
 import { cx, useNow } from '../hooks'
-import { IconFit, IconMegaphone } from '../icons'
+import { IconFit, IconMegaphone, IconTag } from '../icons'
 import { Inbox } from './Inbox'
 import { RestoreNotice } from './Restore'
 
@@ -21,6 +21,7 @@ function OfficeWidePill({ endsAt }: { endsAt: number }) {
 export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
   const app = useApp()
   const host = useRef<HTMLDivElement>(null)
+  const tags = useRef<HTMLDivElement>(null)
   const error = useAppState((s) => s.worldError)
   const banner = useAppState((s) => s.banner)
   const wideEndsAt = useAppState((s) => s.officeWideEndsAt)
@@ -29,15 +30,18 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
   const allAsleep = useAppState((s) => s.sessions.length > 0 && s.teams.length === 0 && s.sessions.every((x) => x.state === 'asleep'))
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
   const inboxOpen = useAppState((s) => s.layout.inboxOpen)
+  const labels = useAppState((s) => s.layout.labels)
 
   useEffect(() => {
-    if (host.current) app.world.mount(host.current)
+    if (host.current) app.world.mount(host.current, tags.current)
     return () => app.world.unmount()
   }, [app])
 
   return (
     <div className="world">
       <div className="world-canvas" ref={host} />
+      {/* Station tags and the hover card: the scene positions them, pointer events pass through. */}
+      <div className="world-tags" ref={tags} aria-hidden="true" />
 
       <div className={cx('world-top', floatingInbox && inboxOpen && !overlay && 'is-beside-inbox')}>
         {!overlay && <RestoreNotice />}
@@ -53,6 +57,19 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
       {!overlay && (
         <button type="button" className="world-tool icon-btn" onClick={() => app.world.fitAll()} title="Fit the whole office (or double-click the world)" aria-label="Fit the whole office">
           <IconFit />
+        </button>
+      )}
+      {!overlay && (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={labels}
+          className={cx('world-tool world-tool-labels icon-btn', labels && 'is-on')}
+          onClick={() => app.setLayout({ labels: !labels })}
+          title={labels ? 'Labels: on. Click to hide the station labels.' : 'Labels: off. Click to show the station labels.'}
+          aria-label={`Labels: ${labels ? 'on' : 'off'}`}
+        >
+          <IconTag />
         </button>
       )}
 

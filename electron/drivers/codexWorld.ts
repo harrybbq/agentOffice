@@ -3,7 +3,9 @@
 // actor bookkeeping the Claude driver uses (ClaudeHookMapper.activity / waiting / resume / settle).
 //
 // Sub-agents were not exercised in the spikes, so everything about them is parsed defensively.
+import { DETAIL_DELEGATING, DETAIL_PLANNING, fileDetail } from '../../shared/details'
 import type { Activity } from '../../shared/events'
+import type { TokenUsage } from '../../shared/inspector'
 import { relativeTo } from '../../shared/paths'
 import { BOARD_ACTIVITY, BOARD_ACTIVITY_DETAIL, CAPTURE_TOOL_PATTERN } from '../adapters/claude-code-hooks'
 import { BOARD_SERVER_CODEX } from '../boardMcp'
@@ -18,7 +20,8 @@ export interface WorldActivity {
 
 /**
  * What `item/started` means for the world, or null when the item is not an activity (messages,
- * reasoning, plans). `cwd` is the session's folder: changed files under it are named relative to it.
+ * reasoning). A plan is `write` with a "planning: " detail, and a secrets-like file gets the
+ * "secrets: " prefix (shared/details.ts). `cwd` is the session's folder: changed files under it are named relative to it.
  */
 export function worldActivityForItem(item: unknown, cwd?: string): WorldActivity | null {
   if (!isRecord(item)) return null
@@ -28,15 +31,18 @@ export function worldActivityForItem(item: unknown, cwd?: string): WorldActivity
       if (commandIntent(actions) === 'exec') return { activity: 'exec', detail: innerCommand(item.command, actions) }
       // Reads, listings and searches done through the shell: show what is being looked at.
       const first = actions.find(isRecord)
-      const detail = first ? str(first.path) || str(first.query) || str(first.name) || str(first.command) : ''
-      return { activity: 'read', detail }
+      const path = first ? str(first.path) : ''
+      const detail = first ? path || str(first.query) || str(first.name) || str(first.command) : ''
+      return { activity: 'read', detail: path ? fileDetail(detail, path) : detail }
     }
     case 'fileChange': {
       const paths = arr(item.changes)
         .map((c) => (isRecord(c) ? relativeTo(str(c.path), cwd) : ''))
         .filter((p) => p.length > 0)
       const more = paths.length > 1 ? ` (+${paths.length - 1} more)` : ''
-      return { activity: 'write', detail: paths.length > 0 ? `${paths[0]}${more}` : '' }
+      // Any secrets-like file among them is what the detail says first.
+      const shown = paths.find((p) => fileDetail(p) !== p) ?? paths[0]
+      return { activity: 'write', detail: paths.length > 0 ? fileDetail(`${shown}${more}`, shown) : '' }
     }
     case 'webSearch': {
       const action = isRecord(item.action) ? item.action : {}
@@ -57,7 +63,9 @@ export function worldActivityForItem(item: unknown, cwd?: string): WorldActivity
       return { activity: item.readOnlyHint === true ? 'read' : 'exec', detail }
     }
     case 'collabAgentToolCall':
-      return { activity: 'exec', detail: 'delegating' }
+      return { activity: 'exec', detail: DETAIL_DELEGATING }
+    case 'plan':
+      return { activity: 'write', detail: `${DETAIL_PLANNING}writing a plan` }
     case 'imageView':
       return { activity: 'read', detail: str(item.path) }
     case 'imageGeneration':
@@ -65,6 +73,47 @@ export function worldActivityForItem(item: unknown, cwd?: string): WorldActivity
     default:
       return null
   }
+}
+
+/**
+ * `turn/plan/updated {explanation, plan: {step, status}[]}` (the whole list each time) as a world
+ * activity: `write`, "planning: <the step in progress> (2/5 done)".
+ */
+export function planActivity(params: unknown): WorldActivity {
+  const p = isRecord(params) ? params : {}
+  const steps = arr(p.plan).filter(isRecord)
+  const done = steps.filter((s) => s.status === 'completed').length
+  const now = steps.find((s) => s.status === 'inProgress') ?? steps.find((s) => s.status !== 'completed')
+  const what = (now ? str(now.step, 200) : '') || str(p.explanation, 200) || 'the plan'
+  return { activity: 'write', detail: steps.length > 0 ? `${DETAIL_PLANNING}${what} (${done}/${steps.length} done)` : `${DETAIL_PLANNING}${what}` }
+}
+
+const tokens = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0)
+
+/**
+ * `thread/tokenUsage/updated {tokenUsage: {total, last, modelContextWindow}}` as the inspector's
+ * TokenUsage, or null when the shape is not that. `total` is the thread's running total (the server
+ * replays it on resume), so it replaces what was known. Codex counts cached input inside
+ * `inputTokens` and reasoning inside `outputTokens`: here `input` is the uncached part, so that
+ * input + cached + output = total. `contextUsed` is the size of the last request.
+ */
+export function codexTokenUsage(params: unknown): TokenUsage | null {
+  const usage = isRecord(params) && isRecord(params.tokenUsage) ? params.tokenUsage : null
+  if (!usage || !isRecord(usage.total)) return null
+  const total = usage.total
+  const cached = tokens(total.cachedInputTokens)
+  const input = Math.max(0, tokens(total.inputTokens) - cached)
+  const output = tokens(total.outputTokens)
+  const out: TokenUsage = { input, output, cached, total: tokens(total.totalTokens) || input + cached + output }
+  if (out.total === 0) return null
+  const reasoning = tokens(total.reasoningOutputTokens)
+  if (reasoning > 0) out.reasoning = reasoning
+  const last = isRecord(usage.last) ? usage.last : null
+  const context = last ? tokens(last.totalTokens) || tokens(last.inputTokens) + tokens(last.outputTokens) : 0
+  if (context > 0) out.contextUsed = context
+  const window = tokens(usage.modelContextWindow)
+  if (window > 0) out.contextWindow = window
+  return out
 }
 
 /** Sub-agent states that mean the worker is finished. */

@@ -417,7 +417,7 @@ async function streamSession() {
     conv.turns++
     conv.prompts.push(lines[0] ?? '')
     saveConversation(conv)
-    out({ event: 'result', result: { conversation_id: conv.id, status: 'SUCCESS', response: `${answer}\n`, duration_seconds: 0.1, num_turns: conv.turns, usage: { input_tokens: 100 * conv.turns, output_tokens: 20, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 120 } } })
+    out({ event: 'result', result: { conversation_id: conv.id, status: 'SUCCESS', response: `${answer}\n`, duration_seconds: 0.1, num_turns: conv.turns, usage: { input_tokens: 100 * conv.turns, output_tokens: 20 * conv.turns, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 120 * conv.turns } } })
   }
 
   // One prompt per line, one turn at a time: a line written while a turn runs waits in the pipe.

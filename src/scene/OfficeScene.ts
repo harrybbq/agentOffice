@@ -20,10 +20,15 @@
 // - Office-wide CEO order (opts.isOfficeWide): workers may use stations, corridors and the inbox
 //   anywhere. When it ends, workers outside their branch walk home.
 // - Each team has a colour (theme teams.colors) and its manager a distinct procedural head.
+// - Stations: the theme's stationRules pick a more specific location than the activities table,
+//   stationLabels put a floating tag above each station (StationLabels, a DOM layer), and after
+//   idle.afterMs without activity a character walks to the theme's idle location in its own branch.
+// - Pointing at a character shows a ring and a card; clicking one selects it (opts.onAgentClick),
+//   clicking the floor deselects. The selected character keeps its ring.
 import Phaser from 'phaser'
 import type { Activity, AgentEvent } from '../../shared/events'
-import { activityDef, HOME, MANAGER, teamColors } from '../../shared/theme'
-import type { ActivityDef, Role, ThemeManifest } from '../../shared/theme'
+import { HOME, MANAGER, teamColors } from '../../shared/theme'
+import type { Role, ThemeManifest } from '../../shared/theme'
 import type { LoadedTheme } from '../../shared/ipc'
 import { cssToInt, preloadTemplates } from '../theme/loader'
 import type { ParsedMap, Rect } from '../theme/loader'
@@ -41,6 +46,11 @@ import { CorridorView } from './corridorView'
 import { Character } from './Character'
 import { RelayBook } from './relay'
 import { TeamLooks } from './teamLook'
+import { IdleClock } from './idle'
+import { HoverCard, StationLabels } from './stationLabels'
+import type { StationHit } from './stationLabels'
+import { StationRouter } from '../theme/stations'
+import { spanText } from '../ui/inspect'
 import type { Action } from './Character'
 import {
   createSheetAnims,
@@ -102,6 +112,14 @@ export interface SceneOptions {
   onTeams: (teams: TeamInfo[]) => void
   /** Office-wide CEO order in progress (state lives outside the scene so rebuilds keep it). */
   isOfficeWide: () => boolean
+  /** Layer over the canvas for station tags and the hover card (none: neither is shown). */
+  overlayEl?: HTMLElement | null
+  /** Show the station tags (the shell's "Labels" switch). */
+  labels?: boolean
+  /** A character was clicked (its agent id), or the floor (null). */
+  onAgentClick?: (agentId: string | null) => void
+  /** When an agent was first seen, for the hover card (survives a rebuild of the scene). */
+  agentSince?: (agentId: string) => number | undefined
 }
 
 const DRIFT_HOME_MS = 4000
@@ -121,6 +139,9 @@ const GROUND_DEPTH = -2100
 /** Outside ground: the background mixed with a little of this green. */
 const GROUND_TINT = 0x4a6741
 const ORDER_DEPTH = 100_000
+/** A character can be clicked within at least this many screen px of it, however far zoomed out. */
+const HIT_MIN_HALF_W = 13
+const HIT_MIN_H = 30
 
 type BuildJob = { kind: 'build'; view: BlockView; corridor: Corridor | null; fast: boolean }
 type CorridorJob = { kind: 'corridor'; corridor: Corridor }
@@ -194,11 +215,30 @@ export class OfficeScene extends Phaser.Scene {
   private selfDetail = new Map<string, string>()
   private looks!: TeamLooks
   private palette: readonly string[] = []
+  /** The theme's stationRules / stationLabels / idle, compiled once. */
+  private router: StationRouter
+  private idle: IdleClock
+  private labels: StationLabels | null = null
+  private hoverCard: HoverCard | null = null
+  private labelsOn: boolean
+  /** Last event per agent with a character (what the hover card says it is doing). */
+  private lastEvent = new Map<string, { activity: Activity; detail: string }>()
+  private selectedId: string | null = null
+  private hoverId: string | null = null
+  private hoverStation: StationHit | null = null
+  /** Second click of a double-click: its release is not a click on the floor. */
+  private suppressClick = false
+  /** Portrait data URLs by look. */
+  private portraits = new Map<string, string>()
+  private portraitSeq = 0
 
   constructor(opts: SceneOptions) {
     super({ key: 'office' })
     this.opts = opts
     this.manifest = opts.theme.manifest
+    this.router = new StationRouter(this.manifest)
+    this.idle = new IdleClock(this.router.idle?.afterMs ?? 0)
+    this.labelsOn = opts.labels ?? true
   }
 
   preload(): void {
@@ -217,7 +257,7 @@ export class OfficeScene extends Phaser.Scene {
     this.palette = teamColors(this.manifest)
     this.looks = new TeamLooks(this.palette.length)
     this.layout = new WorldLayout(hq, branch)
-    const w = this.manifest.activities?.waiting ? activityDef(this.manifest, 'waiting').location : ''
+    const w = this.manifest.activities?.waiting ? this.router.table('waiting').location : ''
     this.waitingType = hq.locations.get(w)?.length ? w : 'inbox'
     this.roster = new Roster(
       this.layout,
@@ -228,7 +268,13 @@ export class OfficeScene extends Phaser.Scene {
     this.network = new CorridorNetwork(this.layout)
     this.ground = this.add.graphics().setDepth(GROUND_DEPTH)
     this.corridors = new CorridorView(this, this.network, this.corridorStyle(), CORRIDOR_DEPTH)
+    if (this.opts.overlayEl) {
+      this.labels = new StationLabels(this.opts.overlayEl, this.router.labels, this.layout.tile)
+      this.labels.setEnabled(this.labelsOn)
+      this.hoverCard = new HoverCard(this.opts.overlayEl)
+    }
     this.addBlockView(this.layout.hq, true)
+    this.labels?.add(this.layout.hq, false)
     // The HQ porch (where the inbox queue forms) exists from the start.
     for (const c of this.network.cells()) {
       this.corridors.add(c)
@@ -261,6 +307,11 @@ export class OfficeScene extends Phaser.Scene {
       this.scale.off(Phaser.Scale.Events.RESIZE, onResize)
       for (const c of this.chars.values()) c.destroy()
       this.chars.clear()
+      this.labels?.destroy()
+      this.hoverCard?.destroy()
+      this.labels = null
+      this.hoverCard = null
+      this.game.canvas.style.cursor = ''
     })
     this.opts.onReady()
   }
@@ -271,7 +322,210 @@ export class OfficeScene extends Phaser.Scene {
     if (this.promoteClock >= 500) {
       this.promoteClock = 0
       this.promoteQueue()
+      this.restIdle()
     }
+    this.syncOverlay()
+  }
+
+  // ---- stations, selection, hover ----------------------------------------------------------------
+
+  /** Station tags on or off (the shell's "Labels" switch). */
+  setLabels(on: boolean): void {
+    this.labelsOn = on
+    this.labels?.setEnabled(on)
+    if (!on) this.setHoverStation(null)
+  }
+
+  /** The agent the inspector shows (null: nobody). Its character keeps a ring. */
+  setSelectedAgent(id: string | null): void {
+    if (id === this.selectedId) return
+    const prev = this.selectedId
+    this.selectedId = id
+    if (prev) this.chars.get(prev)?.setHighlight(prev === this.hoverId ? 'hover' : 'none')
+    if (id) this.chars.get(id)?.setHighlight('selected')
+  }
+
+  /** Pans/zooms to the branch an agent is in (a worker's row in the inspector). */
+  focusAgent(id: string): void {
+    const e = this.roster?.get(id)
+    if (e && e.role !== 'boss') this.focusTeam(e.teamId)
+  }
+
+  /**
+   * The character as a small picture (a data URL) for the inspector's header, or null when it
+   * can't be made. Drawn from the same textures as the character, so real art shows up here too.
+   */
+  portrait(id: string, done: (url: string | null) => void): void {
+    const entry = this.roster?.get(id)
+    if (!entry || !this.alive) return done(null)
+    try {
+      const skin = this.skinFor(entry)
+      const tint = this.tintFor(entry)
+      const body = skin.kind === 'placeholder' ? skin.body[0] : skin.body
+      const over = skin.kind === 'placeholder' ? skin.overlay[0] : skin.overlay
+      const frame = skin.kind === 'sheet' ? 0 : undefined
+      const sig = `${body}|${over ?? ''}|${tint}`
+      const cached = this.portraits.get(sig)
+      if (cached) return done(cached)
+      const f = this.textures.getFrame(body, frame)
+      if (!f) return done(null)
+      const k = Math.max(1, Math.round(72 / f.height))
+      const key = `portrait:${++this.portraitSeq}`
+      const dt = this.textures.addDynamicTexture(key, f.width * k, f.height * k)
+      if (!dt) return done(null)
+      dt.stamp(body, frame, 0, 0, { tint, scale: k, originX: 0, originY: 0 })
+      if (over) dt.stamp(over, frame, 0, 0, { scale: k, originX: 0, originY: 0 })
+      dt.render()
+      dt.snapshot((img) => {
+        const url = img instanceof HTMLImageElement ? img.src : null
+        if (url) this.portraits.set(sig, url)
+        if (this.alive && this.textures.exists(key)) this.textures.remove(key)
+        done(url)
+      })
+    } catch (err) {
+      console.warn('[agent-office] no portrait', err)
+      done(null)
+    }
+  }
+
+  /** Where a character is on screen (canvas px), for tools that drive the app. */
+  screenPosOf(id: string): Point | null {
+    const c = this.chars.get(id)
+    if (!c) return null
+    const v = this.cameras.main.worldView
+    const z = this.cameras.main.zoom
+    return { x: (c.position.x - v.x) * z, y: (c.position.y - c.height / 2 - v.y) * z }
+  }
+
+  /** Characters with nothing to do for the theme's idle.afterMs walk to its idle location. */
+  private restIdle(): void {
+    const loc = this.router.idle?.location
+    if (!loc) return
+    for (const id of this.idle.due(Date.now(), (x) => this.canRest(x, loc))) {
+      const entry = this.roster.get(id)
+      const c = this.chars.get(id)
+      if (!entry || !c) continue
+      c.enqueue({
+        kind: 'rest',
+        activity: 'idle',
+        lifecycle: false,
+        target: (from) => {
+          // Always inside the character's own branch, also for a manager.
+          const p = nearest(this.roster.blockOf(id).locations, loc, from)
+          return p ? this.claimAt(id, c, p, false) : this.goHome(entry, c)
+        }
+      })
+    }
+  }
+
+  private canRest(id: string, loc: string): boolean {
+    const entry = this.roster.get(id)
+    const c = this.chars.get(id)
+    if (!entry || !c || entry.role === 'boss' || !c.isIdle) return false
+    if (this.leaving.has(id) || this.waiting.has(id) || this.relay.isOpen(id)) return false
+    if (entry.role === 'manager' && this.relay.isRelaying(entry.teamId)) return false
+    return (this.roster.blockOf(id).locations.get(loc)?.length ?? 0) > 0
+  }
+
+  /** The character under a pointer: a generous box, never smaller than a fingertip on screen. */
+  private charAt(p: Phaser.Input.Pointer): Character | null {
+    const cam = this.cameras.main
+    const w = cam.getWorldPoint(p.x, p.y)
+    const z = cam.zoom
+    let best: Character | null = null
+    let bestD = Infinity
+    for (const c of this.chars.values()) {
+      if (c.id === BOSS_ID || this.leaving.has(c.id)) continue
+      const h = Math.max(c.height + 6, HIT_MIN_H / z)
+      const half = Math.max(c.height * 0.5, HIT_MIN_HALF_W / z)
+      const { x, y } = c.position
+      if (w.x < x - half || w.x > x + half || w.y > y + 5 / z || w.y < y - h) continue
+      const d = Math.hypot(w.x - x, w.y - (y - c.height / 2))
+      if (d < bestD) {
+        best = c
+        bestD = d
+      }
+    }
+    return best
+  }
+
+  private setHoverChar(id: string | null): void {
+    if (id === this.hoverId) return
+    const prev = this.hoverId
+    this.hoverId = id
+    if (prev && prev !== this.selectedId) this.chars.get(prev)?.setHighlight('none')
+    if (id && id !== this.selectedId) this.chars.get(id)?.setHighlight('hover')
+    this.game.canvas.style.cursor = id ? 'pointer' : ''
+    if (!id) this.hoverCard?.hide()
+  }
+
+  private setHoverStation(hit: StationHit | null): void {
+    this.hoverStation = hit
+    this.labels?.setHover(hit, hit ? this.namesAt(hit) : [])
+  }
+
+  /** Who stands at a station right now (not those still on their way). */
+  private namesAt(hit: StationHit): string[] {
+    const names: string[] = []
+    for (const pt of hit.anchor.points) {
+      for (const id of this.stations.occupantsAt(pt)) {
+        const c = this.chars.get(id)
+        const e = this.roster.get(id)
+        if (!c || !e || !c.isSettled) continue
+        if (Math.hypot(c.position.x - pt.x, c.position.y - pt.y) > 64) continue
+        names.push(e.displayName)
+      }
+    }
+    return names
+  }
+
+  private updateHover(p: Phaser.Input.Pointer): void {
+    const c = this.charAt(p)
+    this.setHoverChar(c?.id ?? null)
+    const cam = this.cameras.main
+    this.setHoverStation(c || !this.labels ? null : this.labels.stationAt(cam.getWorldPoint(p.x, p.y)))
+  }
+
+  private clearHover(): void {
+    this.setHoverChar(null)
+    this.setHoverStation(null)
+  }
+
+  /** Station tags and the hover card follow the camera (and the character pointed at). */
+  private syncOverlay(): void {
+    const cam = this.cameras.main
+    const v = cam.worldView
+    const view = { x: v.x, y: v.y, zoom: cam.zoom, width: cam.width, height: cam.height }
+    if (this.hoverStation && this.labels) this.labels.setHover(this.hoverStation, this.namesAt(this.hoverStation))
+    if (this.labels) {
+      const bubbles = []
+      for (const c of this.chars.values()) {
+        const b = c.bubbleBounds
+        if (b) bubbles.push(b)
+      }
+      this.labels.layout(view, bubbles)
+    }
+    if (!this.hoverCard) return
+    const c = this.hoverId ? this.chars.get(this.hoverId) : undefined
+    const e = this.hoverId ? this.roster.get(this.hoverId) : undefined
+    if (!c || !e || this.leaving.has(e.id)) {
+      if (this.hoverId) this.setHoverChar(null)
+      return
+    }
+    const last = this.lastEvent.get(e.id)
+    const since = this.opts.agentSince?.(e.id)
+    this.hoverCard.show(
+      {
+        name: e.displayName,
+        role: this.manifest.roles[e.role]?.label ?? e.role,
+        phrase: last ? this.router.phrase(last.activity, last.detail) : this.router.phrase('idle'),
+        runtime: since ? `${spanText(Date.now() - since)} in the office` : '',
+        color: this.teamColorCss(e.teamId)
+      },
+      (c.position.x - v.x) * cam.zoom,
+      (c.position.y - c.height - 14 - v.y) * cam.zoom,
+      view
+    )
   }
 
   /** Moves the longest-queued waiting characters into free HQ inbox slots. */
@@ -477,6 +731,10 @@ export class OfficeScene extends Phaser.Scene {
     const entry = this.roster.get(id)
     const c = this.chars.get(id)
     if (!entry || !c || this.leaving.has(id) || entry.role === 'boss') return
+    this.lastEvent.set(id, { activity: e.activity, detail: e.detail })
+    // Real work restarts the idle clock; an agent that only says "idle" again stays where it rests.
+    if (e.activity !== 'idle') this.idle.touch(id, Date.now())
+    else if (this.idle.isResting(id) && !this.waiting.has(id) && !this.relay.isOpen(id)) return
 
     if (e.activity === 'waiting') {
       this.onWaiting(entry, c, e.detail)
@@ -528,6 +786,7 @@ export class OfficeScene extends Phaser.Scene {
     const count = this.relay.relayCount(teamId)
     if (step === 'start') {
       // Whatever the manager had queued collapses to the latest; it runs after the relay.
+      this.idle.touch(m.id, Date.now())
       const dropped = mc.dropQueued((a) => !a.lifecycle)
       if (dropped.length > 0) this.relay.setDeferred(teamId, dropped[dropped.length - 1])
       mc.enqueueFront(this.relayAction(m, mc))
@@ -554,7 +813,7 @@ export class OfficeScene extends Phaser.Scene {
 
   /** The manager carries the team's memos to the HQ inbox (or the queue outside) and waits there. */
   private relayAction(m: RosterEntry, mc: Character): Action {
-    const def = this.def('waiting')
+    const def = this.router.table('waiting')
     return {
       kind: 'relay',
       activity: 'waiting',
@@ -764,6 +1023,7 @@ export class OfficeScene extends Phaser.Scene {
     await view.build(scaleTimes(BUILD_TIMES, sp), door ?? this.roster.entranceOf(view.block.id))
     if (!this.alive) return
     view.state = 'ready'
+    this.labels?.add(view.block, true)
     if (corridor) this.markWalkable(corridor)
     this.corridors.setBuiltBlocks(this.builtBlocks().map(blockRect))
     this.corridors.redraw()
@@ -833,6 +1093,7 @@ export class OfficeScene extends Phaser.Scene {
     for (const c of retract) this.walkable.delete(this.network.key(c))
     this.rebuildNav()
     const sp = this.speed(false)
+    this.labels?.remove(view.block.id)
     await view.demolish(scaleTimes(DEMOLISH_TIMES, sp))
     if (!this.alive) return
     this.corridors.setBuiltBlocks(this.builtBlocks().map(blockRect))
@@ -938,22 +1199,33 @@ export class OfficeScene extends Phaser.Scene {
     )
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
       const now = performance.now()
+      this.dragging = false
+      this.suppressClick = false
+      this.downAt = { x: p.x, y: p.y }
+      // A double-click on the floor fits the office; clicks on a character only ever select it.
+      if (this.charAt(p)) {
+        this.lastDown = 0
+        return
+      }
       if (now - this.lastDown < DOUBLE_CLICK_MS) {
         this.lastDown = 0
+        this.suppressClick = true
         this.autoFit = true
         this.focusedTeam = null
         this.fitCamera(true)
         return
       }
       this.lastDown = now
-      this.dragging = false
-      this.downAt = { x: p.x, y: p.y }
     })
     this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
-      if (!p.isDown) return
+      if (!p.isDown) {
+        this.updateHover(p)
+        return
+      }
       if (!this.dragging && Math.hypot(p.x - this.downAt.x, p.y - this.downAt.y) < 4) return
       if (!this.dragging) {
         this.dragging = true
+        this.clearHover()
         this.stopCameraEffects()
         this.autoFit = false
         this.focusedTeam = null
@@ -961,6 +1233,17 @@ export class OfficeScene extends Phaser.Scene {
       cam.scrollX -= (p.x - p.prevPosition.x) / cam.zoom
       cam.scrollY -= (p.y - p.prevPosition.y) / cam.zoom
     })
+    this.input.on('pointerup', (p: Phaser.Input.Pointer) => {
+      if (this.dragging) {
+        this.dragging = false
+        return
+      }
+      if (this.suppressClick || Math.hypot(p.x - this.downAt.x, p.y - this.downAt.y) >= 4) return
+      // A click: on a character it selects that agent, on the floor it deselects.
+      this.opts.onAgentClick?.(this.charAt(p)?.id ?? null)
+      this.updateHover(p)
+    })
+    this.input.on('gameout', () => this.clearHover())
   }
 
   // ---- lifecycle ---------------------------------------------------------------------------
@@ -969,6 +1252,8 @@ export class OfficeScene extends Phaser.Scene {
     const door = this.roster.entranceOf(entry.id)
     const c = this.makeCharacter(entry, door)
     this.chars.set(entry.id, c)
+    this.idle.touch(entry.id, Date.now())
+    if (entry.id === this.selectedId) c.setHighlight('selected')
     c.enqueue({
       kind: 'spawn',
       lifecycle: true,
@@ -979,6 +1264,7 @@ export class OfficeScene extends Phaser.Scene {
       const boss = this.roster.get(entry.managerId)
       const m = this.chars.get(entry.managerId)
       if (boss && m && !this.leaving.has(boss.id)) {
+        this.idle.touch(boss.id, Date.now())
         m.enqueue({
           kind: 'handoff',
           lifecycle: true,
@@ -992,8 +1278,11 @@ export class OfficeScene extends Phaser.Scene {
     this.emitTeams()
   }
 
-  private onWaiting(entry: RosterEntry, c: Character, detail: string): void {
+  private onWaiting(entry: RosterEntry, c: Character, rawDetail: string): void {
     if (entry.role === 'boss') return
+    // A rule may give a waiting event its own verb ("Asking"); where it waits never changes.
+    const route = this.router.route('waiting', rawDetail)
+    const detail = route.detail
     if (this.waiting.has(entry.id)) {
       if (entry.role === 'manager') {
         this.selfDetail.set(entry.teamId, detail)
@@ -1013,7 +1302,7 @@ export class OfficeScene extends Phaser.Scene {
     }
     // A worker: memo to its manager's office (straight to the HQ during an office-wide order).
     this.relay.open(entry.id, entry.teamId, this.officeWide() ? 'hq' : 'manager')
-    const def = this.def('waiting')
+    const def = route.def
     c.enqueue({
       kind: 'waiting',
       activity: 'waiting',
@@ -1048,7 +1337,8 @@ export class OfficeScene extends Phaser.Scene {
 
   private workerDone(entry: RosterEntry, c: Character, detail: string): void {
     this.leaving.add(entry.id)
-    const def = this.def('done')
+    const route = this.router.route('done', detail)
+    const def = route.def
     const loc = def.location === HOME ? MANAGER : def.location
     c.enqueue({
       kind: 'done',
@@ -1057,7 +1347,7 @@ export class OfficeScene extends Phaser.Scene {
       carry: 'report',
       verb: def.verb,
       anim: def.anim,
-      detail: detail || this.manifest.props.report,
+      detail: route.detail || this.manifest.props.report,
       target: (from) => this.resolve(entry, c, loc, from)
     })
     this.queueLeave(entry, c)
@@ -1107,6 +1397,9 @@ export class OfficeScene extends Phaser.Scene {
       if (teamId) this.syncRelay(teamId)
     }
     this.stations.release(id)
+    this.idle.forget(id)
+    this.lastEvent.delete(id)
+    if (this.hoverId === id) this.setHoverChar(null)
     const removed = this.roster.remove(id)
     this.leaving.delete(id)
     this.departed.set(id, Date.now())
@@ -1122,19 +1415,16 @@ export class OfficeScene extends Phaser.Scene {
 
   // ---- targets -----------------------------------------------------------------------------
 
-  private def(a: Activity): ActivityDef {
-    return this.manifest.activities?.[a] ? activityDef(this.manifest, a) : { location: HOME }
-  }
-
+  /** The first matching stationRule decides where (and how it reads), else the activities table. */
   private activityAction(entry: RosterEntry, c: Character, a: Activity, detail: string): Action {
-    const def = this.def(a)
+    const { def, detail: shown } = this.router.route(a, detail)
     return {
       kind: 'activity',
       activity: a,
       lifecycle: false,
       verb: def.verb,
       anim: def.anim,
-      detail,
+      detail: shown,
       target: (from) => this.resolve(entry, c, def.location, from)
     }
   }
@@ -1188,7 +1478,7 @@ export class OfficeScene extends Phaser.Scene {
     if (id === BOSS_ID || c.atHome) return
     this.time.delayedCall(DRIFT_HOME_MS, () => {
       const entry = this.roster.get(id)
-      if (!entry || this.chars.get(id) !== c || !c.isIdle || c.atHome || this.leaving.has(id)) return
+      if (!entry || this.chars.get(id) !== c || !c.isIdle || c.atHome || this.leaving.has(id) || this.idle.isResting(id)) return
       c.enqueue({ kind: 'home', activity: 'idle', lifecycle: false, target: () => this.goHome(entry, c) })
     })
   }

@@ -4,6 +4,7 @@ import type { ThemeManifest } from './theme'
 import type { OrderRequest, OrderResult } from './orders'
 import type { BoardSettings, BoardSnapshot } from './board'
 import type { ChatEvent, ChatItem } from './chat'
+import type { AgentDetails } from './inspector'
 import type { RestoreSettings, SavedSession } from './restore'
 import type {
   PermissionDecision,
@@ -97,6 +98,14 @@ export const IPC = {
   boardChanged: 'agent-office:board:changed',
   /** main -> renderer: the BoardSettings that now apply (changed from the panel or the tray) */
   boardSettingsChanged: 'agent-office:board:settings-changed',
+
+  // ---- inspector (shared/inspector.ts) ----
+  /** invoke: AgentDetails | null, and start pushing inspectChanged for that agent to the caller */
+  inspectWatch: 'agent-office:inspect:watch',
+  /** send: stop pushing */
+  inspectUnwatch: 'agent-office:inspect:unwatch',
+  /** main -> renderer: AgentDetails for the watched agent (throttled) */
+  inspectChanged: 'agent-office:inspect:changed',
 
   // ---- permissions ----
   /** invoke */
@@ -219,6 +228,13 @@ export interface AgentOfficeBridge {
     onChanged(cb: (snapshot: BoardSnapshot) => void): () => void
     /** The settings changed, here or in the tray. Absent in the browser stub. */
     onSettingsChanged?(cb: (settings: BoardSettings) => void): () => void
+  }
+
+  inspector: {
+    /** Details for one agent (null if unknown); updates are pushed to onChanged until unwatch. One watch at a time. */
+    watch(agentId: string): Promise<AgentDetails | null>
+    unwatch(): void
+    onChanged(cb: (details: AgentDetails) => void): () => void
   }
 
   permissions: {

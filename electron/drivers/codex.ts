@@ -21,6 +21,11 @@ import {
   type SessionState
 } from '../../shared/sessions'
 import { permissionAction, plainPermission } from '../../shared/permissionText'
+import { DETAIL_QUESTION } from '../../shared/details'
+import { INSPECT_PREVIEW_CHARS } from '../../shared/inspector'
+import { relativeTo } from '../../shared/paths'
+import type { AgentFact } from '../agentStats'
+import { savedText } from '../sessionStore'
 import { ClaudeHookMapper } from '../adapters/claude-code-hooks'
 import type { BoardConflict } from '../board'
 import { BOARD_SERVER_CODEX } from '../boardMcp'
@@ -56,7 +61,7 @@ import {
   type CodexServerEvent,
   type CodexServerOptions
 } from './codexServer'
-import { CODEX_PROVIDER, collabInfo, worldActivityForItem } from './codexWorld'
+import { CODEX_PROVIDER, codexTokenUsage, collabInfo, planActivity, worldActivityForItem } from './codexWorld'
 import type { AgentDriver, DriverContext, PromptOrigin, PromptResult, ProviderDefinition } from './types'
 
 export const CODEX_LABEL = 'Codex'
@@ -456,6 +461,22 @@ export class CodexDriver implements AgentDriver {
       case 'turn/started': {
         const turnId = isRecord(params.turn) ? str(params.turn.id, 100) : ''
         if (main && turnId) this.activeTurnId = turnId
+        // A worker's turns count for the worker.
+        this.fact({ kind: 'turn', agentId })
+        break
+      }
+      case 'thread/tokenUsage/updated': {
+        // The thread's running total (also replayed on resume): it replaces what was known.
+        const usage = codexTokenUsage(params)
+        if (usage) this.fact({ kind: 'tokens', agentId, usage })
+        break
+      }
+      case 'turn/plan/updated': {
+        // The to-do list was written or updated.
+        if (!this.endedTurns.has(str(params.turnId, 100))) {
+          const plan = planActivity(params)
+          this.emitWorld(this.world.activity(agentId, plan.activity, plan.detail, now))
+        }
         break
       }
       case 'item/started':
@@ -470,7 +491,7 @@ export class CodexDriver implements AgentDriver {
           const activity = worldActivityForItem(item, this.ctx.start.cwd)
           if (activity) this.emitWorld(this.world.activity(agentId, activity.activity, activity.detail, now))
         }
-        if (isRecord(item) && item.type === 'fileChange') this.onFileChange(item, method === 'item/completed')
+        if (isRecord(item) && item.type === 'fileChange') this.onFileChange(item, method === 'item/completed', agentId)
         break
       }
       case 'serverRequest/resolved': {
@@ -528,6 +549,8 @@ export class CodexDriver implements AgentDriver {
     // The worker's own items arrive under its thread id, if the server sends them to us at all.
     this.subscribe(threadId)
     this.emitWorld(this.world.activity(worldId, 'idle', detail, now, name || 'Sub-agent'))
+    // What the worker was asked to do (the spawn call's prompt), and its role if it has one.
+    this.fact({ kind: 'worker', agentId: worldId, agentType: name || undefined, task: savedText(detail, INSPECT_PREVIEW_CHARS) || undefined })
     return worldId
   }
 
@@ -650,11 +673,18 @@ export class CodexDriver implements AgentDriver {
    * setting says `note`, the model is told about a conflict after the fact, as a message into the
    * running turn. Completed: the files are on the board as changed by this team.
    */
-  private onFileChange(item: Record<string, unknown>, completed: boolean): void {
+  private onFileChange(item: Record<string, unknown>, completed: boolean, agentId: string): void {
+    const changes = fileChangesOf(item)
+    // The inspector: the files this agent changed, as they are named in the session's folder.
+    if (completed && item.status === 'completed') {
+      for (const c of changes) {
+        const rel = relativeTo(c.path, this.ctx.start.cwd)
+        this.fact({ kind: 'file', agentId, path: rel === c.path ? c.path : rel.replace(/\\/g, '/'), change: c.kind })
+      }
+    }
     const board = this.ctx.board
     if (!board) return
     try {
-      const changes = fileChangesOf(item)
       const mode = board.conflictMode
       // In `default` mode with block-once the approval request is where the change is stopped. A
       // change that went through without one is noted when it completes.
@@ -775,7 +805,9 @@ export class CodexDriver implements AgentDriver {
     // As the registry holds it (cleaned and capped): the chat card shows the same words as the inbox.
     const held = this.ctx.permissions.get(permissionId)
     const at = this.at(agentId)
-    this.emitWorld(this.world.waiting(agentId, permissionAction(held?.question ?? plain.question), at.now))
+    // A question of an MCP server (elicitation) is a question, not a tool that wants to run.
+    const waitingFor = method === 'mcpServer/elicitation/request' ? `${DETAIL_QUESTION}${card.summary}` : permissionAction(held?.question ?? plain.question)
+    this.emitWorld(this.world.waiting(agentId, waitingFor, at.now))
     this.emitChat(
       this.chat.approvalRequested(
         {
@@ -976,6 +1008,15 @@ export class CodexDriver implements AgentDriver {
 
   private emitWorld(events: readonly AgentEvent[]): void {
     for (const e of events) this.ctx.sink.emit(e)
+  }
+
+  /** Something for the inspector (electron/agentStats.ts). Never in the way of the session. */
+  private fact(fact: AgentFact): void {
+    try {
+      this.ctx.events.onFact?.(fact)
+    } catch {
+      // the inspector is a convenience
+    }
   }
 }
 

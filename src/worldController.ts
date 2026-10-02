@@ -4,6 +4,7 @@
 import Phaser from 'phaser'
 import type { AgentEvent } from '../shared/events'
 import type { AgentOfficeBridge, LoadedTheme, RendererSettings } from '../shared/ipc'
+import type { ThemeManifest } from '../shared/theme'
 import { parseMap, ThemeError, validateTheme } from './theme/loader'
 import { OfficeScene } from './scene/OfficeScene'
 import type { TeamInfo } from './scene/OfficeScene'
@@ -20,6 +21,10 @@ export interface WorldCallbacks {
   onError(message: string | null): void
   /** When office-wide mode ends at the latest, or null when it is off. */
   onOfficeWide(endsAt: number | null): void
+  /** The loaded theme's manifest (verbs and station names for the inspector), or null while none is. */
+  onTheme?(manifest: ThemeManifest | null): void
+  /** A character was clicked in the world (its agent id), or the floor (null). */
+  onAgentClick?(agentId: string | null): void
 }
 
 export class WorldController {
@@ -28,6 +33,10 @@ export class WorldController {
   private game: Phaser.Game | null = null
   private scene: OfficeScene | null = null
   private host: HTMLElement | null = null
+  /** Layer over the canvas for the station tags and the hover card. */
+  private overlayEl: HTMLElement | null = null
+  private selectedAgent: string | null = null
+  private labelsOn = true
   private observer: ResizeObserver | null = null
   private generation = 0
   private settings: RendererSettings | null = null
@@ -37,10 +46,11 @@ export class WorldController {
   constructor(private cb: WorldCallbacks) {}
 
   /** Attaches the world to its container. The game is (re)built once settings are known. */
-  mount(host: HTMLElement): void {
+  mount(host: HTMLElement, overlay: HTMLElement | null = null): void {
     if (this.host === host) return
     this.unmount()
     this.host = host
+    this.overlayEl = overlay
     this.observer = new ResizeObserver(() => this.resize())
     this.observer.observe(host)
     this.timer = window.setInterval(() => {
@@ -58,6 +68,7 @@ export class WorldController {
     this.game = null
     this.scene = null
     this.host = null
+    this.overlayEl = null
   }
 
   /** Applies settings; rebuilds the game only when the theme or overlay mode changed. */
@@ -81,6 +92,37 @@ export class WorldController {
 
   fitAll(): void {
     this.scene?.fitAll()
+  }
+
+  /** The agent the inspector shows: its character gets a ring that follows it (null: nobody). */
+  setSelectedAgent(agentId: string | null): void {
+    this.selectedAgent = agentId
+    this.scene?.setSelectedAgent(agentId)
+  }
+
+  /** Brings an agent's branch into view. */
+  focusAgent(agentId: string): void {
+    this.scene?.focusAgent(agentId)
+  }
+
+  /** A small picture of an agent's character (a data URL), or null when there is none. */
+  portrait(agentId: string): Promise<string | null> {
+    const scene = this.scene
+    if (!scene) return Promise.resolve(null)
+    return new Promise((resolve) => {
+      // The snapshot arrives with the next frame; a hidden window renders none, so don't wait forever.
+      const timer = window.setTimeout(() => resolve(null), 1500)
+      scene.portrait(agentId, (url) => {
+        window.clearTimeout(timer)
+        resolve(url)
+      })
+    })
+  }
+
+  /** The station tags on or off. */
+  setLabels(on: boolean): void {
+    this.labelsOn = on
+    this.scene?.setLabels(on)
   }
 
   /** The CEO says it: speech bubble plus an order envelope to each target manager. */
@@ -158,6 +200,7 @@ export class WorldController {
     }
     this.cb.onError(null)
     this.cb.onThemeName(theme.manifest.displayName)
+    this.cb.onTheme?.(theme.manifest)
 
     const sc = new OfficeScene({
       theme,
@@ -168,9 +211,16 @@ export class WorldController {
         if (gen === this.generation) this.cb.onTeams(teams)
       },
       isOfficeWide: () => this.officeWide.active,
+      overlayEl: this.overlayEl,
+      labels: this.labelsOn,
+      agentSince: (id) => this.agents.since(id),
+      onAgentClick: (id) => {
+        if (gen === this.generation) this.cb.onAgentClick?.(id)
+      },
       onReady: () => {
         if (gen !== this.generation) return
         this.scene = sc
+        sc.setSelectedAgent(this.selectedAgent)
         // Rebuild the roster from what we already know; characters walk in again.
         sc.replay(this.agents.replay())
       }

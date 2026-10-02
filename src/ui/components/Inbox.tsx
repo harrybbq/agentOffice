@@ -1,13 +1,16 @@
 // The CEO's inbox: permission requests the app can answer (Allow / Deny), plus agents that are
-// waiting on something only their own terminal can answer.
+// waiting on something only their own terminal can answer. When the main process has approval
+// modes: a mute button in the header, what the user is asked about, and a quiet "Handled for you"
+// list of what was allowed without asking.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { PermissionRequestInfo } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
 import type { ResolvedPermission } from '../controller'
 import { ago, allowsByKey, bulkAllowSplit, DANGER_CONFIRM_MS, permissionHeadline, questionParts, riskBadge, stripToolPrefix, terminalOnlyWaiting } from '../format'
+import { APPROVAL_MODES, approvalHelp, handledAction, handledRows, handledTag, isApprovalMode, isMuted, MUTE_TITLE, MUTED_HEAD, UNMUTE_TITLE, wantsAttention } from '../approvals'
 import { cx, useNow } from '../hooks'
-import { IconAlert, IconBan, IconCheck, IconChevron, IconInbox, IconTerminal } from '../icons'
+import { IconAlert, IconBan, IconBell, IconBellOff, IconCheck, IconChevron, IconInbox, IconTerminal } from '../icons'
 import { Swatch } from './Sidebar'
 
 const OUTCOME_TEXT: Record<ResolvedPermission['outcome'], string> = {
@@ -33,6 +36,12 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   const providers = useAppState((s) => s.providers)
   const open = useAppState((s) => s.layout.inboxOpen)
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
+  const handled = useAppState((s) => s.handled)
+  const handledOpen = useAppState((s) => s.layout.handledOpen)
+  // Re-read with every settings change: null with a main process that has no approval modes.
+  useAppState((s) => s.settings)
+  const mode = app.hasApprovalMode ? app.approvalMode : null
+  const muted = isMuted(mode)
   const now = useNow(1000)
 
   const [active, setActive] = useState(0)
@@ -46,11 +55,20 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   const others = useMemo(() => terminalOnlyWaiting(waiting, permissions, sessions), [waiting, permissions, sessions])
   const total = permissions.length + others.length
   const cur = Math.min(active, Math.max(0, permissions.length - 1))
+  // While muted only a dangerous request asks for attention; what was handled never does.
+  const attention = muted ? permissions.some((p) => wantsAttention(mode, p.risk)) : total > 0
+  const shown = handledRows(handled)
 
   useEffect(() => {
-    app.focusInbox = () => {
+    app.focusInbox = (agentId?: string) => {
       app.setLayout({ inboxOpen: true })
-      window.setTimeout(() => listRef.current?.focus(), 0)
+      // "Go to request" in the inspector: that agent's card becomes the active one.
+      const index = agentId ? app.store.get().permissions.findIndex((p) => p.agentId === agentId) : -1
+      if (index >= 0) setActive(index)
+      window.setTimeout(() => {
+        listRef.current?.focus()
+        if (index >= 0) listRef.current?.querySelector(`[data-card="${index}"]`)?.scrollIntoView({ block: 'nearest' })
+      }, 0)
     }
     return () => {
       app.focusInbox = () => undefined
@@ -139,25 +157,42 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
   }
 
   return (
-    <section className={cx('inbox', docked ? 'is-docked' : 'is-floating', open && 'is-open', total > 0 && 'has-items')} aria-label="CEO inbox">
-      <button
-        type="button"
-        className="inbox-head"
-        onClick={() => app.setLayout({ inboxOpen: !open })}
-        aria-expanded={open}
-        title={open ? 'Collapse the inbox' : 'Open the inbox'}
-      >
-        <IconInbox />
-        <span className="inbox-title">CEO inbox</span>
-        {total > 0 ? <span className="count-badge count-attn">{total}</span> : <span className="inbox-clear">Clear</span>}
-        <span className={cx('inbox-chevron', open && 'is-open')}>
+    <section className={cx('inbox', docked ? 'is-docked' : 'is-floating', open && 'is-open', attention && 'has-items', muted && 'is-muted')} aria-label="CEO inbox">
+      <div className="inbox-head">
+        <button
+          type="button"
+          className="inbox-toggle"
+          onClick={() => app.setLayout({ inboxOpen: !open })}
+          aria-expanded={open}
+          title={open ? 'Collapse the inbox' : 'Open the inbox'}
+        >
+          <IconInbox />
+          <span className="inbox-title">
+            CEO inbox
+            {muted && <span className="inbox-muted">{MUTED_HEAD}</span>}
+          </span>
+          {total > 0 ? <span className={cx('count-badge', attention && 'count-attn')}>{total}</span> : !muted && <span className="inbox-clear">Clear</span>}
+        </button>
+        {mode && (
+          <button
+            type="button"
+            className={cx('icon-btn inbox-mute', muted && 'is-on')}
+            onClick={() => void app.toggleMute()}
+            aria-pressed={muted}
+            aria-label={muted ? UNMUTE_TITLE : MUTE_TITLE}
+            title={muted ? UNMUTE_TITLE : MUTE_TITLE}
+          >
+            {muted ? <IconBellOff /> : <IconBell />}
+          </button>
+        )}
+        <button type="button" className={cx('inbox-chevron', open && 'is-open')} onClick={() => app.setLayout({ inboxOpen: !open })} tabIndex={-1} aria-hidden="true">
           <IconChevron />
-        </span>
-      </button>
+        </button>
+      </div>
 
       {open && (
         <div className="inbox-body" ref={listRef} tabIndex={0} onKeyDown={onKey} aria-label="Pending requests. A allows (twice for a risky one), Shift+A allows all that are not risky, D denies, arrows move.">
-          {total === 0 && resolved.length === 0 && <p className="inbox-empty">Nothing is waiting on you.</p>}
+          {total === 0 && resolved.length === 0 && <p className="inbox-empty">{muted ? 'Nothing is waiting on you. Requests are being allowed for you.' : 'Nothing is waiting on you.'}</p>}
 
           {permissions.length >= 2 && bulk.allow.length >= 1 && (
             <div className="inbox-bulk">
@@ -185,7 +220,9 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
                 className={cx('card', i === cur && 'is-active', badge && `risk-${badge.tone}`)}
                 onClick={() => {
                   setActive(i)
-                  app.select(p.sessionId)
+                  app.select(p.sessionId, { inspect: false })
+                  // The one who asks gets the ring (a worker's request selects the worker).
+                  app.inspectAgent(p.agentId)
                 }}
               >
                 <header className="card-head">
@@ -319,6 +356,65 @@ export function Inbox({ docked = false }: { docked?: boolean }) {
                 </button>
               ))}
             </>
+          )}
+
+          {mode && handled.length > 0 && (
+            <div className="handled">
+              <button
+                type="button"
+                className={cx('handled-toggle', handledOpen && 'is-open')}
+                onClick={() => app.setLayout({ handledOpen: !handledOpen })}
+                aria-expanded={handledOpen}
+                title="Requests that were allowed without asking you"
+              >
+                <IconChevron size={12} />
+                Handled for you ({handled.length})
+              </button>
+              {handledOpen && (
+                <ul className="handled-list">
+                  {shown.rows.map((h) => {
+                    const tag = handledTag(h)
+                    const action = handledAction(h)
+                    return (
+                      <li key={h.id}>
+                        <button type="button" className="handled-row" onClick={() => app.select(h.sessionId)} title={`${h.question}\nAllowed automatically (${tag.text}) · ${ago(now - h.at)} ago`}>
+                          <Swatch color={colorOf(h.sessionId)} />
+                          <span className="handled-who">{h.displayName}</span>
+                          <span className="handled-what">
+                            <QuestionText text={action} />
+                          </span>
+                          <span className={cx('handled-tag', `is-${tag.tone}`)}>{tag.text}</span>
+                          <span className="handled-age">{ago(now - h.at)}</span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                  {shown.more > 0 && <li className="handled-more">and {shown.more} earlier</li>}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {mode && (
+            <div className="ask-mode">
+              <label className="ask-mode-row">
+                <span>Ask me about</span>
+                <select
+                  className="input ask-mode-select"
+                  value={mode}
+                  onChange={(ev) => {
+                    if (isApprovalMode(ev.target.value)) void app.setApprovalMode(ev.target.value)
+                  }}
+                >
+                  {APPROVAL_MODES.map((m) => (
+                    <option key={m.value} value={m.value}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="ask-mode-help">{approvalHelp(mode)}</p>
+            </div>
           )}
         </div>
       )}

@@ -13,8 +13,13 @@
 // · ?restore=none (nothing saved from an earlier run: no asleep rows, no Recent list) · ?restore=demo
 //   with ?stub=empty (only the restored rows, as right after a restart) · ?restore=old (a bridge
 //   without restore, as an older main process)
+// · ?inspect=none (no agent inspector, as an older main process) · ?idle=5 (characters go to the
+//   theme's idle location after 5 s instead of the theme's own time)
+// · ?approvals=all|important|auto (which requests are asked about; default important) ·
+//   ?approvals=none (no approval modes, as an older main process)
 // Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id),
 // codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout(), board.note(text),
+// details(agentId), agents(), question(id, text), routine(), approvalMode(),
 // restore.failNextWake() / failNextForget() / failNextReopen() / selected() / settings() ...).
 // The Codex side (chat sessions, the scripted turn) lives in ./stubCodex.ts, the office board in
 // ./stubBoard.ts.
@@ -22,6 +27,9 @@ import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { parseAgentEvent } from '../../shared/events'
 import { friendlyModelName } from '../../shared/models'
 import type { Activity, AgentEvent } from '../../shared/events'
+import type { AgentDetails, TokenUsage } from '../../shared/inspector'
+import { INSPECT_MAX_EVENTS, INSPECT_MAX_FILES } from '../../shared/inspector'
+import type { ApprovalMode, AutoAllowed } from '../ui/approvals'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
 import { PROVIDER_TARGET_PREFIX, REASON_DISABLED, REASON_NO_SESSIONS } from '../../shared/orders'
 import type { OrderResult } from '../../shared/orders'
@@ -44,6 +52,36 @@ const bold = (s: string) => `${ESC}[1m${s}${ESC}[0m`
 const fg = (n: number, s: string) => `${ESC}[38;5;${n}m${s}${ESC}[0m`
 const PROMPT = `${fg(245, '>')} `
 
+/** What the stub remembers about one agent, for the inspector. */
+interface FakeStat {
+  agentId: string
+  parentId: string | null
+  provider: string
+  displayName: string
+  startedAt: number
+  lastActiveAt: number
+  activeMs: number
+  activity: Activity
+  detail: string
+  counts: Partial<Record<Activity, number>>
+  files: AgentDetails['files']
+  recent: AgentDetails['recent']
+  tokens?: TokenUsage
+  turns?: number
+  done: boolean
+}
+
+/** What the demo agents were asked to do. */
+const TASKS: Record<string, string> = {
+  frontend: 'Refactor the session list into a store: one source of truth for the sidebar, the order bar and the status bar, with selectors instead of prop drilling. Keep the keyboard shortcuts working and add tests for the ordering.',
+  storefront: 'Update the checkout page to the new design tokens.',
+  'test-suite': 'Make the flaky world tests deterministic.',
+  Explore: 'Find every place the session list is read or written',
+  Tests: 'Run the test suite and report what fails',
+  Docs: 'Check the Vite guide for the current plugin API'
+}
+const AGENT_TYPES: Record<string, string> = { Explore: 'Explore', Tests: 'general-purpose', Docs: 'general-purpose' }
+
 interface FakeSession {
   info: SessionInfo
   buffer: string
@@ -63,12 +101,15 @@ const SAMPLE_FILES = ['src/ui/App.tsx', 'shared/ipc.ts', 'electron/main.ts', 'RE
 export function createStubBridge(): AgentOfficeBridge {
   const params = new URLSearchParams(location.search)
   const mode = params.get('stub') === 'empty' ? 'empty' : 'demo'
-  const settings: RendererSettings = {
+  const approvalsParam = params.get('approvals')
+  const hasApprovals = approvalsParam !== 'none'
+  const settings: RendererSettings & { approvalMode?: ApprovalMode } = {
     theme: 'office',
     overlay: params.get('overlay') === '1',
     allowOrders: params.get('orders') !== 'off',
     officeWideTimeoutMs: 10 * 60_000,
-    windowsBuild: 0
+    windowsBuild: 0,
+    ...(hasApprovals ? { approvalMode: approvalsParam === 'all' || approvalsParam === 'auto' ? approvalsParam : ('important' as ApprovalMode) } : {})
   }
 
   const settingsCbs = new Set<(s: RendererSettings) => void>()
@@ -122,9 +163,132 @@ export function createStubBridge(): AgentOfficeBridge {
   // An asleep row has no team: it is not on the office board.
   const board = createBoardStub(() => [...sessions.values()].map((s) => s.info).filter((i) => i.state !== 'asleep'))
 
+  // ---- inspector: per-agent stats fed by the events, pushed once a second for the watched agent ----
+  const stats = new Map<string, FakeStat>()
+  const inspectCbs = new Set<(d: AgentDetails) => void>()
+  let watched: string | null = null
+  const looksLikeFile = (detail: string) => /^[\w./\\-]+\.[a-z]{1,5}$/i.test(detail)
+  const track = (e: AgentEvent) => {
+    let st = stats.get(e.agentId)
+    if (!st) {
+      const hosted = e.provider === 'claude-code' || e.provider === 'codex'
+      st = {
+        agentId: e.agentId,
+        parentId: e.parentId,
+        provider: e.provider,
+        displayName: e.displayName,
+        startedAt: e.ts,
+        lastActiveAt: e.ts,
+        activeMs: 0,
+        activity: e.activity,
+        detail: e.detail,
+        counts: {},
+        files: [],
+        recent: [],
+        // Claude Code reports everything; Codex no context size; the others nothing.
+        tokens: hosted
+          ? {
+              input: 1800 + Math.floor(Math.random() * 4000),
+              output: 300 + Math.floor(Math.random() * 600),
+              ...(e.provider === 'claude-code'
+                ? { cached: 21_000 + Math.floor(Math.random() * 30_000), contextUsed: 24_000 + Math.floor(Math.random() * 30_000), contextWindow: 200_000 }
+                : { reasoning: 400 }),
+              total: 0
+            }
+          : undefined,
+        turns: hosted && e.parentId === null ? 1 : undefined,
+        done: false
+      }
+      stats.set(e.agentId, st)
+    }
+    st.displayName = e.displayName
+    st.activity = e.activity
+    st.detail = e.detail
+    st.lastActiveAt = e.ts
+    st.counts[e.activity] = (st.counts[e.activity] ?? 0) + 1
+    st.recent = [{ ts: e.ts, activity: e.activity, detail: e.detail }, ...st.recent].slice(0, INSPECT_MAX_EVENTS)
+    if (e.activity === 'write' && looksLikeFile(e.detail)) {
+      const known = st.files.some((f) => f.path === e.detail)
+      st.files = [{ path: e.detail, ts: e.ts, kind: known || st.files.length % 4 !== 3 ? ('edit' as const) : ('create' as const) }, ...st.files.filter((f) => f.path !== e.detail)].slice(0, INSPECT_MAX_FILES)
+    }
+    if (e.activity === 'done') st.done = true
+    if (e.activity === 'idle' && st.turns !== undefined && st.recent.length > 1 && st.recent[1].activity !== 'idle') st.turns++
+  }
+  const detailsOf = (agentId: string): AgentDetails | null => {
+    const st = stats.get(agentId)
+    if (!st) return null
+    const own = sessions.get(agentId)
+    const parent = st.parentId ? sessions.get(st.parentId) : undefined
+    const session = own ?? parent
+    const ask = pending.find((p) => p.agentId === agentId)
+    const working = st.activity !== 'idle' && st.activity !== 'waiting' && st.activity !== 'done'
+    const tokens = st.tokens ? { ...st.tokens, total: st.tokens.input + st.tokens.output + (st.tokens.cached ?? 0) + (st.tokens.reasoning ?? 0) } : undefined
+    const d: AgentDetails = {
+      agentId,
+      sessionId: session?.info.id,
+      parentId: st.parentId ?? undefined,
+      role: st.parentId ? 'worker' : 'manager',
+      displayName: st.displayName,
+      provider: st.provider,
+      model: own ? (own.info.model ?? (own.info.provider === 'claude-code' ? 'claude-sonnet-5' : undefined)) : parent ? 'claude-haiku-4-5' : undefined,
+      state: own ? own.info.state : st.done ? 'done' : st.activity === 'waiting' ? 'waiting' : working ? 'working' : 'idle',
+      activity: st.activity,
+      detail: st.detail,
+      task: session ? TASKS[st.displayName] : undefined,
+      agentType: st.parentId && session ? AGENT_TYPES[st.displayName] : undefined,
+      cwd: session?.info.cwd,
+      startedAt: st.startedAt,
+      lastActiveAt: st.lastActiveAt,
+      activeMs: st.activeMs,
+      turns: st.turns,
+      tokens,
+      counts: { ...st.counts },
+      files: st.files,
+      recent: st.recent,
+      waitingOn: ask
+        ? { question: ask.question ?? ask.summary, risk: ask.risk ?? 'normal', since: ask.createdAt }
+        : st.activity === 'waiting' && st.detail.startsWith('question: ')
+          ? { question: st.detail.slice('question: '.length), risk: 'normal', since: st.lastActiveAt }
+          : undefined
+    }
+    if (!st.parentId) {
+      d.workers = [...stats.values()]
+        .filter((w) => w.parentId === agentId)
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .map((w) => ({ agentId: w.agentId, displayName: w.displayName, agentType: session ? AGENT_TYPES[w.displayName] : undefined, activity: w.activity, done: w.done, startedAt: w.startedAt }))
+    }
+    return d
+  }
+  window.setInterval(() => {
+    for (const st of stats.values()) {
+      if (st.done || st.activity === 'idle' || st.activity === 'waiting') continue
+      st.activeMs += 1000
+      if (st.tokens) {
+        st.tokens.input += 40 + Math.floor(Math.random() * 260)
+        st.tokens.output += 10 + Math.floor(Math.random() * 70)
+        if (st.tokens.cached !== undefined) st.tokens.cached += 300 + Math.floor(Math.random() * 900)
+        if (st.tokens.reasoning !== undefined) st.tokens.reasoning += Math.floor(Math.random() * 30)
+        if (st.tokens.contextUsed !== undefined) st.tokens.contextUsed = Math.min(st.tokens.contextWindow ?? Infinity, st.tokens.contextUsed + 150 + Math.floor(Math.random() * 500))
+      }
+    }
+    const d = watched ? detailsOf(watched) : null
+    if (d) inspectCbs.forEach((cb) => cb(d))
+  }, 1000)
+
+  // ---- approvals: what is asked about, and what was allowed without asking ----------------------
+  let handled: (AutoAllowed & { mode?: 'important' | 'auto' })[] = []
+  const autoCbs = new Set<(e: AutoAllowed) => void>()
+  const autoAllow = (o: { sessionId: string; agentId: string; displayName: string; provider: string; question: string; toolName: string }, mode: 'important' | 'auto') => {
+    const entry = { id: `auto-${++counter}`, ...o, at: Date.now(), mode }
+    handled = [entry, ...handled].slice(0, 50)
+    autoCbs.forEach((cb) => cb(entry))
+  }
+
   const emit = (input: Partial<AgentEvent> & { agentId: string; activity: Activity }) => {
     const e = parseAgentEvent({ provider: 'claude-code', ts: Date.now(), ...input })
-    if (e) eventCbs.forEach((cb) => cb(e))
+    if (!e) return
+    track(e)
+    eventCbs.forEach((cb) => cb(e))
   }
   const pushSessions = () => {
     const list = [...sessions.values()].map((s) => ({ ...s.info }))
@@ -301,6 +465,12 @@ export function createStubBridge(): AgentOfficeBridge {
       detail,
       ...plain,
       createdAt: Date.now()
+    }
+    // Muted: everything except a dangerous request is allowed for the user and only listed.
+    if (settings.approvalMode === 'auto' && req.risk !== 'danger') {
+      autoAllow({ sessionId: req.sessionId, agentId, displayName, provider: req.provider, question: req.question ?? summary, toolName: tool }, 'auto')
+      emit({ agentId, parentId: agentId === s.info.id ? null : s.info.id, provider: s.info.provider, displayName, activity: 'exec', detail: summary })
+      return req
     }
     pending = [...pending, req]
     emit({ agentId, parentId: agentId === s.info.id ? null : s.info.id, provider: s.info.provider, displayName, activity: 'waiting', detail: permissionAction(plain.question) })
@@ -661,13 +831,17 @@ export function createStubBridge(): AgentOfficeBridge {
         later(b, 3800, () => requestPermission(b, b.info.id, b.info.title, 'Bash', 'Bash: rm -rf dist build', JSON.stringify({ command: 'rm -rf dist build', description: 'Clean the build output' }, null, 2)))
       }
 
-      // Keep the office moving a little.
+      // Keep the office moving a little (the last three are the details theme rules route by).
       const acts: [Activity, string][] = [
         ['read', 'src/world/layout.ts'],
         ['write', 'src/ui/components/Sidebar.tsx'],
         ['exec', 'npx tsc --noEmit'],
         ['web', 'xtermjs.org/docs'],
-        ['read', 'shared/sessions.ts']
+        ['read', 'shared/sessions.ts'],
+        ['capture', 'screenshot of the sidebar'],
+        ['write', 'planning: split the store into slices'],
+        ['read', 'checking the board'],
+        ['read', 'secrets: .env.local']
       ]
       window.setInterval(() => {
         const live = [...sessions.values()].filter((s) => s.info.state !== 'exited' && s.workers.length > 0 && s.info.surface === 'terminal')
@@ -678,8 +852,30 @@ export function createStubBridge(): AgentOfficeBridge {
         const [activity, detail] = acts[Math.floor(Math.random() * acts.length)]
         emit({ agentId: w, parentId: s.info.id, displayName: w.endsWith('w1') ? (s === a ? 'Explore' : 'Docs') : 'Tests', activity, detail })
       }, 3200)
+
+      // Routine work the app allows by itself unless everything is asked about.
+      const routine: [string, string, string][] = [
+        ['Bash', 'run the tests (`npm test`)', 'frontend'],
+        ['Read', 'read `src/ui/store.ts`', 'Explore'],
+        ['Edit', 'edit `src/ui/components/Sidebar.tsx`', 'frontend'],
+        ['Bash', 'build or check the project (`npx tsc --noEmit`)', 'Tests'],
+        ['Grep', 'search the project for `sessionOrder`', 'Explore']
+      ]
+      let routineAt = 0
+      const oneRoutine = () => {
+        if (!settings.approvalMode || settings.approvalMode === 'all' || a.info.state === 'exited') return
+        const [toolName, action, who] = routine[routineAt++ % routine.length]
+        const agentId = who === 'frontend' ? a.info.id : (a.workers[who === 'Explore' ? 0 : 1] ?? a.info.id)
+        const name = who === 'frontend' ? a.info.title : `${who} (${a.info.title}'s team)`
+        autoAllow({ sessionId: a.info.id, agentId, displayName: who === 'frontend' ? a.info.title : who, provider: a.info.provider, question: `${name} wants to ${action}.`, toolName }, settings.approvalMode === 'auto' ? 'auto' : 'important')
+      }
+      routineNow = oneRoutine
+      later(a, 1800, oneRoutine)
+      later(a, 3600, oneRoutine)
+      window.setInterval(oneRoutine, 9000)
     }, 600)
   }
+  let routineNow: () => void = () => undefined
 
   const stubHandle = {
     sessions: () => [...sessions.values()].map((s) => s.info),
@@ -698,6 +894,18 @@ export function createStubBridge(): AgentOfficeBridge {
       setState(s, 'needs-attention')
     },
     emit,
+    /** What the inspector would be told about an agent. */
+    details: detailsOf,
+    agents: () => [...stats.keys()],
+    /** An agent asks the user something (not a permission request). */
+    question: (agentId: string, text = 'Which test runner should the new suite use: vitest or node:test?') => {
+      const st = stats.get(agentId)
+      if (st) emit({ agentId, parentId: st.parentId, provider: st.provider, displayName: st.displayName, activity: 'waiting', detail: `question: ${text}` })
+    },
+    /** One more routine request allowed without asking. */
+    routine: () => routineNow(),
+    approvalMode: () => settings.approvalMode ?? null,
+    handled: () => handled,
     codex,
     codexId: () => [...sessions.values()].find((s) => s.info.surface === 'chat' && s.info.state !== 'exited')?.info.id ?? null,
     board: board.handle,
@@ -747,7 +955,10 @@ export function createStubBridge(): AgentOfficeBridge {
         return r.json()
       }
       try {
-        const manifest = await get('theme.json')
+        const loaded = await get('theme.json')
+        // ?idle=5: rest after 5 s, so the idle location can be seen without waiting for the theme's time.
+        const idleSec = Number(params.get('idle'))
+        const manifest = loaded.idle && Number.isFinite(idleSec) && idleSec > 0 ? { ...loaded, idle: { ...loaded.idle, afterMs: idleSec * 1000 } } : loaded
         const [hq, branch] = await Promise.all([get(manifest.hq), get(manifest.branch)])
         return { manifest, hq, branch, baseUrl }
       } catch (err) {
@@ -907,7 +1118,48 @@ export function createStubBridge(): AgentOfficeBridge {
     // ?board=none: a main process from before the office board.
     board: params.get('board') === 'none' ? (undefined as unknown as AgentOfficeBridge['board']) : board.bridge,
 
+    // ?inspect=none: a main process from before the agent inspector.
+    inspector:
+      params.get('inspect') === 'none'
+        ? (undefined as unknown as AgentOfficeBridge['inspector'])
+        : {
+            watch: async (agentId) => {
+              watched = agentId
+              await new Promise((r) => setTimeout(r, 60))
+              return detailsOf(agentId)
+            },
+            unwatch: () => {
+              watched = null
+            },
+            onChanged: (cb) => (inspectCbs.add(cb), () => inspectCbs.delete(cb))
+          },
+
+    // ?approvals=none: a main process that asks about everything and has no modes.
+    ...(hasApprovals
+      ? {
+          setApprovalMode: async (mode: ApprovalMode) => {
+            if (mode !== 'all' && mode !== 'important' && mode !== 'auto') throw new Error('invalid mode')
+            settings.approvalMode = mode
+            // Muting answers what is already waiting, except the dangerous requests.
+            if (mode === 'auto') {
+              for (const p of pending.filter((x) => x.risk !== 'danger')) {
+                autoAllow({ sessionId: p.sessionId, agentId: p.agentId, displayName: p.displayName, provider: p.provider, question: p.question ?? p.summary, toolName: p.toolName }, 'auto')
+                settle(p.id, 'allowed')
+              }
+            }
+            settingsCbs.forEach((cb) => cb({ ...settings }))
+            return { ...settings }
+          }
+        }
+      : {}),
+
     permissions: {
+      ...(hasApprovals
+        ? {
+            recentAuto: async () => [...handled],
+            onAuto: (cb: (e: AutoAllowed) => void) => (autoCbs.add(cb), () => autoCbs.delete(cb))
+          }
+        : {}),
       list: async () => [...pending],
       decide: async (id, decision) => {
         await new Promise((r) => setTimeout(r, 150))

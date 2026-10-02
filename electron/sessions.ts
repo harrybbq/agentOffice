@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { basename, isAbsolute, resolve } from 'node:path'
 import { CHAT_MAX_PROMPT_CHARS, type ChatEvent, type ChatItem } from '../shared/chat'
+import type { AgentDetails } from '../shared/inspector'
 import { planOrder, REASON_ASLEEP, REASON_NOT_CONNECTED, type OrderResult } from '../shared/orders'
 import { canWake, MAX_SAVED_PENDING, type RestoreMode, type RestoreSettings, type SavedPendingRequest, type SavedSession } from '../shared/restore'
 import type {
@@ -25,6 +26,7 @@ import type {
 } from '../shared/sessions'
 import type { HostedHookTarget, HostedSessions } from './adapters/claude-code-hooks'
 import type { EventSink } from './adapters/types'
+import type { AgentFact, AgentStats } from './agentStats'
 import { boardAccess, boardStatus, parseBoardSettingsPatch, type Board, type BoardAccess, type BoardEndpoint } from './board'
 import { resolveBoardProject, type BoardProject } from './boardProject'
 import type { BoardSettings, BoardSnapshot } from '../shared/board'
@@ -76,6 +78,11 @@ export interface SessionManagerOptions {
   board?: SessionBoardOptions
   /** "Remember where I left off" (shared/restore.ts). Absent = nothing is saved or restored. */
   restore?: SessionRestoreOptions
+  /**
+   * The inspector's per-agent stats (agentStats.ts). The manager passes on what the drivers report
+   * and answers `inspect()` from it. Absent = no inspector. Read-only: nothing here reaches an agent.
+   */
+  stats?: AgentStats
 }
 
 export interface SessionRestoreOptions {
@@ -403,7 +410,8 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
         onChat: (e) => {
           if (this.chatAttached.has(id)) this.opts.onChatEvent?.(e)
         },
-        onPrompt: (text) => this.onPrompt(id, text)
+        onPrompt: (text) => this.onPrompt(id, text),
+        onFact: (fact) => this.fact(fact)
       }
     })
     const now = Date.now()
@@ -430,8 +438,19 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     return this.info(session)
   }
 
+  /** Something for the inspector. Never in the way of a session. */
+  private fact(fact: AgentFact): void {
+    try {
+      this.opts.stats?.fact(fact)
+    } catch {
+      // the inspector is a convenience
+    }
+  }
+
   private onState(id: string, state: SessionInfo['state']): void {
     this.opts.board?.model.setStatus(id, boardStatus(state))
+    // A turn that is thinking shows no activity in the world: the manager's working clock follows the session's state.
+    this.fact({ kind: 'busy', agentId: id, busy: state === 'busy' || state === 'waiting-permission' })
     const s = this.sessions.get(id)
     if (s) {
       if (state === 'idle' || state === 'busy' || state === 'waiting-permission') s.ready = true
@@ -454,7 +473,11 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     const s = this.sessions.get(id)
     if (!s) return
     const preview = promptPreview(text)
-    if (preview) s.lastPrompt = preview
+    if (preview) {
+      s.lastPrompt = preview
+      // What the manager was asked to do, as the inspector shows it (the same redacted one-line preview).
+      this.fact({ kind: 'task', agentId: id, text: preview })
+    }
     s.lastActiveAt = Date.now()
     // They are working with the session again: the "was interrupted" note has done its job.
     delete s.note
@@ -1063,6 +1086,27 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     if (s.driver.state === 'exited') throw new Error('the session has ended')
     const r = await s.driver.sendPrompt(clean, 'human')
     if (!r.ok) throw new Error(r.reason)
+  }
+
+  // ---- inspector (shared/inspector.ts): read-only ----
+
+  /**
+   * What one agent of the world is doing: a hosted manager, one of its workers, an observed
+   * session, or a sleeping session's row. Null for an id nobody knows (or without stats).
+   */
+  inspect(agentId: unknown): AgentDetails | null {
+    const stats = this.opts.stats
+    if (!stats || typeof agentId !== 'string' || agentId.length === 0 || agentId.length > 200) return null
+    return stats.details(agentId, {
+      session: (id) => {
+        const live = this.sessions.get(id)
+        if (live) return this.info(live)
+        const row = this.asleep.get(id)
+        return row ? this.sleeperInfo(row) : undefined
+      },
+      pending: () => this.permissions.list(),
+      claim: (sessionId) => this.opts.board?.model.claimOf(sessionId)
+    })
   }
 
   // ---- permissions ----

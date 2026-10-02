@@ -3,6 +3,7 @@
 // every argument. This is the ONLY way a permission is approved or an order is sent.
 import { dialog, ipcMain, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { IPC } from '../shared/ipc'
+import { InspectorWatch } from './agentStats'
 import type { SessionManager } from './sessions'
 
 export interface SessionIpcOptions {
@@ -11,7 +12,12 @@ export interface SessionIpcOptions {
   getWindow: () => BrowserWindow | null
 }
 
-export function registerSessionIpc(opts: SessionIpcOptions): void {
+export interface SessionIpc {
+  /** The inspector's watches (one per window). `poke()` it when an agent changed; `clear()` it when the renderer reloads. */
+  inspector: InspectorWatch<number>
+}
+
+export function registerSessionIpc(opts: SessionIpcOptions): SessionIpc {
   const { manager, getWindow } = opts
   const ours = (sender: WebContents): boolean => {
     const win = getWindow()
@@ -74,4 +80,27 @@ export function registerSessionIpc(opts: SessionIpcOptions): void {
 
   handle(IPC.listPermissions, () => manager.listPermissions())
   handle(IPC.decidePermission, (id, decision) => manager.decide(id, decision))
+
+  // The inspector panel: read-only. One watch per window (keyed by its webContents id); a new watch
+  // replaces the old one. Pushes only go to the app's current window.
+  const inspector = new InspectorWatch<number>({
+    details: (agentId) => manager.inspect(agentId),
+    send: (key, details) => {
+      const win = getWindow()
+      if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && win.webContents.id === key) win.webContents.send(IPC.inspectChanged, details)
+      else inspector.unwatch(key)
+    }
+  })
+  ipcMain.handle(IPC.inspectWatch, (e: IpcMainInvokeEvent, agentId: unknown) => {
+    if (!ours(e.sender)) throw new Error('unauthorised sender')
+    if (typeof agentId !== 'string' || agentId.length === 0 || agentId.length > 200) throw new Error('invalid agent id')
+    const key = e.sender.id
+    // A window that goes away takes its watch with it.
+    if (inspector.watching(key) === undefined) e.sender.once('destroyed', () => inspector.unwatch(key))
+    return inspector.watch(key, agentId)
+  })
+  ipcMain.on(IPC.inspectUnwatch, (e: IpcMainEvent) => {
+    if (ours(e.sender)) inspector.unwatch(e.sender.id)
+  })
+  return { inspector }
 }

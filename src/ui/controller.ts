@@ -4,6 +4,8 @@
 import { createContext, useContext } from 'react'
 import type { BoardSettings, BoardSnapshot } from '../../shared/board'
 import type { AgentEvent } from '../../shared/events'
+import type { AgentDetails } from '../../shared/inspector'
+import type { ThemeManifest } from '../../shared/theme'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
 import type { OrderResult } from '../../shared/orders'
 import type { RestoreSettings } from '../../shared/restore'
@@ -25,6 +27,8 @@ import type { RemoveKind } from './board'
 import { ChatManager } from './chats'
 import { appendLog, cleanError, orderSummary, orderTargets, pushRecent, retainExited, sessionOrder, vanished } from './format'
 import type { LogEntry, OrderSummary } from './format'
+import { approvalsBridge, isApprovalMode, pushHandled, toggleMute, wantsAttention } from './approvals'
+import type { ApprovalMode, AutoAllowed } from './approvals'
 import { EMPTY_RECENT, recentReducer, restoreSelection, restoreSummary } from './restore'
 import type { RecentState, RestoreSummary } from './restore'
 import { Store, useStore } from './store'
@@ -32,7 +36,8 @@ import { TerminalManager } from './terminals'
 import type { UiTheme } from './terminals'
 
 export type Dock = 'auto' | 'right' | 'bottom'
-export type PanelTab = 'terminal' | 'events' | 'board'
+export type PanelTab = 'terminal' | 'inspect' | 'events' | 'board'
+const PANEL_TABS: readonly PanelTab[] = ['terminal', 'inspect', 'events', 'board']
 
 export interface Layout {
   panelOpen: boolean
@@ -44,6 +49,10 @@ export interface Layout {
   uiTheme: UiTheme
   /** The sidebar's Recent section (collapsed by default). */
   recentOpen: boolean
+  /** The floating station tags in the world. */
+  labels: boolean
+  /** The inbox's "Handled for you" list (collapsed by default). */
+  handledOpen: boolean
 }
 
 export const DEFAULT_LAYOUT: Layout = {
@@ -54,7 +63,9 @@ export const DEFAULT_LAYOUT: Layout = {
   tab: 'terminal',
   inboxOpen: true,
   uiTheme: 'dark',
-  recentOpen: false
+  recentOpen: false,
+  labels: true,
+  handledOpen: false
 }
 
 /** A request that just left the pending list, shown briefly with what happened to it. */
@@ -121,6 +132,19 @@ export interface AppState {
   restoreSettings: RestoreSettings | null
   /** The one-time "3 sessions restored · 2 were interrupted" notice of this launch. */
   restoreNotice: RestoreSummary | null
+
+  // ---- the agent inspector (shared/inspector.ts) ----
+  /** The loaded world theme: its verbs and station names word what an agent is doing. */
+  theme: ThemeManifest | null
+  /** The agent the inspector shows (a manager = its session id, or a worker); its character has the ring. */
+  agentId: string | null
+  /** What the main process last said about that agent; null while loading or when it knows nothing. */
+  agentDetails: AgentDetails | null
+  agentStatus: 'none' | 'loading' | 'ready' | 'unknown'
+
+  // ---- approvals: what the app allowed without asking ----
+  /** Routine requests allowed automatically, newest first (the inbox's "Handled for you"). */
+  handled: AutoAllowed[]
 }
 
 const LAYOUT_KEY = 'agentOffice.layout'
@@ -129,6 +153,8 @@ const RECENT_KEY = 'agentOffice.recentFolders'
 const SELECTED_KEY = 'agentOffice.selected'
 /** closedAt of the last restore summary shown: once per close, also across an overlay window swap. */
 const RESTORE_SEEN_KEY = 'agentOffice.restoreSeen'
+/** The approval mode to go back to when the inbox is unmuted. */
+const UNMUTED_MODE_KEY = 'agentOffice.unmutedMode'
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -151,7 +177,9 @@ function loadLayout(): Layout {
   const raw = readJson<Partial<Layout>>(LAYOUT_KEY, {})
   const l = { ...DEFAULT_LAYOUT, ...(raw && typeof raw === 'object' ? raw : {}) }
   if (!['auto', 'right', 'bottom'].includes(l.dock)) l.dock = 'auto'
-  if (l.tab !== 'terminal' && l.tab !== 'events' && l.tab !== 'board') l.tab = 'terminal'
+  if (!PANEL_TABS.includes(l.tab)) l.tab = 'terminal'
+  l.labels = l.labels !== false
+  l.handledOpen = l.handledOpen === true
   if (l.uiTheme !== 'dark' && l.uiTheme !== 'light') l.uiTheme = 'dark'
   l.recentOpen = l.recentOpen === true
   if (!Number.isFinite(l.sizeRight)) l.sizeRight = DEFAULT_LAYOUT.sizeRight
@@ -194,9 +222,12 @@ export class AppController {
   private feedbackTimer = 0
   /** Note ids already seen on the board; null until the first snapshot (which is not news). */
   private seenNotes: Set<string> | null = null
+  /** The agent the main process is pushing details for right now (one watch at a time). */
+  private watching: string | null = null
   /** Set by the order bar so shortcuts can focus it. */
   focusOrderBar: () => void = () => undefined
-  focusInbox: () => void = () => undefined
+  /** Opens the inbox; with an agent id, on that agent's request. */
+  focusInbox: (agentId?: string) => void = () => undefined
   /** Set by the chat composer. */
   focusChat: (draft?: string) => void = () => undefined
   /** Set by the wake screen (an asleep row has no terminal or chat to focus). */
@@ -245,14 +276,22 @@ export class AppController {
       reopening: new Set(),
       recentActionError: null,
       restoreSettings: null,
-      restoreNotice: null
+      restoreNotice: null,
+      theme: null,
+      agentId: null,
+      agentDetails: null,
+      agentStatus: 'none',
+      handled: []
     })
     this.world = new WorldController({
       onTeams: (teams) => this.store.set({ teams }),
       onThemeName: (themeName) => this.store.set({ themeName }),
       onError: (worldError) => this.store.set({ worldError }),
-      onOfficeWide: (officeWideEndsAt) => this.store.set({ officeWideEndsAt })
+      onOfficeWide: (officeWideEndsAt) => this.store.set({ officeWideEndsAt }),
+      onTheme: (theme) => this.store.set({ theme }),
+      onAgentClick: (agentId) => this.onWorldClick(agentId)
     })
+    this.world.setLabels(this.store.get().layout.labels)
     this.terminals = new TerminalManager(bridge)
     this.chats = new ChatManager(bridge)
     this.terminals.setTheme(this.store.get().layout.uiTheme)
@@ -290,6 +329,29 @@ export class AppController {
       // The switches changed in the main process (the tray, or this panel): follow.
       b.board.onSettingsChanged?.((settings) => this.store.set({ boardSettings: settings }))
     }
+
+    // The inspector: details of the watched agent, pushed about once a second.
+    if (this.hasInspector) {
+      b.inspector.onChanged((details) => {
+        if (details && details.agentId === this.watching && this.store.get().agentId === details.agentId) {
+          this.store.set({ agentDetails: details, agentStatus: 'ready' })
+        }
+      })
+    }
+
+    // Requests the app allowed without asking ("important only" mode): a quiet audit trail.
+    const approvals = approvalsBridge(b)
+    let pushedAuto = false
+    approvals.onAuto?.((entry) => {
+      pushedAuto = true
+      this.store.set((s) => ({ handled: pushHandled(s.handled, [entry]) }))
+    })
+    void approvals
+      .recentAuto?.()
+      .then((list) => {
+        if (Array.isArray(list)) this.store.set((s) => ({ handled: pushHandled(pushedAuto ? s.handled : [], list) }))
+      })
+      .catch((err) => console.warn('[agent-office] could not read the handled requests', err))
 
     try {
       this.applySettings(await b.getSettings())
@@ -422,17 +484,23 @@ export class AppController {
 
   private setPermissions(next: PermissionRequestInfo[]): void {
     const prev = this.store.get().permissions
+    // Muted: what leaves the list without an answer from here was allowed for the user (a dangerous
+    // request is never allowed that way, so it was answered in the terminal).
+    const muted = this.approvalMode === 'auto'
     for (const req of vanished(prev, next, this.decidedHere)) {
-      this.addResolved(req, 'resolved-elsewhere')
+      const outcome: PermissionOutcome = muted && req.risk !== 'danger' ? 'allowed' : 'resolved-elsewhere'
+      this.addResolved(req, outcome)
       // The same request's card in the chat (the main process's own item update overrides this).
-      this.chats.resolveApproval(req.id, 'resolved-elsewhere')
+      this.chats.resolveApproval(req.id, outcome === 'allowed' ? 'allowed' : 'resolved-elsewhere')
     }
     const known = new Set(prev.map((p) => p.id))
     // A request of the chat session on screen shows as a card in that chat: no need to open the
     // inbox over it. Anything else new opens the inbox.
     const s0 = this.store.get()
     const onScreen = s0.layout.panelOpen && s0.layout.tab === 'terminal' && s0.sessions.find((x) => x.id === s0.selectedId)?.surface === 'chat' ? s0.selectedId : null
-    const fresh = next.some((p) => !known.has(p.id) && p.sessionId !== onScreen)
+    // Muted: only a dangerous request opens it (everything else was allowed for the user).
+    const mode = this.approvalMode
+    const fresh = next.some((p) => !known.has(p.id) && p.sessionId !== onScreen && wantsAttention(mode, p.risk))
     this.store.set((s) => ({
       permissions: next,
       layout: fresh && !s.layout.inboxOpen ? { ...s.layout, inboxOpen: true } : s.layout
@@ -468,7 +536,7 @@ export class AppController {
   // ---- actions -----------------------------------------------------------------------------
 
   /** Selects a session or world team: focuses its branch and (for hosted sessions) its terminal. */
-  select(id: string | null, opts: { focusTerminal?: boolean; reveal?: boolean; focusWorld?: boolean } = {}): void {
+  select(id: string | null, opts: { focusTerminal?: boolean; reveal?: boolean; focusWorld?: boolean; inspect?: boolean } = {}): void {
     const s = this.store.get()
     const session = id ? s.sessions.find((x) => x.id === id) : undefined
     const hosted = !!session
@@ -481,6 +549,8 @@ export class AppController {
     if (hosted && s.selectedId !== id) this.tellSelected(id)
     if (patch.layout) this.saveLayout()
     if (id && (opts.focusWorld ?? true)) this.world.focusTeam(id)
+    // A session's manager is the agent the inspector shows (the tab is not opened by this).
+    if (opts.inspect ?? true) this.inspectAgent(id)
     if (session && opts.focusTerminal) {
       window.setTimeout(() => {
         // Read the state again: a row that was asleep a moment ago may be starting now.
@@ -530,6 +600,111 @@ export class AppController {
         loginError: { provider, text: cleanError(err) }
       }))
     }
+  }
+
+  // ---- the agent inspector ----------------------------------------------------------------------
+
+  /** Does this main process keep agent details? (An older preload has no inspector.) */
+  get hasInspector(): boolean {
+    const api = (this.bridge as Partial<AgentOfficeBridge>).inspector
+    return !!api && typeof api.watch === 'function' && typeof api.onChanged === 'function'
+  }
+
+  /**
+   * Picks the agent the inspector shows (null: nobody). Its character gets the ring; `reveal` also
+   * opens the panel on the Inspect tab, `focusWorld` brings its branch into view.
+   */
+  inspectAgent(agentId: string | null, opts: { reveal?: boolean; focusWorld?: boolean } = {}): void {
+    const s = this.store.get()
+    if (s.agentId !== agentId) {
+      this.store.set({ agentId, agentDetails: null, agentStatus: agentId ? 'loading' : 'none' })
+    }
+    this.world.setSelectedAgent(agentId)
+    if (agentId && opts.focusWorld) this.world.focusAgent(agentId)
+    if (agentId && opts.reveal && this.hasInspector) this.setLayout({ panelOpen: true, tab: 'inspect' })
+    else this.syncWatch()
+  }
+
+  /** A click in the world: a character selects that agent (and its session), the floor deselects. */
+  private onWorldClick(agentId: string | null): void {
+    if (!agentId) {
+      this.inspectAgent(null)
+      return
+    }
+    const last = this.world.agents.last(agentId)
+    const teamId = last ? this.world.agents.rootOf(last) : agentId
+    // The session follows, but its terminal is not brought up: the click asked about the agent.
+    if (this.store.get().selectedId !== teamId) this.select(teamId, { reveal: false, focusWorld: false, inspect: false })
+    this.inspectAgent(agentId, { reveal: true })
+  }
+
+  /**
+   * One watch at a time, and only while the Inspect tab is on screen: the main process pushes the
+   * watched agent's details about once a second.
+   */
+  private syncWatch(): void {
+    const s = this.store.get()
+    const want = this.hasInspector && s.layout.panelOpen && s.layout.tab === 'inspect' ? s.agentId : null
+    if (want === this.watching) return
+    const api = this.bridge.inspector
+    if (this.watching) {
+      try {
+        api.unwatch()
+      } catch (err) {
+        console.warn('[agent-office] unwatch failed', err)
+      }
+    }
+    this.watching = want
+    if (!want) return
+    api
+      .watch(want)
+      .then((details) => {
+        if (this.watching !== want || this.store.get().agentId !== want) return
+        this.store.set(details ? { agentDetails: details, agentStatus: 'ready' } : { agentDetails: null, agentStatus: 'unknown' })
+      })
+      .catch((err) => {
+        console.warn('[agent-office] could not read the agent details', err)
+        if (this.watching === want && this.store.get().agentId === want) this.store.set({ agentStatus: 'unknown' })
+      })
+  }
+
+  // ---- approvals: ask about everything, or only about what matters ------------------------------
+
+  /** Does this main process have the "important only" mode? (An older one asks about everything.) */
+  get hasApprovalMode(): boolean {
+    return typeof approvalsBridge(this.bridge).setApprovalMode === 'function' && isApprovalMode(this.approvalMode)
+  }
+
+  /** The mode in force, or null when the main process has none. */
+  get approvalMode(): ApprovalMode | null {
+    const mode = (this.store.get().settings as { approvalMode?: unknown } | null)?.approvalMode
+    return isApprovalMode(mode) ? mode : null
+  }
+
+  /** Shown at once, put back if the main process refuses. */
+  async setApprovalMode(mode: ApprovalMode): Promise<void> {
+    const prev = this.store.get().settings
+    const api = approvalsBridge(this.bridge)
+    if (!prev || typeof api.setApprovalMode !== 'function') return
+    const optimistic = { ...prev, approvalMode: mode } as RendererSettings
+    this.store.set({ settings: optimistic })
+    try {
+      const next = await api.setApprovalMode(mode)
+      // The main process pushes the new settings too (onSettings); a returned copy is applied at once.
+      if (next && typeof next === 'object' && typeof (next as RendererSettings).theme === 'string') this.applySettings(next as RendererSettings)
+    } catch (err) {
+      console.warn('[agent-office] could not change the approval mode', err)
+      if (this.store.get().settings === optimistic) this.store.set({ settings: prev })
+    }
+  }
+
+  /** The inbox's mute button: mute remembers the mode that was active, unmute goes back to it. */
+  async toggleMute(): Promise<void> {
+    const current = this.approvalMode
+    if (!current || !this.hasApprovalMode) return
+    const { next, remember } = toggleMute(current, readJson<unknown>(UNMUTED_MODE_KEY, null))
+    writeJson(UNMUTED_MODE_KEY, remember)
+    await this.setApprovalMode(next)
   }
 
   /** Does this main process have an office board? (An older preload has none.) */
@@ -659,6 +834,7 @@ export class AppController {
       writeJson(SELECTED_KEY, null)
       this.tellSelected(null)
     }
+    if (this.store.get().agentId === id) this.inspectAgent(null)
   }
 
   // ---- restore: sessions survive closing the app -----------------------------------------------
@@ -921,7 +1097,10 @@ export class AppController {
       document.documentElement.dataset.uiTheme = patch.uiTheme
       this.terminals.setTheme(patch.uiTheme)
     }
+    if (patch.labels !== undefined) this.world.setLabels(patch.labels)
     if (persist) this.saveLayout()
+    // The Inspect tab came on screen or left it: start or stop the watch.
+    this.syncWatch()
   }
 
   togglePanel(): void {

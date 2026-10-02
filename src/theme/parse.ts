@@ -228,5 +228,26 @@ export function validateTheme(manifest: ThemeManifest, hq: ParsedMap, branch: Pa
       warnings.push(`Activity "${a}" uses location "${loc}", which neither map has; using home.`)
     }
   }
+  // Stations (all optional): a name that no map has is a typo worth hearing about.
+  const known = (loc: unknown): boolean =>
+    typeof loc === 'string' && (loc === HOME || loc === MANAGER || !!branch.locations.get(loc)?.length || !!hq.locations.get(loc)?.length)
+  if (Array.isArray(manifest.stationRules)) {
+    manifest.stationRules.forEach((r, i) => {
+      if (r && typeof r === 'object' && typeof r.location === 'string' && !known(r.location)) {
+        warnings.push(`stationRules[${i}] uses location "${r.location}", which neither map has; characters go home for it.`)
+      }
+    })
+  }
+  const idle = manifest.idle
+  if (idle && typeof idle.location === 'string' && !branch.locations.get(idle.location)?.length) {
+    warnings.push(`idle.location "${idle.location}" is not in the branch map; idle characters stay at their desks.`)
+  }
+  if (manifest.stationLabels && typeof manifest.stationLabels === 'object') {
+    for (const type of Object.keys(manifest.stationLabels)) {
+      if (!branch.locations.get(type)?.length && !hq.locations.get(type)?.length) {
+        warnings.push(`stationLabels.${type}: neither map has a location of that type; no tag is shown.`)
+      }
+    }
+  }
   return warnings
 }

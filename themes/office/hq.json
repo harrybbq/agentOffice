@@ -10,7 +10,7 @@
  "tileheight": 32,
  "infinite": false,
  "nextlayerid": 4,
- "nextobjectid": 27,
+ "nextobjectid": 29,
  "layers": [
   {
    "id": 1,
@@ -69,7 +69,7 @@
       {
        "name": "label",
        "type": "string",
-       "value": "CEO"
+       "value": ""
       },
       {
        "name": "solid",
@@ -97,7 +97,7 @@
       {
        "name": "label",
        "type": "string",
-       "value": "Reception"
+       "value": ""
       },
       {
        "name": "solid",
@@ -209,7 +209,35 @@
       {
        "name": "label",
        "type": "string",
-       "value": "Memo hatch"
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 24,
+     "name": "notice_board",
+     "x": 217.6,
+     "y": 238.4,
+     "width": 70.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#f2c94c"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
       },
       {
        "name": "solid",
@@ -489,7 +517,19 @@
      "visible": true
     },
     {
-     "id": 24,
+     "id": 25,
+     "name": "noticeboard",
+     "type": "noticeboard",
+     "x": 253,
+     "y": 224,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 26,
      "name": "door_bottom",
      "type": "door",
      "x": 160,
@@ -501,7 +541,7 @@
      "visible": true
     },
     {
-     "id": 25,
+     "id": 27,
      "name": "door_left",
      "type": "door",
      "x": 0,
@@ -513,7 +553,7 @@
      "visible": true
     },
     {
-     "id": 26,
+     "id": 28,
      "name": "door_right",
      "type": "door",
      "x": 320,

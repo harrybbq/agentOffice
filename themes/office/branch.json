@@ -4,13 +4,13 @@
  "tiledversion": "1.11.0",
  "orientation": "orthogonal",
  "renderorder": "right-down",
- "width": 16,
- "height": 12,
+ "width": 18,
+ "height": 13,
  "tilewidth": 32,
  "tileheight": 32,
  "infinite": false,
  "nextlayerid": 4,
- "nextobjectid": 56,
+ "nextobjectid": 68,
  "layers": [
   {
    "id": 1,
@@ -27,8 +27,8 @@
      "name": "floor",
      "x": 0,
      "y": 0,
-     "width": 512,
-     "height": 384,
+     "width": 576,
+     "height": 416,
      "rotation": 0,
      "visible": true,
      "type": "area",
@@ -69,7 +69,7 @@
       {
        "name": "label",
        "type": "string",
-       "value": "Manager"
+       "value": ""
       },
       {
        "name": "solid",
@@ -125,7 +125,7 @@
       {
        "name": "label",
        "type": "string",
-       "value": "Printer"
+       "value": ""
       },
       {
        "name": "solid",
@@ -137,7 +137,7 @@
     {
      "id": 18,
      "name": "filing",
-     "x": 400,
+     "x": 403.2,
      "y": 19.2,
      "width": 51.2,
      "height": 44.8,
@@ -153,7 +153,7 @@
       {
        "name": "label",
        "type": "string",
-       "value": "Filing"
+       "value": ""
       },
       {
        "name": "solid",
@@ -165,7 +165,7 @@
     {
      "id": 20,
      "name": "server_rack",
-     "x": 464,
+     "x": 521.6,
      "y": 19.2,
      "width": 38.4,
      "height": 76.8,
@@ -181,7 +181,7 @@
       {
        "name": "label",
        "type": "string",
-       "value": "Server"
+       "value": ""
       },
       {
        "name": "solid",
@@ -192,11 +192,11 @@
     },
     {
      "id": 22,
-     "name": "photo_booth",
-     "x": 416,
-     "y": 201.6,
-     "width": 70.4,
-     "height": 64,
+     "name": "whiteboard",
+     "x": 396.8,
+     "y": 123.2,
+     "width": 83.2,
+     "height": 9.6,
      "rotation": 0,
      "visible": true,
      "type": "furniture",
@@ -204,12 +204,40 @@
       {
        "name": "color",
        "type": "color",
-       "value": "#b39ddb"
+       "value": "#f5f7fa"
       },
       {
        "name": "label",
        "type": "string",
-       "value": "Photo"
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 23,
+     "name": "whiteboard_foot_l",
+     "x": 400,
+     "y": 132.8,
+     "width": 6.4,
+     "height": 6.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#90a4ae"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
       },
       {
        "name": "solid",
@@ -220,11 +248,95 @@
     },
     {
      "id": 24,
+     "name": "whiteboard_foot_r",
+     "x": 470.4,
+     "y": 132.8,
+     "width": 6.4,
+     "height": 6.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#90a4ae"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 26,
+     "name": "lounge_rug",
+     "x": 432,
+     "y": 236.8,
+     "width": 131.2,
+     "height": 96,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#d9e4d2"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      }
+     ]
+    },
+    {
+     "id": 27,
+     "name": "sofa",
+     "x": 454.4,
+     "y": 243.2,
+     "width": 89.6,
+     "height": 27.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#e07a5f"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 28,
      "name": "water",
-     "x": 224,
-     "y": 108.8,
-     "width": 25.6,
-     "height": 25.6,
+     "x": 440,
+     "y": 297.6,
+     "width": 22.4,
+     "height": 22.4,
      "rotation": 0,
      "visible": true,
      "type": "furniture",
@@ -247,7 +359,7 @@
      ]
     },
     {
-     "id": 26,
+     "id": 31,
      "name": "desk_1",
      "x": 24,
      "y": 198.4,
@@ -275,7 +387,7 @@
      ]
     },
     {
-     "id": 27,
+     "id": 32,
      "name": "monitor_1",
      "x": 46.4,
      "y": 201.6,
@@ -303,7 +415,7 @@
      ]
     },
     {
-     "id": 29,
+     "id": 34,
      "name": "desk_2",
      "x": 120,
      "y": 198.4,
@@ -331,7 +443,7 @@
      ]
     },
     {
-     "id": 30,
+     "id": 35,
      "name": "monitor_2",
      "x": 142.4,
      "y": 201.6,
@@ -359,7 +471,7 @@
      ]
     },
     {
-     "id": 32,
+     "id": 37,
      "name": "desk_3",
      "x": 216,
      "y": 198.4,
@@ -387,7 +499,7 @@
      ]
     },
     {
-     "id": 33,
+     "id": 38,
      "name": "monitor_3",
      "x": 238.4,
      "y": 201.6,
@@ -415,7 +527,7 @@
      ]
     },
     {
-     "id": 35,
+     "id": 40,
      "name": "desk_4",
      "x": 312,
      "y": 198.4,
@@ -443,7 +555,7 @@
      ]
     },
     {
-     "id": 36,
+     "id": 41,
      "name": "monitor_4",
      "x": 334.4,
      "y": 201.6,
@@ -471,7 +583,7 @@
      ]
     },
     {
-     "id": 38,
+     "id": 43,
      "name": "desk_5",
      "x": 24,
      "y": 291.2,
@@ -499,7 +611,7 @@
      ]
     },
     {
-     "id": 39,
+     "id": 44,
      "name": "monitor_5",
      "x": 46.4,
      "y": 294.4,
@@ -527,7 +639,7 @@
      ]
     },
     {
-     "id": 41,
+     "id": 46,
      "name": "desk_6",
      "x": 120,
      "y": 291.2,
@@ -555,7 +667,7 @@
      ]
     },
     {
-     "id": 42,
+     "id": 47,
      "name": "monitor_6",
      "x": 142.4,
      "y": 294.4,
@@ -583,7 +695,7 @@
      ]
     },
     {
-     "id": 44,
+     "id": 49,
      "name": "desk_7",
      "x": 216,
      "y": 291.2,
@@ -611,7 +723,7 @@
      ]
     },
     {
-     "id": 45,
+     "id": 50,
      "name": "monitor_7",
      "x": 238.4,
      "y": 294.4,
@@ -639,7 +751,7 @@
      ]
     },
     {
-     "id": 47,
+     "id": 52,
      "name": "desk_8",
      "x": 312,
      "y": 291.2,
@@ -667,7 +779,7 @@
      ]
     },
     {
-     "id": 48,
+     "id": 53,
      "name": "monitor_8",
      "x": 334.4,
      "y": 294.4,
@@ -695,10 +807,122 @@
      ]
     },
     {
-     "id": 50,
+     "id": 55,
+     "name": "photo_booth",
+     "x": 19.2,
+     "y": 360,
+     "width": 70.4,
+     "height": 44.8,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#b39ddb"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 57,
+     "name": "kanban_wall",
+     "x": 326.4,
+     "y": 395.2,
+     "width": 89.6,
+     "height": 12.8,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#f2c94c"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 59,
+     "name": "vault",
+     "x": 499.2,
+     "y": 350.4,
+     "width": 60.8,
+     "height": 52.8,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#78909c"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 60,
+     "name": "vault_door",
+     "x": 520,
+     "y": 368,
+     "width": 19.2,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#455a64"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 62,
      "name": "mat",
      "x": 224,
-     "y": 352,
+     "y": 384,
      "width": 64,
      "height": 32,
      "rotation": 0,
@@ -757,7 +981,7 @@
      "name": "wall_top",
      "x": 384,
      "y": 0,
-     "width": 128,
+     "width": 192,
      "height": 8,
      "rotation": 0,
      "visible": true,
@@ -774,7 +998,7 @@
      "id": 4,
      "name": "wall_bottom",
      "x": 0,
-     "y": 376,
+     "y": 408,
      "width": 224,
      "height": 8,
      "rotation": 0,
@@ -792,8 +1016,8 @@
      "id": 5,
      "name": "wall_bottom",
      "x": 288,
-     "y": 376,
-     "width": 224,
+     "y": 408,
+     "width": 288,
      "height": 8,
      "rotation": 0,
      "visible": true,
@@ -830,7 +1054,7 @@
      "x": 0,
      "y": 304,
      "width": 8,
-     "height": 80,
+     "height": 112,
      "rotation": 0,
      "visible": true,
      "type": "wall",
@@ -845,7 +1069,7 @@
     {
      "id": 8,
      "name": "wall_right",
-     "x": 504,
+     "x": 568,
      "y": 0,
      "width": 8,
      "height": 160,
@@ -863,10 +1087,10 @@
     {
      "id": 9,
      "name": "wall_right",
-     "x": 504,
+     "x": 568,
      "y": 224,
      "width": 8,
-     "height": 160,
+     "height": 192,
      "rotation": 0,
      "visible": true,
      "type": "wall",
@@ -972,7 +1196,7 @@
      "id": 19,
      "name": "filing_cabinet",
      "type": "filing_cabinet",
-     "x": 426,
+     "x": 429,
      "y": 86,
      "width": 0,
      "height": 0,
@@ -984,20 +1208,8 @@
      "id": 21,
      "name": "server_room",
      "type": "server_room",
-     "x": 454,
-     "y": 115,
-     "width": 0,
-     "height": 0,
-     "point": true,
-     "rotation": 0,
-     "visible": true
-    },
-    {
-     "id": 23,
-     "name": "photo_booth",
-     "type": "photo_booth",
-     "x": 451,
-     "y": 288,
+     "x": 502,
+     "y": 77,
      "width": 0,
      "height": 0,
      "point": true,
@@ -1006,10 +1218,10 @@
     },
     {
      "id": 25,
-     "name": "water_cooler",
-     "type": "water_cooler",
-     "x": 237,
-     "y": 154,
+     "name": "whiteboard",
+     "type": "whiteboard",
+     "x": 438,
+     "y": 162,
      "width": 0,
      "height": 0,
      "point": true,
@@ -1017,7 +1229,31 @@
      "visible": true
     },
     {
-     "id": 28,
+     "id": 29,
+     "name": "lounge",
+     "type": "lounge",
+     "x": 499,
+     "y": 298,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 30,
+     "name": "water_cooler",
+     "type": "water_cooler",
+     "x": 451,
+     "y": 336,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 33,
      "name": "desk_1",
      "type": "desk",
      "x": 56,
@@ -1029,7 +1265,7 @@
      "visible": true
     },
     {
-     "id": 31,
+     "id": 36,
      "name": "desk_2",
      "type": "desk",
      "x": 152,
@@ -1041,7 +1277,7 @@
      "visible": true
     },
     {
-     "id": 34,
+     "id": 39,
      "name": "desk_3",
      "type": "desk",
      "x": 248,
@@ -1053,7 +1289,7 @@
      "visible": true
     },
     {
-     "id": 37,
+     "id": 42,
      "name": "desk_4",
      "type": "desk",
      "x": 344,
@@ -1065,7 +1301,7 @@
      "visible": true
     },
     {
-     "id": 40,
+     "id": 45,
      "name": "desk_5",
      "type": "desk",
      "x": 56,
@@ -1077,7 +1313,7 @@
      "visible": true
     },
     {
-     "id": 43,
+     "id": 48,
      "name": "desk_6",
      "type": "desk",
      "x": 152,
@@ -1089,7 +1325,7 @@
      "visible": true
     },
     {
-     "id": 46,
+     "id": 51,
      "name": "desk_7",
      "type": "desk",
      "x": 248,
@@ -1101,7 +1337,7 @@
      "visible": true
     },
     {
-     "id": 49,
+     "id": 54,
      "name": "desk_8",
      "type": "desk",
      "x": 344,
@@ -1113,22 +1349,10 @@
      "visible": true
     },
     {
-     "id": 51,
-     "name": "entrance",
-     "type": "entrance",
-     "x": 256,
-     "y": 362,
-     "width": 0,
-     "height": 0,
-     "point": true,
-     "rotation": 0,
-     "visible": true
-    },
-    {
-     "id": 52,
-     "name": "door_bottom",
-     "type": "door",
-     "x": 256,
+     "id": 56,
+     "name": "photo_booth",
+     "type": "photo_booth",
+     "x": 112,
      "y": 384,
      "width": 0,
      "height": 0,
@@ -1137,7 +1361,55 @@
      "visible": true
     },
     {
-     "id": 53,
+     "id": 58,
+     "name": "noticeboard",
+     "type": "noticeboard",
+     "x": 371,
+     "y": 379,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 61,
+     "name": "vault",
+     "type": "vault",
+     "x": 477,
+     "y": 384,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 63,
+     "name": "entrance",
+     "type": "entrance",
+     "x": 256,
+     "y": 394,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 64,
+     "name": "door_bottom",
+     "type": "door",
+     "x": 256,
+     "y": 416,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true
+    },
+    {
+     "id": 65,
      "name": "door_top",
      "type": "door",
      "x": 352,
@@ -1149,7 +1421,7 @@
      "visible": true
     },
     {
-     "id": 54,
+     "id": 66,
      "name": "door_left",
      "type": "door",
      "x": 0,
@@ -1161,10 +1433,10 @@
      "visible": true
     },
     {
-     "id": 55,
+     "id": 67,
      "name": "door_right",
      "type": "door",
-     "x": 512,
+     "x": 576,
      "y": 192,
      "width": 0,
      "height": 0,

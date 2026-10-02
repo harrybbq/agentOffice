@@ -90,6 +90,108 @@
       "verb": "Reporting"
     }
   },
+  "stationRules": [
+    {
+      "detail": "^planning:\\s*",
+      "location": "whiteboard",
+      "anim": "work",
+      "verb": "Planning"
+    },
+    {
+      "detail": "^checking the board",
+      "location": "noticeboard",
+      "anim": "work",
+      "verb": "Checking the board"
+    },
+    {
+      "detail": "^secrets:\\s*",
+      "location": "vault",
+      "anim": "work",
+      "verb": "In the vault"
+    },
+    {
+      "activity": "waiting",
+      "detail": "^question:\\s*",
+      "location": "inbox",
+      "anim": "idle",
+      "verb": "Asking"
+    },
+    {
+      "activity": "exec",
+      "detail": "^delegating$",
+      "location": "home",
+      "anim": "work",
+      "verb": "Delegating"
+    }
+  ],
+  "idle": {
+    "location": "lounge",
+    "afterMs": 45000
+  },
+  "stationLabels": {
+    "inbox": {
+      "title": "Security gate",
+      "subtitle": "Waiting on you",
+      "color": "#f0b64f",
+      "once": true
+    },
+    "boss_seat": {
+      "title": "CEO office",
+      "subtitle": "You",
+      "color": "#c0392b"
+    },
+    "manager_seat": {
+      "title": "Manager's office",
+      "subtitle": "Plans & hand-offs",
+      "color": "#8d6e63"
+    },
+    "desk": {
+      "title": "Desks",
+      "subtitle": "Editing",
+      "color": "#7c8cff",
+      "once": true
+    },
+    "filing_cabinet": {
+      "title": "Filing cabinet",
+      "subtitle": "Reading files",
+      "color": "#5fb8e8"
+    },
+    "server_room": {
+      "title": "Server room",
+      "subtitle": "Commands",
+      "color": "#4cc38a"
+    },
+    "printer": {
+      "title": "Printer",
+      "subtitle": "Web & copies",
+      "color": "#c58af9"
+    },
+    "photo_booth": {
+      "title": "Photo booth",
+      "subtitle": "Screenshots",
+      "color": "#e58fb1"
+    },
+    "whiteboard": {
+      "title": "Whiteboard",
+      "subtitle": "Ideas & planning",
+      "color": "#5b8def"
+    },
+    "noticeboard": {
+      "title": "Kanban wall",
+      "subtitle": "Office board",
+      "color": "#f2c94c"
+    },
+    "vault": {
+      "title": "Vault",
+      "subtitle": "Secure storage",
+      "color": "#78909c"
+    },
+    "lounge": {
+      "title": "Lounge",
+      "subtitle": "Idle",
+      "color": "#e07a5f"
+    }
+  },
   "props": {
     "handoff": "folder",
     "report": "report",

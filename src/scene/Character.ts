@@ -11,7 +11,7 @@ const BUBBLE_CHARS = 28
 const WALK_FRAME_MS = 150
 const WORK_FRAME_MS = 400
 
-export type ActionKind = 'spawn' | 'activity' | 'waiting' | 'relay' | 'done' | 'handoff' | 'return' | 'leave' | 'home'
+export type ActionKind = 'spawn' | 'activity' | 'waiting' | 'relay' | 'done' | 'handoff' | 'return' | 'leave' | 'home' | 'rest'
 
 export interface Action extends QueueItem {
   kind: ActionKind
@@ -46,6 +46,12 @@ export interface CharacterOptions {
   teamColor?: number
 }
 
+/** None, pointed at, or the one the inspector shows. */
+export type Highlight = 'none' | 'hover' | 'selected'
+
+const RING_SELECTED = 0x7c8cff
+const RING_DARK = 0x14151c
+
 export function truncate(s: string, n = BUBBLE_CHARS): string {
   const clean = s.replace(/\s+/g, ' ').trim()
   return clean.length > n ? clean.slice(0, n - 1) + '…' : clean
@@ -79,6 +85,10 @@ export class Character {
   private dest: Point | null = null
   private walkDone: (() => void) | null = null
   private sayTimer: Phaser.Time.TimerEvent | null = null
+  /** Ring on the floor under the character (hover / selection). */
+  private ring: Phaser.GameObjects.Graphics
+  private highlight: Highlight = 'none'
+  private ringTween: Phaser.Tweens.Tween | null = null
 
   constructor(scene: Phaser.Scene, o: CharacterOptions) {
     this.scene = scene
@@ -88,6 +98,7 @@ export class Character {
     this.findPath = o.findPath
     const h = o.skin.height
 
+    this.ring = scene.add.graphics().setVisible(false)
     const shadow = scene.add.image(0, 0, o.skin.shadow).setOrigin(0.5, 1)
     if (o.skin.kind === 'placeholder') {
       this.body = scene.add.sprite(0, 0, o.skin.body[0]).setOrigin(0.5, 1)
@@ -137,7 +148,7 @@ export class Character {
       .setOrigin(0.5, 1)
       .setVisible(false)
 
-    const parts: Phaser.GameObjects.GameObject[] = [shadow, this.body]
+    const parts: Phaser.GameObjects.GameObject[] = [this.ring, shadow, this.body]
     if (this.overlay) parts.push(this.overlay)
     if (pin) parts.push(pin)
     parts.push(this.prop, this.label, this.bubble, this.badge)
@@ -148,6 +159,57 @@ export class Character {
 
   get position(): Point {
     return { x: this.container.x, y: this.container.y }
+  }
+
+  /** Drawn height in world px (for hit-testing and for placing things above the head). */
+  get height(): number {
+    return this.skin.height
+  }
+
+  /** World rect of the speech bubble while it shows (station tags make way for it), else null. */
+  get bubbleBounds(): { x: number; y: number; width: number; height: number } | null {
+    if (this.phase === 'gone' || !this.bubble.visible) return null
+    const w = this.bubble.width
+    const h = this.bubble.height
+    return { x: this.container.x + this.bubble.x - w / 2, y: this.container.y + this.bubble.y - h, width: w, height: h }
+  }
+
+  /** Standing somewhere (not on its way). */
+  get isSettled(): boolean {
+    return this.phase === 'idle' || this.phase === 'dwelling' || this.phase === 'staying'
+  }
+
+  /** A ring on the floor: thin while pointed at, the accent colour while selected. It follows the character. */
+  setHighlight(mode: Highlight): void {
+    if (mode === this.highlight || this.phase === 'gone') return
+    this.highlight = mode
+    const g = this.ring
+    this.ringTween?.stop()
+    this.ringTween = null
+    g.clear().setAlpha(1).setScale(1)
+    if (mode === 'none') {
+      g.setVisible(false)
+      return
+    }
+    const h = this.skin.height
+    const rx = Math.max(9, h * 0.46)
+    const ry = Math.max(4.5, h * 0.2)
+    const cy = -2
+    if (mode === 'selected') {
+      g.fillStyle(RING_SELECTED, 0.22)
+      g.fillEllipse(0, cy, rx * 2, ry * 2)
+      g.lineStyle(3.5, RING_DARK, 0.55)
+      g.strokeEllipse(0, cy, rx * 2, ry * 2)
+      g.lineStyle(2, RING_SELECTED, 1)
+      g.strokeEllipse(0, cy, rx * 2, ry * 2)
+      this.ringTween = this.scene.tweens.add({ targets: g, scale: 1.12, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' })
+    } else {
+      g.lineStyle(3, RING_DARK, 0.4)
+      g.strokeEllipse(0, cy, rx * 2, ry * 2)
+      g.lineStyle(1.5, 0xffffff, 0.95)
+      g.strokeEllipse(0, cy, rx * 2, ry * 2)
+    }
+    g.setVisible(true)
   }
 
   get isIdle(): boolean {
@@ -262,6 +324,7 @@ export class Character {
 
   destroy(): void {
     this.phase = 'gone'
+    this.ringTween?.stop()
     this.sayTimer?.remove(false)
     this.tween?.stop()
     this.timer?.remove(false)
@@ -271,6 +334,8 @@ export class Character {
 
   fadeOutAndDestroy(onDone: () => void): void {
     this.phase = 'gone'
+    this.ringTween?.stop()
+    this.ringTween = null
     this.hideBubble()
     this.scene.tweens.add({
       targets: this.container,

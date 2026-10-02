@@ -1,4 +1,5 @@
-// Live, filterable stream of AgentEvents. Rows select the agent's session.
+// Live, filterable stream of AgentEvents. Rows select the agent's session, and the agent itself
+// for the inspector.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ACTIVITIES } from '../../../shared/events'
 import type { Activity } from '../../../shared/events'
@@ -78,7 +79,11 @@ export function EventLog({ hidden }: { hidden: boolean }) {
           <table className="log-table">
             <tbody>
               {rows.map((l) => (
-                <tr key={l.seq} className={cx(l.teamId === selectedId && 'is-selected')} onClick={() => app.select(l.teamId, { reveal: false })}>
+                <tr key={l.seq} className={cx(l.teamId === selectedId && 'is-selected')} onClick={() => {
+                    app.select(l.teamId, { reveal: false, inspect: false })
+                    app.inspectAgent(l.event.agentId)
+                  }}
+                >
                   <td className="log-time">{clock(l.event.ts)}</td>
                   <td className="log-agent">
                     <Swatch color={teams.find((t) => t.id === l.teamId)?.color} />

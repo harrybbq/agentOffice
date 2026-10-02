@@ -4,7 +4,8 @@ import type { AppState } from '../controller'
 import { overlapBadge } from '../board'
 import { ago } from '../format'
 import { cx, useNow } from '../hooks'
-import { IconInbox, IconMegaphone, IconMoon, IconOverlap, IconPower, IconSun, IconTerminal } from '../icons'
+import { approvalStatus, isMuted } from '../approvals'
+import { IconBell, IconBellOff, IconInbox, IconMegaphone, IconMoon, IconOverlap, IconPower, IconSun, IconTerminal } from '../icons'
 import { isLive } from '../restore'
 import { RestoreSetting } from './Restore'
 
@@ -15,7 +16,15 @@ const CONNECTION: Record<AppState['connection'], { label: string; tone: string; 
   limited: { label: 'Connected · watch only', tone: 'warn', title: "This build's main process can't host sessions yet" }
 }
 
-export function StatusBar() {
+/** "Approvals: muted (auto-allowing)" -> the prefix, the mode and what is in brackets. */
+function splitStatus(text: string): { prefix: string; mode: string; extra: string } {
+  const i = text.indexOf(': ')
+  const rest = i < 0 ? text : text.slice(i + 2)
+  const j = rest.indexOf(' (')
+  return { prefix: i < 0 ? '' : text.slice(0, i + 2), mode: j < 0 ? rest : rest.slice(0, j), extra: j < 0 ? '' : rest.slice(j + 1) }
+}
+
+export function StatusBar({ onOpenCalculator }: { onOpenCalculator: () => void }) {
   const app = useApp()
   const connection = useAppState((s) => s.connection)
   const eventCount = useAppState((s) => s.eventCount)
@@ -28,6 +37,10 @@ export function StatusBar() {
   const allowOrders = useAppState((s) => s.settings?.allowOrders ?? false)
   const hasSettings = useAppState((s) => s.settings !== null)
   const now = useNow(1000)
+  // Follows the settings; null with a main process that has no approval modes.
+  useAppState((s) => s.settings)
+  const approvals = app.hasApprovalMode ? app.approvalMode : null
+  const status = approvals ? splitStatus(approvalStatus(approvals)) : null
   const c = CONNECTION[connection]
   const running = sessions.filter(isLive).length
   const asleep = sessions.filter((s) => s.state === 'asleep').length
@@ -52,7 +65,7 @@ export function StatusBar() {
         {c.label}
       </span>
       <span className="status-item">
-        {running} {running === 1 ? 'session' : 'sessions'} running{asleep > 0 ? ` · ${asleep} asleep` : ''}
+        {running} {running === 1 ? 'session' : 'sessions'} running{asleep > 0 && <span className="status-asleep"> · {asleep} asleep</span>}
       </span>
       <button type="button" className={cx('status-item status-btn', pending > 0 && 'is-attn')} onClick={() => app.focusInbox()} title="Open the CEO inbox">
         <IconInbox size={14} />
@@ -69,10 +82,14 @@ export function StatusBar() {
           {overlapBadge(overlaps)}
         </button>
       )}
-      <span className="status-item">
+      <span className="status-item status-events">
         {eventCount} {eventCount === 1 ? 'event' : 'events'}{lastEventAt ? ` · last ${ago(now - lastEventAt)} ago` : ''}
       </span>
       <span className="status-spacer" />
+      <button type="button" className="status-item status-btn" onClick={onOpenCalculator} title="Open calculator" aria-label="Open calculator">
+        <span aria-hidden="true">±</span>
+        Calculator
+      </button>
       <span className="status-item status-keys">
         <kbd>Ctrl K</kbd> order
         <kbd>Ctrl 1-9</kbd> session
@@ -92,6 +109,26 @@ export function StatusBar() {
         >
           <IconMegaphone size={14} />
           Orders: {allowOrders ? 'on' : 'off'}
+        </button>
+      )}
+      {approvals && status && (
+        <button
+          type="button"
+          className={cx('status-item status-btn status-approvals', isMuted(approvals) && 'is-muted')}
+          onClick={() => app.focusInbox()}
+          title={
+            isMuted(approvals)
+              ? 'Muted: requests are allowed for you (dangerous ones still ask). Click to open the CEO inbox.'
+              : 'Which requests you are asked about. Click to change it in the CEO inbox.'
+          }
+        >
+          {isMuted(approvals) ? <IconBellOff size={14} /> : <IconBell size={14} />}
+          {/* The prefix and the mode are separate so a narrow window can drop the prefix. */}
+          <span className="status-approvals-prefix">{status.prefix}</span>
+          <span className="status-approvals-mode">
+            {status.mode}
+            {status.extra && <span className="status-approvals-extra"> {status.extra}</span>}
+          </span>
         </button>
       )}
       <RestoreSetting />

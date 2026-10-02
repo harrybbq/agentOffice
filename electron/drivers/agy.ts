@@ -30,16 +30,18 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { ChatEvent, ChatItem } from '../../shared/chat'
 import type { AgentEvent } from '../../shared/events'
+import { relativeTo } from '../../shared/paths'
 import { permissionAction } from '../../shared/permissionText'
 import type { PermissionDecision, PermissionOutcome, ProviderInfo, SessionState } from '../../shared/sessions'
 import { ClaudeHookMapper } from '../adapters/claude-code-hooks'
 import type { RequestContext } from '../adapters/types'
+import type { AgentFact } from '../agentStats'
 import { BOARD_SERVER_AGY } from '../boardMcp'
 import { AGY_HOOK_ROUTE, type SessionTokens } from '../ingest/auth'
 import { DEFAULT_DENY_MESSAGE } from '../permissions'
 import type { AgyHookEvent, AgyHookTarget } from './agyHookBridge'
 import { AGY_WRITE_TOOLS, agyPolicy, PROTECTED_DENY_REASON } from './agyPolicy'
-import { AGY_PROVIDER, AgyChat, agyWorldActivity, parseAgyLine, type AgyEvent, type AgyFileContext } from './agyStream'
+import { AGY_PROVIDER, AGY_QUESTION_TOOLS, AgyChat, AgyTokens, agyWorldActivity, parseAgyLine, type AgyEvent, type AgyFileContext } from './agyStream'
 import { officeBriefing } from './briefing'
 import type { AgentDriver, DriverContext, PromptOrigin, PromptResult, ProviderDefinition } from './types'
 
@@ -545,6 +547,8 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
   private readonly id: string
   private readonly chat: AgyChat
   private readonly world: ClaudeHookMapper
+  /** Token usage for the inspector, across the processes of this session. */
+  private readonly tokens = new AgyTokens()
   private readonly now: () => number
   private readonly dir: string
   private title: string
@@ -743,8 +747,12 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
         if (activity) this.emitWorld(this.world.activity(this.id, activity.activity, activity.detail, at.now))
       } else {
         this.steps.delete(e.index)
+        // The question was answered (or given up): the agent thinks again until its next tool.
+        if (AGY_QUESTION_TOOLS.includes(e.toolName)) this.emitWorld(this.world.activity(this.id, 'idle', '', at.now))
       }
     }
+    // A model call's own usage: the size of the context right now.
+    if (e.type === 'step' && e.usage) this.tokens.step(e.usage)
     this.emitChat(this.chat.apply(e, at))
     if (e.type === 'step' && e.stepType === 'tool' && e.state === 'DONE') this.reportFileChange(e.index, e.toolName, e.params)
     if (e.type === 'result') this.onResult(e)
@@ -765,6 +773,10 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
       if (how === 'failed') this.deps.account.invalidate()
     }
     this.emitWorld(this.world.settle(this.id, now))
+    // The inspector: one more turn, and the tokens so far.
+    this.fact({ kind: 'turn', agentId: this.id })
+    const usage = this.tokens.result(e.usage)
+    if (usage) this.fact({ kind: 'tokens', agentId: this.id, usage })
     // After each turn, and never more than once a minute (AgyAccount).
     void this.deps.account.refreshUsage().catch(() => {})
     this.next()
@@ -986,9 +998,12 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
     if (!path) return
     try {
       const item = this.chat.get(`step:${stepIndex}`)
-      this.ctx.board?.fileChanged(path, item?.kind === 'file-change' && item.changes[0]?.change === 'add' ? 'create' : 'edit')
+      const change = item?.kind === 'file-change' && item.changes[0]?.change === 'add' ? 'create' : 'edit'
+      const rel = relativeTo(path, this.ctx.start.cwd)
+      this.fact({ kind: 'file', agentId: this.id, path: rel === path ? path : rel.replace(/\\/g, '/'), change })
+      this.ctx.board?.fileChanged(path, change)
     } catch {
-      // the board is a convenience
+      // the board and the inspector are conveniences
     }
   }
 
@@ -1199,6 +1214,15 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
 
   private emitWorld(events: readonly AgentEvent[]): void {
     for (const e of events) this.ctx.sink.emit(e)
+  }
+
+  /** Something for the inspector (electron/agentStats.ts). Never in the way of the session. */
+  private fact(fact: AgentFact): void {
+    try {
+      this.ctx.events.onFact?.(fact)
+    } catch {
+      // the inspector is a convenience
+    }
   }
 }
 

@@ -15,8 +15,19 @@ export class EventBus implements EventSink {
   private target: WebContents | null = null
   private ready = false
   private detach: (() => void) | null = null
+  private observer: ((e: AgentEvent) => void) | null = null
+
+  /** Also tells `fn` about every event (the inspector's stats). One observer; it must not throw. */
+  observe(fn: ((e: AgentEvent) => void) | null): void {
+    this.observer = fn
+  }
 
   emit(e: AgentEvent): void {
+    try {
+      this.observer?.(e)
+    } catch {
+      // an observer never gets in the way of the world
+    }
     this.snapshot.delete(e.agentId)
     this.snapshot.set(e.agentId, { event: e, seenAt: Date.now() })
     if (this.snapshot.size > MAX_AGENTS) {

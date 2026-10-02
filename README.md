@@ -525,6 +525,50 @@ sessions started while it is off get no board tools at all. The panel keeps show
 `npx electron scripts/e2e-board.cjs` checks all of this against the real agents in a scratch git
 repository: two Claude Code sessions on `haiku` (four short turns) and one Codex turn.
 
+## Inspector
+
+Click a character (a manager or one of its workers) to see what it is doing. The inspector is
+**read-only**: it shows, it never controls an agent, and it is not a way to approve anything.
+
+What it shows (`shared/inspector.ts`, `AgentDetails`):
+
+- **Task**: a manager's last prompt as a one-line preview (anything token-shaped is blanked out), or
+  its newest office-board claim when that is newer. A worker's task is the description its manager
+  gave it when it started it.
+- **Status**: what it is doing right now (activity + detail), the session's state for a hosted
+  manager, and, when it is blocked on you, the question it is waiting on and its risk.
+- **Runtime**: when it started, when it was last active, and the time it spent working (everything
+  except idle; waiting for your answer counts as working time).
+- **Tokens**: input, output, cached, the total, and how full the context is. Where they come from:
+
+  | Provider | Source | Notes |
+  |---|---|---|
+  | Claude Code | The session's transcript under `~/.claude/projects` (hooks carry no usage). Read after Stop / SubagentStop / PostToolUse, at most every 2 s, only the bytes that were appended | Workers have their own transcript (`<session>/subagents/agent-<id>.jsonl`). The context window size is not known, so there is no "context used" bar, only the number. A resumed conversation counts its earlier turns too |
+  | Codex | `thread/tokenUsage/updated` (the thread's running total, the last request, the model's context window) | Cached input is shown apart from input; reasoning is part of output |
+  | Antigravity | The `usage` of each `result` (a running total of the conversation) | The context size is the input of the last model call |
+
+  The transcript format is Claude Code's own and may change: lines the app does not understand are
+  skipped, and an agent whose transcript yields nothing simply shows no tokens. Only files inside
+  `~/.claude/projects` are opened, only numbers and the model name are taken from them, and nothing
+  is ever written there.
+- **Tools used**: how many times each activity started (`read`, `write`, `exec`, `web`, …).
+- **Files changed** by that agent, newest first, relative to the session's folder.
+- **Activity log**: the last 30 things it did, newest first.
+- **Workers** of a manager: the ones running and the ones that finished in the last 10 minutes.
+
+It works for every character: hosted sessions and their workers have everything above; sessions the
+app did not start (external Claude Code terminals, `/events`, the simulator) have fewer fields.
+A finished agent can be inspected for 10 minutes. While the panel is open the main process pushes
+updates for that one agent, at most once per second and only when something changed.
+
+Some activities carry a stable detail text, so a theme can send a character to its own station
+(`shared/details.ts`): `planning: …` (a plan or to-do list is being written), `secrets: …` (the file
+looks like a secrets or agent-settings file), `question: …` (the agent asked you something and
+waits), `checking the board`, `delegating`.
+
+`npx electron scripts/e2e-inspector.cjs` checks it against a real Claude Code session on `haiku`
+(one turn: one subagent, one new file), through the real IPC bridge.
+
 ## Setup
 
 Requires **Node 22.12+** (Electron 44).
@@ -647,6 +691,43 @@ Both maps are orthogonal [Tiled](https://www.mapeditor.org/) JSON (embedded tile
   team gets one, unique among live teams while the palette lasts. A built-in palette is used without it.
   Manager face variants apply to the procedural placeholder; sprite-sheet characters get a team pin.
 
+**Stations** (all optional, all in `theme.json`; a theme without them behaves as before). A station is
+just a location type on your map (plus whatever furniture or art stands there); these three tables say
+what it is called, who goes there and when:
+
+```jsonc
+"stationLabels": {                       // the floating tag above every location of that type
+  "vault":  { "title": "Vault", "subtitle": "Secure storage", "color": "#78909c" },
+  "desk":   { "title": "Desks", "subtitle": "Editing", "once": true }
+},
+"stationRules": [                        // checked before "activities"; the first match wins
+  { "detail": "^planning:\\s*", "location": "whiteboard", "verb": "Planning", "anim": "work" },
+  { "activity": "read", "detail": "\\.env$", "location": "vault" }
+],
+"idle": { "location": "lounge", "afterMs": 45000 }
+```
+
+- `stationLabels`: location type → `{ title, subtitle?, color?, once? }`. The tag is pinned to the top
+  edge of the furniture next to the location (or floats above the location when the map has none
+  there). `color` is the tag's dot (`#rrggbb`; default: that furniture's colour). `once: true` shows
+  one tag per building for the type instead of one per location: use it for `desk` and for the
+  `inbox` slots. The key order is the priority when tags would overlap; zoomed out, only titles show,
+  and further out nothing (the station under the pointer always shows in full, with who is there).
+  The same titles name the stations in the agent inspector.
+- `stationRules`: `{ activity?, detail, location, anim?, verb? }`. `detail` is a case-insensitive regular
+  expression (at most 200 characters; an invalid one is skipped with a console warning) tested against
+  the event's detail; `activity` limits the rule to one activity. The first matching rule wins, otherwise
+  the `activities` table applies. `location` is a location type, `home` or `manager`, and the scope rules
+  above still hold (a worker never leaves its branch for a rule). When the pattern matches at the start
+  of the detail, the matched part is left out of the speech bubble because the rule's `verb` says it
+  (`planning: the API` reads "Planning · the API"). A rule for `waiting` only changes the verb and
+  animation: where a waiting character goes is fixed (manager's office, then the inbox).
+  The adapters write these details (see `shared/details.ts`): `planning: …`, `secrets: …`,
+  `checking the board`, `question: …` (a `waiting` event), `delegating`.
+- `idle`: managers and workers with nothing to do for `afterMs` walk to the nearest location of that
+  type inside their own branch and go back to work with their next activity.
+- An optional `noticeboard` location in `hq.json` is where notes for the office board fly to.
+
 See `themes/office/` (generated by `scripts/gen-office-map.cjs`) and `docs/art-direction.md`.
 
 ## Project layout
@@ -656,6 +737,8 @@ electron/   main process: window, tray, config, ingest server, adapters, theme p
             hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process),
             the office board (board.ts = model, boardMcp.ts = its MCP tools, boardProject.ts = which repository)
             session restore (sessionStore.ts = sessions.json, windowState.ts = the window position)
+            the inspector (agentStats.ts = per-agent stats + the watch, transcriptUsage.ts = Claude token
+            usage from transcripts, adapters/claudeInspect.ts = what the hooks say about workers and files)
 hook/       the SessionStart command hook injected into hosted Claude Code sessions; the approval
             hook and the board bridge copied into each hosted Antigravity session's folder
 shared/     event format, theme format, IPC contract
@@ -665,7 +748,8 @@ themes/     bundled themes
 scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI),
             e2e-phase-b.cjs / e2e-phase-c.cjs (the same for Codex and for Antigravity),
             e2e-board.cjs (office board check against real Claude Code and Codex sessions),
-            e2e-restore.cjs (kill the app with a request pending, bring the session back)
+            e2e-restore.cjs (kill the app with a request pending, bring the session back),
+            e2e-inspector.cjs (the inspector against a real Claude Code session, over the real IPC)
 docs/       research notes (hooks, art direction)
 ```
 

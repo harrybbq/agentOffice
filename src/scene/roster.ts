@@ -484,6 +484,12 @@ export class Stations {
     if (slots.size === 0) this.byKey.delete(key)
   }
 
+  /** Who holds a spot at `base` (on their way there or standing there), in slot order. */
+  occupantsAt(base: Point): string[] {
+    const slots = this.byKey.get(Stations.key(base))
+    return slots ? [...slots.entries()].sort((a, b) => a[0] - b[0]).map(([, id]) => id) : []
+  }
+
   private indexOf(key: string, id: string): number {
     for (const [i, o] of this.byKey.get(key) ?? []) if (o === id) return i
     return 0

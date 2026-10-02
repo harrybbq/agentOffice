@@ -16,6 +16,8 @@ export class AgentStore {
   lastEventAt: number | null = null
   /** Last event per live agent, in first-seen order. */
   private live = new Map<string, AgentEvent>()
+  /** When each live agent was first seen here (the hover card's "in the office"). */
+  private firstSeen = new Map<string, number>()
   private waitingMap = new Map<string, WaitingInfo>()
 
   apply(e: AgentEvent): void {
@@ -37,7 +39,23 @@ export class AgentStore {
       this.drop(e.agentId, e.parentId === null)
     } else {
       this.live.set(e.agentId, e)
+      if (!this.firstSeen.has(e.agentId)) this.firstSeen.set(e.agentId, Date.now())
     }
+  }
+
+  /** When this agent was first seen (undefined once it has left). */
+  since(agentId: string): number | undefined {
+    return this.firstSeen.get(agentId)
+  }
+
+  /** Is this agent in the office right now? */
+  has(agentId: string): boolean {
+    return this.live.has(agentId)
+  }
+
+  /** The last event of a live agent. */
+  last(agentId: string): AgentEvent | undefined {
+    return this.live.get(agentId)
   }
 
   get waiting(): WaitingInfo[] {
@@ -62,6 +80,7 @@ export class AgentStore {
 
   private drop(id: string, cascade: boolean): void {
     this.live.delete(id)
+    this.firstSeen.delete(id)
     this.waitingMap.delete(id)
     if (!cascade) return
     // A session ending takes its whole subagent tree with it.

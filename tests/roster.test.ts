@@ -158,7 +158,7 @@ t('worker stations resolve only within its own branch (no HQ fallback); managers
   const p2 = r.station('w1', 'printer', { x: b1.offset.x + 250, y: b1.offset.y + 90 })!
   assert.equal(p2.x, p.x); assert.equal(p2.y, p.y)
   const e = r.entranceOf('w1')
-  assert.equal(e.x, b2.offset.x + 256); assert.equal(e.y, b2.offset.y + 362)
+  assert.equal(e.x, b2.offset.x + 256); assert.equal(e.y, b2.offset.y + 394)
   // inbox only exists in the HQ: a worker gets nothing (goes home), a manager gets the HQ inbox.
   assert.equal(r.station('w1', 'inbox', r.get('w1')!.home), null)
   assert.ok(r.station('m2', 'inbox', r.get('m2')!.home)!.name.startsWith('inbox'))

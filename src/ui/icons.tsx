@@ -213,6 +213,33 @@ export const IconLogin = (p: P) => (
     <path d="M9.5 2.75h2.25a1.5 1.5 0 011.5 1.5v7.5a1.5 1.5 0 01-1.5 1.5H9.5M2.5 8h7M7 5.25L9.75 8 7 10.75" />
   </Svg>
 )
+/** A person in a viewfinder: the agent inspector. */
+export const IconInspect = (p: P) => (
+  <Svg {...p}>
+    <path d="M2.25 5V3.25a1 1 0 0 1 1-1H5M11 2.25h1.75a1 1 0 0 1 1 1V5M13.75 11v1.75a1 1 0 0 1-1 1H11M5 13.75H3.25a1 1 0 0 1-1-1V11" />
+    <circle cx="8" cy="6.5" r="1.75" />
+    <path d="M5 11.25c.4-1.4 1.6-2.2 3-2.2s2.6.8 3 2.2" />
+  </Svg>
+)
+/** A tag: the station labels in the world. */
+export const IconTag = (p: P) => (
+  <Svg {...p}>
+    <path d="M2.5 8.2V3.5a1 1 0 0 1 1-1h4.7a1 1 0 0 1 .7.3l4.6 4.6a1 1 0 0 1 0 1.4l-4.7 4.7a1 1 0 0 1-1.4 0L2.8 8.9a1 1 0 0 1-.3-.7z" />
+    <circle cx="5.5" cy="5.5" r=".9" />
+  </Svg>
+)
+/** A bell: requests reach you. */
+export const IconBell = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 11.25V7.5a4 4 0 0 1 8 0v3.75l1 1.25H3zM6.75 13.75a1.35 1.35 0 0 0 2.5 0" />
+  </Svg>
+)
+/** A struck-through bell: muted, requests are allowed for you. */
+export const IconBellOff = (p: P) => (
+  <Svg {...p}>
+    <path d="M12 9.5V7.5a4 4 0 0 0-6.6-3M4.2 6.1A4 4 0 0 0 4 7.5v3.75L3 12.5h8.5M6.75 13.75a1.35 1.35 0 0 0 2.5 0M2.5 2.5l11 11" />
+  </Svg>
+)
 export const IconBoard = (p: P) => (
   <Svg {...p}>
     <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.25" />

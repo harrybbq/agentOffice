@@ -708,23 +708,24 @@ await t('approval cards: summary and detail from the request (and the file-chang
   const plainOf = (r: ReturnType<typeof describeServerRequest>, who = 'gpt-6-luna') => (r.kind === 'card' ? plainPermission({ who, cwd: W, ...r.card.plain }) : null)
   assert.deepEqual(cmd.kind === 'card' && cmd.card.plain, { tool: 'Command', input: { command: `node -e "require('fs').writeFileSync('ao-escalate.txt','ok')"` } })
   assert.deepEqual(rel.kind === 'card' && rel.card.plain, { tool: 'Create', input: { path: `${W}\\ao-note.txt`, more: 2 } })
-  assert.deepEqual(plainOf(rel), { question: 'gpt-6-luna wants to create the file ao-note.txt.', risk: 'normal' })
+  assert.deepEqual(plainOf(rel), { question: 'gpt-6-luna wants to create the file ao-note.txt.', risk: 'normal', routine: true })
   const gone = describeServerRequest('item/fileChange/requestApproval', { itemId: 'x' }, { id: 'x', sessionId: 'S', agentId: 'S', ts: 1, kind: 'file-change', status: 'running', changes: [{ path: 'D:\\other\\.env', change: 'delete', diff: '' }] }, W)
-  assert.deepEqual(plainOf(gone, "Sub-agent (gpt-6-luna's team)"), { question: "Sub-agent (gpt-6-luna's team) wants to delete the file .env (D:/other/.env).", risk: 'danger', riskNote: 'Changes a secrets file' })
+  assert.deepEqual(plainOf(gone, "Sub-agent (gpt-6-luna's team)"), { question: "Sub-agent (gpt-6-luna's team) wants to delete the file .env (D:/other/.env).", risk: 'danger', riskNote: 'Changes a secrets file', routine: false })
   assert.deepEqual(plainOf(describeServerRequest('item/commandExecution/requestApproval', { ...request, command: 'rm -rf dist', commandActions: [{ type: 'unknown', command: 'rm -rf dist' }] })), {
     question: 'gpt-6-luna wants to delete files or folders permanently (`rm -rf dist`).',
     risk: 'danger',
-    riskNote: 'Deletes files'
+    riskNote: 'Deletes files',
+    routine: false
   })
 
   const perms = describeServerRequest('item/permissions/requestApproval', { threadId: T, itemId: 'i', cwd: W, reason: 'needs the network', permissions: { network: { enabled: true }, fileSystem: null } })
   assert.ok(perms.kind === 'card' && /^Permissions: network access/.test(perms.card.summary) && /needs the network/.test(perms.card.detail))
 
   assert.deepEqual(perms.kind === 'card' && perms.card.plain, { tool: 'Permissions', input: { wants: ['network access'] } })
-  assert.deepEqual(plainOf(perms), { question: 'gpt-6-luna wants to get more access: network access.', risk: 'caution', riskNote: 'Leaves the sandbox' })
+  assert.deepEqual(plainOf(perms), { question: 'gpt-6-luna wants to get more access: network access.', risk: 'caution', riskNote: 'Leaves the sandbox', routine: false })
   const yesNo = describeServerRequest('mcpServer/elicitation/request', { threadId: T, turnId: null, serverName: 'node_repl', mode: 'form', message: 'Allow node_repl to run js?', requestedSchema: { type: 'object', properties: {} } })
   assert.deepEqual(yesNo.kind === 'card' && yesNo.card.plain, { tool: 'mcp', input: { server: 'node_repl', tool: '' } })
-  assert.deepEqual(plainOf(yesNo), { question: 'gpt-6-luna wants to use a tool from node_repl.', risk: 'normal' })
+  assert.deepEqual(plainOf(yesNo), { question: 'gpt-6-luna wants to use a tool from node_repl.', risk: 'normal', routine: false })
 
   // A plugin asking yes/no fits a card; a form or a link does not, and is declined with a notice.
   const mcp = describeServerRequest('mcpServer/elicitation/request', { threadId: T, turnId: null, serverName: 'node_repl', mode: 'form', message: 'Allow node_repl to run js?', requestedSchema: { type: 'object', properties: {} } })
@@ -781,7 +782,9 @@ await t('world: Codex items -> activities', () => {
   assert.equal(act({ type: 'dynamicToolCall', namespace: null, tool: 'thing' }), 'exec|thing')
   assert.equal(act({ type: 'collabAgentToolCall', tool: 'spawnAgent' }), 'exec|delegating')
   assert.equal(act({ type: 'imageView', path: 'shot.png' }), 'read|shot.png')
-  for (const type of ['agentMessage', 'reasoning', 'plan', 'userMessage', 'contextCompaction', 'sleep', 'somethingNew']) assert.equal(act({ type }), null, type)
+  for (const type of ['agentMessage', 'reasoning', 'userMessage', 'contextCompaction', 'sleep', 'somethingNew']) assert.equal(act({ type }), null, type)
+  // A plan item is the agent writing its plan: the planning station (shared/details.ts).
+  assert.equal(act({ type: 'plan' }), 'write|planning: writing a plan')
   assert.equal(act(null), null)
 
   assert.deepEqual(
@@ -1482,3 +1485,4 @@ await import('./agy.test.ts')
 await import('./restore.test.ts')
 await import('./board.test.ts')
 await import('./ui.test.ts')
+await import('./inspector.test.ts')

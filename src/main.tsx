@@ -10,6 +10,7 @@ import './ui/styles/tokens.css'
 import './ui/styles/app.css'
 import './ui/styles/chat.css'
 import './ui/styles/board.css'
+import './ui/styles/inspect.css'
 
 const UNSUPPORTED = "This build's main process can't host sessions yet"
 

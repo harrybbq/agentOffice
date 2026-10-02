@@ -221,4 +221,5 @@ t('the sealed CEO office stays unreachable with corridors on every side', () => 
 
 console.log(`\n${pass} corridor tests passed\n`)
 
+await import('./stations.test.ts')
 await import('./rules.test.ts')

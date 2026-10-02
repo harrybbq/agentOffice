@@ -8,6 +8,9 @@
 //              by a late `item/started` of that command, AFTER `turn/completed`
 //   "fail"     a retry notice, then a failed turn (401)
 //   "crash"    the process exits with code 1
+//   "todo-list" a plan (`turn/plan/updated`, twice), then the one-line answer
+// Every turn that ends reports the thread's running token total (`thread/tokenUsage/updated`, the
+// shape recorded in docs/spikes-phase-b.md): 1000 input (400 of it cached) and 50 output per turn.
 //   otherwise  a streamed one-line answer
 // `thread/list` answers with the threads of this process that had a turn (as the real server does),
 // one thread of another client in the same folder, and, in the folder FAKE_CODEX_OLD_CWD, "thr-old"
@@ -142,6 +145,11 @@ function endTurn(threadId, turnId, status = 'completed', error = null) {
   const t = threads.get(threadId)
   if (!t || !t.turn || t.turn.id !== turnId) return
   t.turn = null
+  t.usageTurns = (t.usageTurns || 0) + 1
+  const n = t.usageTurns
+  const last = { totalTokens: 1050, inputTokens: 1000, cachedInputTokens: 400, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 10 }
+  const total = { totalTokens: 1050 * n, inputTokens: 1000 * n, cachedInputTokens: 400 * n, cacheWriteInputTokens: 0, outputTokens: 50 * n, reasoningOutputTokens: 10 * n }
+  notify('thread/tokenUsage/updated', { threadId, turnId, tokenUsage: { total, last, modelContextWindow: 258400 } })
   notify('thread/status/changed', { threadId, status: { type: status === 'failed' ? 'systemError' : 'idle' } })
   notify('turn/completed', { threadId, turn: { id: turnId, items: [], itemsView: 'notLoaded', status, error, startedAt: 1790945798, completedAt: 1790945808, durationMs: 10 } })
 }
@@ -229,6 +237,14 @@ async function runTurn(threadId, turnId, params) {
       endTurn(threadId, turnId)
     }
     return
+  }
+
+  if (/todo-list/.test(text)) {
+    const plan = (first, second) => [{ step: 'Read the notes', status: first }, { step: 'Write the summary', status: second }]
+    notify('turn/plan/updated', { threadId, turnId, explanation: 'Two steps', plan: plan('inProgress', 'pending') })
+    await new Promise((r) => setTimeout(r, 60))
+    notify('turn/plan/updated', { threadId, turnId, explanation: 'Two steps', plan: plan('completed', 'inProgress') })
+    await new Promise((r) => setTimeout(r, 60))
   }
 
   say(threadId, turnId, 'ok', 'final_answer')

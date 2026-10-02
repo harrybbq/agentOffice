@@ -17,7 +17,9 @@ import {
   type ChatItem,
   type ChatItemStatus
 } from '../../shared/chat'
+import { DETAIL_DELEGATING, DETAIL_QUESTION, fileDetail } from '../../shared/details'
 import type { Activity } from '../../shared/events'
+import type { TokenUsage } from '../../shared/inspector'
 import type { PermissionRisk } from '../../shared/permissionText'
 import { relativeTo } from '../../shared/paths'
 import { BOARD_ACTIVITY, BOARD_ACTIVITY_DETAIL, CAPTURE_TOOL_PATTERN } from '../adapters/claude-code-hooks'
@@ -58,9 +60,79 @@ export type AgyEvent =
       error: string
       textDelta: string
       durationMs: number | null
+      /** A model call's own usage (on the `DONE` of an `agent_response` step). */
+      usage: AgyUsage | null
     }
-  | { type: 'result'; conversationId: string; status: string; response: string; denied: string[] }
+  | { type: 'result'; conversationId: string; status: string; response: string; denied: string[]; /** Running total of the process. */ usage: AgyUsage | null }
   | { type: 'other'; event: string }
+
+/** agy's `usage` object: `{input_tokens, output_tokens, thinking_tokens, cache_read_tokens, total_tokens}`. */
+export interface AgyUsage {
+  input: number
+  output: number
+  thinking: number
+  cacheRead: number
+  total: number
+}
+
+function parseUsage(v: unknown): AgyUsage | null {
+  if (!isRecord(v)) return null
+  const n = (x: unknown): number => {
+    const value = num(x)
+    return value !== null && value > 0 ? Math.floor(value) : 0
+  }
+  const u: AgyUsage = { input: n(v.input_tokens), output: n(v.output_tokens), thinking: n(v.thinking_tokens), cacheRead: n(v.cache_read_tokens), total: n(v.total_tokens) }
+  return u.input + u.output + u.thinking + u.cacheRead + u.total > 0 ? u : null
+}
+
+/**
+ * The token usage of a hosted agy session for the inspector. agy reports a RUNNING TOTAL with each
+ * `result` (docs/spikes-phase-c.md: "`result.usage`, `num_turns` and `duration_seconds` are
+ * cumulative"), so a result replaces the last one of the same process; when the numbers go down, a
+ * new process took over (the respawn after an interrupt) and what the old one had counted is kept.
+ * The context size is the input of the last model call (a step's own usage).
+ */
+export class AgyTokens {
+  private base: AgyUsage = { input: 0, output: 0, thinking: 0, cacheRead: 0, total: 0 }
+  private current: AgyUsage | null = null
+  private context = 0
+
+  /** A model call finished (`agent_response` step, `DONE`). */
+  step(usage: AgyUsage | null): void {
+    if (usage && usage.input + usage.cacheRead > 0) this.context = usage.input + usage.cacheRead
+  }
+
+  /** A turn ended. Returns the usage so far, or null while nothing was reported. */
+  result(usage: AgyUsage | null): TokenUsage | null {
+    if (usage) {
+      const prev = this.current
+      if (prev && usage.total < prev.total) {
+        this.base = {
+          input: this.base.input + prev.input,
+          output: this.base.output + prev.output,
+          thinking: this.base.thinking + prev.thinking,
+          cacheRead: this.base.cacheRead + prev.cacheRead,
+          total: this.base.total + prev.total
+        }
+      }
+      this.current = usage
+    }
+    return this.usage()
+  }
+
+  usage(): TokenUsage | null {
+    const c = this.current
+    if (!c) return null
+    const out: TokenUsage = { input: this.base.input + c.input, output: this.base.output + c.output, total: this.base.total + c.total }
+    const cached = this.base.cacheRead + c.cacheRead
+    const thinking = this.base.thinking + c.thinking
+    if (cached > 0) out.cached = cached
+    if (thinking > 0) out.reasoning = thinking
+    if (out.total === 0) out.total = out.input + out.output + cached
+    if (this.context > 0) out.contextUsed = this.context
+    return out
+  }
+}
 
 /** One line of agy's stdout. Null when it is not a JSON object. */
 export function parseAgyLine(line: string): AgyEvent | null {
@@ -94,7 +166,8 @@ export function parseAgyLine(line: string): AgyEvent | null {
       output: typeof info.output === 'string' ? info.output : null,
       error,
       textDelta: str(s.text_delta),
-      durationMs: seconds === null ? null : Math.round(seconds * 1000)
+      durationMs: seconds === null ? null : Math.round(seconds * 1000),
+      usage: parseUsage(s.usage)
     }
   }
   if (event === 'result' && isRecord(raw.result)) {
@@ -102,7 +175,7 @@ export function parseAgyLine(line: string): AgyEvent | null {
     const denied = (Array.isArray(r.denied_actions) ? r.denied_actions : [])
       .map((d) => (isRecord(d) ? str(d.display_name, 100) || str(d.action, 100) : ''))
       .filter((d) => d.length > 0)
-    return { type: 'result', conversationId: str(r.conversation_id, 100), status: str(r.status, 40), response: str(r.response), denied }
+    return { type: 'result', conversationId: str(r.conversation_id, 100), status: str(r.status, 40), response: str(r.response), denied, usage: parseUsage(r.usage) }
   }
   return { type: 'other', event }
 }
@@ -125,8 +198,22 @@ export interface AgyWorldActivity {
   detail: string
 }
 
-/** What a tool step means for the world, or null when it is not an activity (finish, wait, …). */
+/** Tools that ask the user something: `waiting` with the detail "question: …" until the step is over. */
+export const AGY_QUESTION_TOOLS: readonly string[] = ['ask_question']
+
+/** The first question of an `ask_question` call (`questions[]`: strings, or objects with a `question`). */
+function agyQuestion(params: Record<string, unknown>): string {
+  const first = Array.isArray(params.questions) ? params.questions[0] : undefined
+  const text = typeof first === 'string' ? first : isRecord(first) ? str(first.question, 400) || str(first.Question, 400) || str(first.text, 400) : ''
+  return text.slice(0, 400) || str(params.Question, 400) || str(params.question, 400) || 'asks you something'
+}
+
+/**
+ * What a tool step means for the world, or null when it is not an activity (finish, wait, …). A
+ * secrets-like file gets the "secrets: " prefix and a question the "question: " one (shared/details.ts).
+ */
 export function agyWorldActivity(tool: string, params: Record<string, unknown>, cwd?: string): AgyWorldActivity | null {
+  if (AGY_QUESTION_TOOLS.includes(tool)) return { activity: 'waiting', detail: `${DETAIL_QUESTION}${agyQuestion(params)}` }
   const cls = agyToolClass(tool, params)
   switch (cls) {
     case 'board':
@@ -135,10 +222,14 @@ export function agyWorldActivity(tool: string, params: Record<string, unknown>, 
       const command = str(params.CommandLine, 2000)
       return { activity: tool === 'run_command' ? agyCommandIntent(command) : 'exec', detail: command || tool }
     }
-    case 'write':
-      return { activity: 'write', detail: relativeTo(firstPath(params), cwd) || (tool === 'generate_image' ? 'image' : '') }
-    case 'read':
-      return { activity: 'read', detail: relativeTo(firstPath(params), cwd) || str(params.Pattern, 200) || str(params.Query, 200) }
+    case 'write': {
+      const path = relativeTo(firstPath(params), cwd)
+      return { activity: 'write', detail: path ? fileDetail(path) : tool === 'generate_image' ? 'image' : '' }
+    }
+    case 'read': {
+      const path = relativeTo(firstPath(params), cwd)
+      return { activity: 'read', detail: path ? fileDetail(path) : str(params.Pattern, 200) || str(params.Query, 200) }
+    }
     case 'web':
       return { activity: 'web', detail: str(params.Url, 2000) || str(params.query, 400) || str(params.Query, 400) }
     case 'browser':
@@ -149,7 +240,7 @@ export function agyWorldActivity(tool: string, params: Record<string, unknown>, 
       return { activity: CAPTURE_TOOL_PATTERN.test(name) ? 'capture' : 'exec', detail: server ? `${server}.${name}` : name }
     }
     case 'delegate':
-      return { activity: 'exec', detail: 'delegating' }
+      return { activity: 'exec', detail: DETAIL_DELEGATING }
     case 'passive':
       return null
     default:

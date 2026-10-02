@@ -23,6 +23,8 @@ import { IPC, type RendererSettings } from '../shared/ipc'
 import type { BoardSettings } from '../shared/board'
 import { parseAllowOrders } from '../shared/orders'
 import { createClaudeCodeHooksAdapter } from './adapters/claude-code-hooks'
+import { ClaudeHookObserver } from './adapters/claudeInspect'
+import { AgentStats, type InspectorWatch } from './agentStats'
 import { Board } from './board'
 import { BOARD_MCP_ROUTE, boardMcpRoute } from './boardMcp'
 import { EventBus } from './bus'
@@ -41,6 +43,7 @@ import { SessionManager } from './sessions'
 import { SessionStore } from './sessionStore'
 import { clampToDisplays, displayKey, rememberWindow, type SavedWindow } from './windowState'
 import { registerSessionIpc } from './sessionsIpc'
+import { ClaudeTranscripts } from './transcriptUsage'
 import { allowWebPermission, isExternalWebUrl } from './webPermissions'
 import { isValidThemeName, listThemes, loadTheme, registerThemeProtocol, registerThemeScheme } from './themes'
 
@@ -84,6 +87,16 @@ const board = new Board({
   settings: () => getConfig().board,
   onChanged: (snapshot) => toRenderer(IPC.boardChanged, snapshot)
 })
+/** The inspector's watches (one per window); set once the IPC is registered. */
+let inspectorWatch: InspectorWatch<number> | null = null
+/**
+ * Per-agent stats for the inspector panel (electron/agentStats.ts): fed by every world event and by
+ * what the drivers know. Read-only: it only ever answers "what is this agent doing?".
+ */
+const stats = new AgentStats({ onChange: () => inspectorWatch?.poke() })
+bus.observe((e) => stats.event(e))
+/** Token usage of Claude sessions, read from their transcripts under ~/.claude/projects when a hook says there is news. */
+const transcripts = new ClaudeTranscripts({ onUsage: (agentId, usage, model) => stats.fact({ kind: 'tokens', agentId, usage, model }) })
 /** Claims, notes and "ended" rows expire on their own: look every so often, so the panel follows. */
 const BOARD_SWEEP_MS = 30_000
 let ptyHost: PtyHostClient | null = null
@@ -165,7 +178,11 @@ async function onReady(): Promise<void> {
       getToken: () => getConfig().token,
       sink: bus,
       sessionTokens,
-      claudeHooks: createClaudeCodeHooksAdapter(sessions ?? undefined),
+      // Sessions the app did not start are observed too (turns, workers' tasks, files, token usage).
+      claudeHooks: createClaudeCodeHooksAdapter(
+        sessions ?? undefined,
+        (rootId) => new ClaudeHookObserver({ rootId, emit: (fact) => stats.fact(fact), transcripts, managerTask: true })
+      ),
       board: { route: boardMcpRoute(board), tokens: boardTokens },
       agy: { adapter: createAgyHooksAdapter(() => sessions), tokens: agyTokens }
     })
@@ -262,6 +279,7 @@ function createSessions(): void {
         sessionsDir,
         hookScript: SESSION_START_HOOK,
         inbox,
+        transcripts,
         ingest: { baseUrl: () => (server ? `http://${HOST}:${server.port}` : null), tokens: sessionTokens }
       }),
       codex,
@@ -274,6 +292,7 @@ function createSessions(): void {
     onTerminalData: (id, data) => toRenderer(IPC.termData, { id, data }),
     onChatEvent: (e) => toRenderer(IPC.chatEvent, e),
     onProvidersChanged: (list) => toRenderer(IPC.providersChanged, list),
+    stats,
     board: {
       model: board,
       endpoint: { url: () => (server ? `http://${HOST}:${server.port}${BOARD_MCP_ROUTE}` : null), tokens: boardTokens },
@@ -323,7 +342,7 @@ function registerIpc(): void {
       return true
     })
   )
-  registerSessionIpc({ manager: sessions!, getWindow: () => win })
+  inspectorWatch = registerSessionIpc({ manager: sessions!, getWindow: () => win }).inspector
 }
 
 function pushSettings(): void {
@@ -461,10 +480,14 @@ function createWindow(): void {
   if (!overlay) trackWindowState(w)
 
   bus.attach(w.webContents)
-  // A (re)loading or replaced renderer has lost its terminals and chats: stop streaming until it attaches again.
+  // A (re)loading or replaced renderer has lost its terminals, chats and inspector: stop streaming until it attaches again.
   sessions?.detachAll()
+  inspectorWatch?.clear()
   w.webContents.on('did-start-loading', () => {
-    if (win === w) sessions?.detachAll()
+    if (win === w) {
+      sessions?.detachAll()
+      inspectorWatch?.clear()
+    }
   })
   const old = win
   win = w

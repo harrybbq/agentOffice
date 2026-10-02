@@ -19,7 +19,9 @@ import {
   ClaudeHookMapper,
   type HostedHookTarget
 } from '../adapters/claude-code-hooks'
+import { ClaudeHookObserver } from '../adapters/claudeInspect'
 import type { RequestContext } from '../adapters/types'
+import type { TranscriptPoker } from '../transcriptUsage'
 import { BOARD_SERVER_CLAUDE, CLAUDE_BOARD_ALLOW } from '../boardMcp'
 import { DEFAULT_DENY_MESSAGE, describeToolInput } from '../permissions'
 import { plainPermission, type PlainPermission } from '../../shared/permissionText'
@@ -288,6 +290,8 @@ export interface ClaudeProviderOptions {
   ingest: IngestInfo
   /** Inbox sockets + tokens, memory only. */
   inbox: SessionInbox
+  /** Reads token usage from the sessions' transcripts for the inspector. Absent = no token counts. */
+  transcripts?: TranscriptPoker
   /** Overrides for tests. */
   findExecutable?: () => string | null
   schedule?: Scheduler
@@ -298,6 +302,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   readonly surface = 'terminal' as const
   private readonly id: string
   private readonly mapper: ClaudeHookMapper
+  /** What the inspector learns from the hooks (turns, workers' tasks, files, token usage). */
+  private readonly observer: ClaudeHookObserver
   private machine: SessionStateMachine | null = null
   /** Temp files of this session: its settings, its briefing and its MCP config. */
   private tempFiles: string[] = []
@@ -317,6 +323,12 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     this.id = ctx.sessionId
     this.title = ctx.start.title
     this.mapper = new ClaudeHookMapper({ rootId: this.id, displayName: ctx.start.title, holdWaiting: true, endsWithProcess: true })
+    this.observer = new ClaudeHookObserver({
+      rootId: this.id,
+      emit: (fact) => ctx.events.onFact?.(fact),
+      transcripts: opts.transcripts,
+      cwd: ctx.start.cwd
+    })
   }
 
   get state(): SessionState {
@@ -420,6 +432,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
 
     const mapped = this.mapper.handle(body)
     for (const e of mapped.events) this.ctx.sink.emit(e)
+    this.observer.observe(body, mapped)
     const mainThread = mapped.agentId === this.id
 
     switch (mapped.kind) {

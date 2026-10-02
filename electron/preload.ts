@@ -4,6 +4,7 @@ import type { AgentEvent } from '../shared/events'
 import { IPC, type AgentOfficeBridge, type RendererSettings } from '../shared/ipc'
 import type { BoardSettings, BoardSnapshot } from '../shared/board'
 import type { ChatEvent } from '../shared/chat'
+import type { AgentDetails } from '../shared/inspector'
 import type { PermissionRequestInfo, ProviderInfo, SessionInfo } from '../shared/sessions'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -69,6 +70,12 @@ const bridge: AgentOfficeBridge = {
     setSettings: (patch) => ipcRenderer.invoke(IPC.boardSetSettings, patch),
     onChanged: (cb) => subscribe<BoardSnapshot>(IPC.boardChanged, cb),
     onSettingsChanged: (cb) => subscribe<BoardSettings>(IPC.boardSettingsChanged, cb)
+  },
+
+  inspector: {
+    watch: (agentId) => ipcRenderer.invoke(IPC.inspectWatch, agentId),
+    unwatch: () => ipcRenderer.send(IPC.inspectUnwatch),
+    onChanged: (cb) => subscribe<AgentDetails>(IPC.inspectChanged, cb)
   },
 
   permissions: {

@@ -444,13 +444,13 @@ const SOFT_DENY = `{"event":"result","result":{"conversation_id":"${C}","status"
 await t('stream: lines are parsed into init / step / result; anything else is tolerated', () => {
   assert.deepEqual(parseAgyLine(GATE_RUN[0]), { type: 'init', conversationId: C, model: 'gemini-3.8-flash-low', cwd: 'C:\\scratch\\check-project', permissionMode: 'always-proceed' })
   assert.deepEqual(parseAgyLine(GATE_RUN[3]), {
-    type: 'step', conversationId: C, index: 2, state: 'ACTIVE', stepType: 'tool', toolName: 'run_command', params: { CommandLine: `node -e "console.log('ao-allow')"` }, output: null, error: '', textDelta: '', durationMs: null
+    type: 'step', conversationId: C, index: 2, state: 'ACTIVE', stepType: 'tool', toolName: 'run_command', params: { CommandLine: `node -e "console.log('ao-allow')"` }, output: null, error: '', textDelta: '', durationMs: null, usage: null
   })
   const done = parseAgyLine(GATE_RUN[4])
   assert.deepEqual(done?.type === 'step' && [done.state, done.output, done.durationMs], ['DONE', 'ao-allow\n', 555])
   const failed = parseAgyLine(GATE_RUN[7])
   assert.deepEqual(failed?.type === 'step' && [failed.state, failed.error], ['ERROR', 'tool call denied by pre-tool hook: Denied from the Agent Office CEO desk.'])
-  assert.deepEqual(parseAgyLine(SOFT_DENY), { type: 'result', conversationId: C, status: 'SUCCESS', response: '', denied: ['RunCommand'] })
+  assert.deepEqual(parseAgyLine(SOFT_DENY), { type: 'result', conversationId: C, status: 'SUCCESS', response: '', denied: ['RunCommand'], usage: { input: 13213, output: 242, thinking: 151, cacheRead: 0, total: 13455 } })
   assert.deepEqual(parseAgyLine('{"event":"command_result","command":{}}'), { type: 'other', event: 'command_result' })
   assert.deepEqual(parseAgyLine('{"event":"step_update","step_update":{"state":"DONE"}}'), { type: 'other', event: 'step_update' })
   assert.equal(parseAgyLine('not json'), null)
@@ -533,7 +533,7 @@ await t('stream -> chat: injected steps, file and MCP tools, the hook payload fi
   // An answer that was not streamed is shown from the result.
   const whole = new AgyChat('s3')
   whole.turnStarted('t')
-  const shown = whole.apply({ type: 'result', conversationId: C, status: 'SUCCESS', response: 'All done.\n', denied: [] }, ctx)
+  const shown = whole.apply({ type: 'result', conversationId: C, status: 'SUCCESS', response: 'All done.\n', denied: [], usage: null }, ctx)
   assert.deepEqual(shown.map((e) => e.type === 'item' && e.item.kind === 'assistant' && [e.item.text, e.item.streaming]), [['All done.\n', false]])
 
   // A turn that is cut off closes what was open.

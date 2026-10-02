@@ -30,6 +30,26 @@
 // seat/office); a missing station type sends them home. Managers resolve in their branch, then the
 // HQ. The HQ `inbox` is for managers only: a waiting worker brings its memo to its manager, who takes
 // it to the HQ. During an office-wide CEO order, workers may use stations and the inbox anywhere.
+//
+// Stations (all optional, all in theme.json; a theme without them behaves as before):
+//   stationLabels  location type -> { title, subtitle?, color?, once? }: a small floating tag above
+//                  every location of that type (`once`: one tag per block, at the middle of them:
+//                  use it for desks and inbox slots). The dot colour defaults to the colour of the
+//                  furniture next to the location. Key order = priority when tags would overlap.
+//                  The same titles name the stations in the agent inspector.
+//   stationRules   a more specific routing than `activities`: a list of { activity?, detail, location,
+//                  anim?, verb? }. `detail` is the source of a case-insensitive regular expression
+//                  (max 200 characters; an invalid one is ignored with a warning) tested against the
+//                  event's detail. The first rule that matches (and whose `activity`, if given, is the
+//                  event's) wins; otherwise the `activities` table applies. When the pattern matches
+//                  at the start of the detail, the matched part is left out of the speech bubble
+//                  (the rule's verb says it). HOME / MANAGER work as locations; the scope rules above
+//                  still apply. For `waiting` a rule only changes the verb and animation: where a
+//                  waiting character goes (memo relay, inbox) is fixed.
+//   idle           { location, afterMs }: managers and workers with nothing to do for afterMs walk to
+//                  the nearest location of that type inside their own branch (a lounge, a yard) and
+//                  return to work on their next activity. Without it they stay at their desk.
+// Optional location type in hq.json: `noticeboard` (where notes for the office board fly to).
 
 import type { Activity } from './events'
 
@@ -83,6 +103,38 @@ export interface ActivityDef {
   verb?: string
 }
 
+/** A more specific route than the `activities` table (see the header). */
+export interface StationRule {
+  /** Only for events of this activity; any activity when left out. */
+  activity?: Activity
+  /** Source of a case-insensitive regular expression tested against the event's detail. */
+  detail: string
+  /** Location type from the map, or HOME / MANAGER. */
+  location: string
+  anim?: string
+  verb?: string
+}
+
+/** The floating tag above a station. */
+export interface StationLabel {
+  title: string
+  subtitle?: string
+  /** Dot colour (#rrggbb). Default: the colour of the furniture next to the location. */
+  color?: string
+  /** One tag per block for this type instead of one per location (desks, inbox slots). */
+  once?: boolean
+}
+
+export interface IdleDef {
+  /** Location type inside the character's own branch. */
+  location: string
+  /** How long a character has had nothing to do before it walks there, in ms. */
+  afterMs: number
+}
+
+/** Longest `stationRules[].detail` pattern that is compiled. */
+export const STATION_RULE_MAX_PATTERN = 200
+
 export interface ThemeManifest {
   name: string
   displayName: string
@@ -101,6 +153,12 @@ export interface ThemeManifest {
   /** Team (branch) colours: the manager's accessory, a collar/badge on its workers, the branch sign
    *  and the HUD legend. Assigned per team, unique among live teams while the palette lasts. */
   teams?: { colors: string[] }
+  /** Floating tags above stations, by location type (see the header). */
+  stationLabels?: Record<string, StationLabel>
+  /** Detail-specific routing, checked before `activities`; the first match wins. */
+  stationRules?: StationRule[]
+  /** Where characters with nothing to do go, and after how long. */
+  idle?: IdleDef
 }
 
 /** Used when a theme has no `teams.colors`: 10 clearly distinct colours. */
