@@ -1,10 +1,12 @@
-// The resizable panel next to (or under) the world: Terminal and Events tabs.
+// The resizable panel next to (or under) the world: the session's Terminal (or Chat, for sessions
+// without a terminal UI) and the Events tab.
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { DEFAULT_LAYOUT, useApp, useAppState } from '../controller'
 import type { PanelTab } from '../controller'
 import { clampSplit } from '../format'
 import { cx } from '../hooks'
-import { IconClose, IconDockBottom, IconDockRight, IconList, IconTerminal } from '../icons'
+import { IconChat, IconClose, IconDockBottom, IconDockRight, IconList, IconTerminal } from '../icons'
+import { ChatView } from './ChatView'
 import { EventLog } from './EventLog'
 import { TerminalView } from './TerminalView'
 
@@ -73,6 +75,8 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   const app = useApp()
   const layout = useAppState((s) => s.layout)
   const eventCount = useAppState((s) => s.eventCount)
+  // The first tab keeps its stored id ('terminal'); only its label and content follow the session.
+  const chat = useAppState((s) => s.sessions.find((x) => x.id === s.selectedId)?.surface === 'chat')
 
   const tab = (id: PanelTab, label: string, icon: ReactNode, extra?: ReactNode) => (
     <button
@@ -89,10 +93,10 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   )
 
   return (
-    <section className="panel" aria-label="Terminal and events">
+    <section className="panel" aria-label={chat ? 'Chat and events' : 'Terminal and events'}>
       <header className="panel-head">
         <div className="tabs" role="tablist">
-          {tab('terminal', 'Terminal', <IconTerminal />)}
+          {chat ? tab('terminal', 'Chat', <IconChat />) : tab('terminal', 'Terminal', <IconTerminal />)}
           {tab('events', 'Events', <IconList />, eventCount > 0 && <span className="tab-count">{eventCount > 999 ? '999+' : eventCount}</span>)}
         </div>
         <div className="panel-tools">
@@ -111,7 +115,8 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
         </div>
       </header>
       <div className="panel-body">
-        <TerminalView hidden={layout.tab !== 'terminal'} />
+        <TerminalView hidden={layout.tab !== 'terminal' || chat} />
+        <ChatView hidden={layout.tab !== 'terminal' || !chat || !layout.panelOpen} />
         <EventLog hidden={layout.tab !== 'events' || !layout.panelOpen} />
       </div>
     </section>

@@ -268,6 +268,7 @@ export interface ClaudeProviderOptions {
 
 export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   readonly provider = 'claude-code' as const
+  readonly surface = 'terminal' as const
   private readonly id: string
   private readonly mapper: ClaudeHookMapper
   private machine: SessionStateMachine | null = null

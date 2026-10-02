@@ -1,4 +1,4 @@
-// IPC for hosted sessions, terminals and permissions (channels: shared/ipc.ts).
+// IPC for hosted sessions, terminals, chats, provider logins and permissions (channels: shared/ipc.ts).
 // Every handler checks that the sender is the app's own window, and the session manager validates
 // every argument. This is the ONLY way a permission is approved or an order is sent.
 import { dialog, ipcMain, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
@@ -30,6 +30,7 @@ export function registerSessionIpc(opts: SessionIpcOptions): void {
   }
 
   handle(IPC.listProviders, () => manager.providers())
+  handle(IPC.providerLogin, (provider) => manager.login(provider))
   handle(IPC.listSessions, () => manager.list())
   handle(IPC.startSession, (req) => manager.start(req))
   handle(IPC.stopSession, (id) => manager.stop(id))
@@ -49,6 +50,10 @@ export function registerSessionIpc(opts: SessionIpcOptions): void {
   on(IPC.termWrite, (id, data) => manager.write(id, data))
   on(IPC.termResize, (id, cols, rows) => manager.resize(id, cols, rows))
   on(IPC.termAck, (id, chars) => manager.ack(id, chars))
+
+  handle(IPC.chatAttach, (id) => manager.chatAttach(id))
+  on(IPC.chatDetach, (id) => manager.chatDetach(id))
+  handle(IPC.chatSend, (id, text) => manager.chatSend(id, text))
 
   handle(IPC.listPermissions, () => manager.listPermissions())
   handle(IPC.decidePermission, (id, decision) => manager.decide(id, decision))

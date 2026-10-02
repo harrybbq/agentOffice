@@ -18,6 +18,10 @@ export interface ProviderInfo {
   /** Why not, when unavailable (e.g. "not installed", "driver coming in phase B"). */
   reason?: string
   version?: string
+  /** Account state for providers that have their own login (Codex). Undefined = not applicable/unknown. */
+  account?: { loggedIn: boolean; plan?: string }
+  /** Usage of the provider's rate-limit window, when the provider reports it. */
+  usage?: { usedPercent: number; resetsAt?: number; windowMinutes?: number }
 }
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
@@ -54,6 +58,9 @@ export interface SessionInfo {
   model?: string
   /** The provider's own session id once known (Claude: hook `session_id`). */
   providerSessionId?: string
+  /** How the user talks to this session: an embedded terminal (Claude Code TUI) or the chat view
+   *  (providers with no TUI, e.g. Codex app-server). Terminal sessions may still expose a read-only chat log later. */
+  surface: 'terminal' | 'chat'
   /** Can orders be delivered right now? */
   canReceiveOrders: boolean
   exitCode?: number | null

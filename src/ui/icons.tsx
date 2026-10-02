@@ -135,3 +135,75 @@ export const IconSearch = (p: P) => (
     <path d="M10.25 10.25L13.5 13.5" />
   </Svg>
 )
+export const IconCopy = (p: P) => (
+  <Svg {...p}>
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+    <path d="M10.5 5.5V4a1.5 1.5 0 00-1.5-1.5H4A1.5 1.5 0 002.5 4v5A1.5 1.5 0 004 10.5h1.5" />
+  </Svg>
+)
+export const IconChat = (p: P) => (
+  <Svg {...p}>
+    <path d="M2.25 4.25a1.5 1.5 0 011.5-1.5h8.5a1.5 1.5 0 011.5 1.5v5.5a1.5 1.5 0 01-1.5 1.5H7l-3 2.5v-2.5h-.25a1.5 1.5 0 01-1.5-1.5z" />
+  </Svg>
+)
+export const IconFile = (p: P) => (
+  <Svg {...p}>
+    <path d="M4 2.5h5l3 3v7a1 1 0 01-1 1H4a1 1 0 01-1-1v-9a1 1 0 011-1z" />
+    <path d="M9 2.5v3h3" />
+  </Svg>
+)
+export const IconPencil = (p: P) => (
+  <Svg {...p}>
+    <path d="M2.75 13.25l.6-2.9 7.4-7.4a1.3 1.3 0 011.85 0l.45.45a1.3 1.3 0 010 1.85l-7.4 7.4z" />
+    <path d="M9.6 4.1l2.3 2.3" />
+  </Svg>
+)
+export const IconGlobe = (p: P) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M2.5 8h11M8 2.5c1.7 1.6 2.5 3.4 2.5 5.5S9.7 11.9 8 13.5C6.3 11.9 5.5 10.1 5.5 8S6.3 4.1 8 2.5z" />
+  </Svg>
+)
+export const IconWrench = (p: P) => (
+  <Svg {...p}>
+    <path d="M10.2 2.6a3.3 3.3 0 00-3.4 4.5L2.7 11.2a1.5 1.5 0 002.1 2.1l4.1-4.1a3.3 3.3 0 004.5-3.4l-2 2-1.6-.4-.4-1.6z" />
+  </Svg>
+)
+export const IconArrowDown = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 3v10M4 9l4 4 4-4" />
+  </Svg>
+)
+export const IconUsers = (p: P) => (
+  <Svg {...p}>
+    <circle cx="6" cy="5.75" r="2.25" />
+    <path d="M1.75 13c.3-2.2 1.9-3.5 4.25-3.5s3.95 1.3 4.25 3.5M10.5 3.7a2.25 2.25 0 010 4.1M12 9.8c1.3.5 2.1 1.6 2.3 3.2" />
+  </Svg>
+)
+export const IconInfo = (p: P) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M8 7.25v3.5M8 5.2h.01" />
+  </Svg>
+)
+export const IconSpark = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 2.25l1.35 3.9 3.9 1.35-3.9 1.35L8 12.75 6.65 8.85 2.75 7.5l3.9-1.35z" />
+    <path d="M12.5 11.5v2M11.5 12.5h2" />
+  </Svg>
+)
+export const IconChecklist = (p: P) => (
+  <Svg {...p}>
+    <path d="M2.5 4.2l1.1 1.1 2-2.3M2.5 9.2l1.1 1.1 2-2.3M8 4.5h5.5M8 9.5h5.5M2.75 13.25h.01M8 13.25h5.5" />
+  </Svg>
+)
+export const IconShield = (p: P) => (
+  <Svg {...p}>
+    <path d="M8 2.25l4.75 1.7v3.6c0 2.9-1.9 5-4.75 6.2-2.85-1.2-4.75-3.3-4.75-6.2v-3.6z" />
+  </Svg>
+)
+export const IconLogin = (p: P) => (
+  <Svg {...p}>
+    <path d="M9.5 2.75h2.25a1.5 1.5 0 011.5 1.5v7.5a1.5 1.5 0 01-1.5 1.5H9.5M2.5 8h7M7 5.25L9.75 8 7 10.75" />
+  </Svg>
+)

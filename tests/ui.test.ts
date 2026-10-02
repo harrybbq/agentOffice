@@ -46,6 +46,7 @@ const session = (id: string, over: Partial<SessionInfo> = {}): SessionInfo => ({
   state: 'idle',
   startedAt: 1,
   permissionMode: 'default',
+  surface: 'terminal',
   canReceiveOrders: true,
   ...over
 })
@@ -283,3 +284,5 @@ t('store notifies only on real changes and keeps untouched slices', () => {
 })
 
 console.log(`\n${pass} ui tests passed`)
+
+await import('./chat.test.ts')

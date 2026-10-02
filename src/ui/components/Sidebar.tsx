@@ -2,9 +2,10 @@
 import { useMemo } from 'react'
 import type { SessionInfo, SessionState } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
-import { groupSessions, observedTeams, shortenPath, STATE_LABEL } from '../format'
+import { groupSessions, loginHint, observedTeams, shortenPath, STATE_LABEL } from '../format'
 import { cx } from '../hooks'
 import { IconPlus } from '../icons'
+import { LoginPrompt, UsageMeter } from './ProviderAccount'
 
 export function StateDot({ state }: { state: SessionState }) {
   return <span className={cx('state-dot', `state-${state}`)} role="img" aria-label={STATE_LABEL[state]} title={STATE_LABEL[state]} />
@@ -26,6 +27,7 @@ export function Sidebar() {
   const groups = useMemo(() => groupSessions(providers, sessions), [providers, sessions])
   const observed = useMemo(() => observedTeams(teams, sessions, everHosted), [teams, sessions, everHosted])
   const canStart = providers.some((p) => p.available)
+  const labelOf = (id: string) => providers.find((p) => p.id === id)?.label ?? id
   let index = 0
 
   const row = (s: SessionInfo) => {
@@ -85,9 +87,16 @@ export function Sidebar() {
               ) : (
                 <span className="group-tag">Unavailable</span>
               )}
+              {g.provider.available && g.provider.account?.loggedIn && g.provider.account.plan && (
+                <span className="group-tag plan-tag" title={`Signed in · ${g.provider.account.plan} plan`}>
+                  {g.provider.account.plan}
+                </span>
+              )}
             </h2>
             {!g.provider.available && <p className="group-note">{g.provider.reason ?? 'Not available'}</p>}
-            {g.provider.available && g.sessions.length === 0 && <p className="group-note">No sessions yet</p>}
+            {g.provider.available && loginHint(g.provider) && <LoginPrompt provider={g.provider} variant="sidebar" />}
+            {g.provider.available && !loginHint(g.provider) && <UsageMeter usage={g.provider.usage} />}
+            {g.provider.available && !loginHint(g.provider) && g.sessions.length === 0 && <p className="group-note">No sessions yet</p>}
             {g.sessions.length > 0 && <ul className="session-list">{g.sessions.map(row)}</ul>}
           </section>
         ))}
@@ -105,7 +114,7 @@ export function Sidebar() {
                     type="button"
                     className={cx('session-row', selectedId === t.id && 'is-selected', !t.live && 'is-exited')}
                     onClick={() => app.select(t.id)}
-                    title={`${t.name} · ${t.provider}\nRuns in its own terminal`}
+                    title={`${t.name} · ${labelOf(t.provider)}\nRuns in its own terminal`}
                   >
                     <Swatch color={t.color} />
                     <span className="session-text">
@@ -113,7 +122,7 @@ export function Sidebar() {
                         {t.name}
                         {t.workers > 0 && <span className="session-workers">+{t.workers}</span>}
                       </span>
-                      <span className="session-path">{t.provider} · external</span>
+                      <span className="session-path">{labelOf(t.provider)} · external</span>
                     </span>
                   </button>
                 </li>

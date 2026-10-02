@@ -1,6 +1,7 @@
 // Session manager: the sessions the app launched itself, whatever the provider. It validates every
-// request from the renderer, owns the fixed provider table, routes terminal I/O, permission
-// decisions and CEO orders, and tells the renderer when anything changes.
+// request from the renderer, owns the fixed provider table, routes terminal I/O, chat events and
+// chat input, permission decisions and CEO orders, and tells the renderer when anything changes.
+// A session's surface is a terminal (Claude Code) or the chat view (Codex); see drivers/types.ts.
 //
 // Security rules (shared/sessions.ts): the renderer picks a provider id and a folder, never a
 // command, args or env; approvals and orders arrive over renderer IPC only.
@@ -9,6 +10,7 @@
 import { randomBytes } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { basename, isAbsolute, resolve } from 'node:path'
+import { CHAT_MAX_PROMPT_CHARS, type ChatEvent, type ChatItem } from '../shared/chat'
 import { planOrder, REASON_NOT_CONNECTED, type OrderResult } from '../shared/orders'
 import type {
   PermissionMode,
@@ -37,7 +39,6 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 }
 /** Providers without a driver yet, and the phase that brings it. */
 const COMING: Partial<Record<ProviderId, string>> = {
-  codex: 'driver coming in phase B',
   antigravity: 'driver coming in phase C'
 }
 
@@ -55,6 +56,10 @@ export interface SessionManagerOptions {
   onPermissionsChanged(pending: PermissionRequestInfo[]): void
   /** Output of a terminal the renderer is attached to. */
   onTerminalData(id: string, data: string): void
+  /** A chat event of a session the renderer is attached to. */
+  onChatEvent?(e: ChatEvent): void
+  /** A provider's login state or usage changed: the full list again. */
+  onProvidersChanged?(providers: ProviderInfo[]): void
 }
 
 interface Session {
@@ -78,11 +83,17 @@ export class SessionManager implements HostedSessions {
   private providerTable = new Map<ProviderId, ProviderDefinition>()
   /** Terminals whose output is streamed to the renderer. */
   private attached = new Set<string>()
+  /** Chat sessions whose events are streamed to the renderer. */
+  private chatAttached = new Set<string>()
   private broadcastQueued = false
+  private providersQueued = false
   private closing = false
 
   constructor(private readonly opts: SessionManagerOptions) {
-    for (const p of opts.providers) this.providerTable.set(p.id, p)
+    for (const p of opts.providers) {
+      this.providerTable.set(p.id, p)
+      p.onChanged?.(() => this.providersChanged())
+    }
     this.permissions = new PermissionRegistry((pending) => opts.onPermissionsChanged(pending))
   }
 
@@ -103,6 +114,30 @@ export class SessionManager implements HostedSessions {
     )
   }
 
+  /** Coalesces bursts (usage is reported after every model response) into one broadcast. */
+  private providersChanged(): void {
+    if (this.providersQueued || this.closing || !this.opts.onProvidersChanged) return
+    this.providersQueued = true
+    setImmediate(() => {
+      this.providersQueued = false
+      if (this.closing) return
+      void this.providers().then(
+        (list) => this.opts.onProvidersChanged?.(list),
+        () => {}
+      )
+    })
+  }
+
+  /** Starts a provider's own login flow (system browser). Rejects with a readable message. */
+  async login(provider: unknown): Promise<void> {
+    if (this.closing) throw new Error('the app is shutting down')
+    if (typeof provider !== 'string' || !Object.hasOwn(PROVIDER_LABELS, provider)) throw new Error('unknown provider')
+    const def = this.providerTable.get(provider as ProviderId)
+    if (!def?.login) throw new Error(`${PROVIDER_LABELS[provider as ProviderId]} has no login in Agent Office`)
+    await def.login()
+    this.providersChanged()
+  }
+
   // ---- sessions ----
 
   list(): SessionInfo[] {
@@ -118,6 +153,7 @@ export class SessionManager implements HostedSessions {
       state: s.driver.state,
       startedAt: s.startedAt,
       permissionMode: s.start.permissionMode,
+      surface: s.driver.surface,
       canReceiveOrders: s.driver.canReceiveOrders
     }
     const model = s.model ?? s.start.model
@@ -185,7 +221,10 @@ export class SessionManager implements HostedSessions {
         onProviderSession: () => this.changed(),
         onModel: (model) => this.onModel(id, model),
         onChanged: () => this.changed(),
-        onExit: (code) => this.onExit(id, code)
+        onExit: (code) => this.onExit(id, code),
+        onChat: (e) => {
+          if (this.chatAttached.has(id)) this.opts.onChatEvent?.(e)
+        }
       }
     })
     const session: Session = { id, start, startedAt: Date.now(), title: start.title, driver }
@@ -248,7 +287,8 @@ export class SessionManager implements HostedSessions {
     if (s.removeTimer) clearTimeout(s.removeTimer)
     this.sessions.delete(id)
     this.attached.delete(id)
-    this.opts.pty.dispose(id)
+    this.chatAttached.delete(id)
+    if (s.driver.surface === 'terminal') this.opts.pty.dispose(id)
     this.changed()
   }
 
@@ -285,6 +325,7 @@ export class SessionManager implements HostedSessions {
 
   async attach(id: unknown): Promise<TerminalSnapshot> {
     const s = this.get(id)
+    if (s.driver.surface !== 'terminal') throw new Error('this session has no terminal (it uses the chat view)')
     // Until the snapshot arrives, output still in flight belongs to an older attachment: drop it.
     this.attached.delete(s.id)
     const snap = await this.opts.pty.snapshot(s.id, true)
@@ -294,7 +335,7 @@ export class SessionManager implements HostedSessions {
   }
 
   detach(id: unknown): void {
-    if (typeof id !== 'string' || !this.sessions.has(id)) return
+    if (!this.isTerminal(id)) return
     this.attached.delete(id)
     this.opts.pty.detach(id)
   }
@@ -302,24 +343,30 @@ export class SessionManager implements HostedSessions {
   /** The renderer reloaded or its window was replaced: nobody is listening any more. */
   detachAll(): void {
     for (const id of [...this.attached]) this.detach(id)
+    this.chatAttached.clear()
+  }
+
+  /** Is this a terminal session? (Keystrokes, resizes and acks for anything else are dropped.) */
+  private isTerminal(id: unknown): id is string {
+    return typeof id === 'string' && this.sessions.get(id)?.driver.surface === 'terminal'
   }
 
   /** Keystrokes from the terminal pane. Not gated by "Allow CEO orders": it is the user's own terminal. */
   write(id: unknown, data: unknown): void {
-    if (typeof id !== 'string' || typeof data !== 'string' || !this.sessions.has(id)) return
+    if (typeof data !== 'string' || !this.isTerminal(id)) return
     if (data.length === 0 || data.length > PTY_MAX_WRITE_CHARS) return
     this.opts.pty.write(id, data)
   }
 
   resize(id: unknown, cols: unknown, rows: unknown): void {
-    if (typeof id !== 'string' || !this.sessions.has(id)) return
+    if (!this.isTerminal(id)) return
     if (!Number.isInteger(cols) || !Number.isInteger(rows)) return
     if ((cols as number) < 2 || (cols as number) > 500 || (rows as number) < 1 || (rows as number) > 300) return
     this.opts.pty.resize(id, cols as number, rows as number)
   }
 
   ack(id: unknown, chars: unknown): void {
-    if (typeof id !== 'string' || !this.sessions.has(id)) return
+    if (!this.isTerminal(id)) return
     if (!Number.isInteger(chars) || (chars as number) <= 0 || (chars as number) > 10_000_000) return
     this.opts.pty.ack(id, chars as number)
   }
@@ -327,6 +374,50 @@ export class SessionManager implements HostedSessions {
   /** Called by the pty client for every batch of output. */
   terminalData(id: string, data: string): void {
     if (this.attached.has(id)) this.opts.onTerminalData(id, data)
+  }
+
+  // ---- chat (sessions with surface 'chat') ----
+
+  private chatSession(id: unknown): Session {
+    const s = this.get(id)
+    if (s.driver.surface !== 'chat' || !s.driver.chatItems) throw new Error('this session has no chat view (it uses the terminal)')
+    return s
+  }
+
+  /**
+   * The session's current chat list. From here on its ChatEvents go to the renderer. The same list
+   * is also sent as a `reset` event first, so a listener that only follows events is complete too.
+   * Synchronous on purpose: no event can fall between the snapshot and the subscription.
+   */
+  chatAttach(id: unknown): ChatItem[] {
+    const s = this.chatSession(id)
+    const items = s.driver.chatItems!()
+    this.chatAttached.add(s.id)
+    this.opts.onChatEvent?.({ type: 'reset', sessionId: s.id, items })
+    return items
+  }
+
+  chatDetach(id: unknown): void {
+    if (typeof id === 'string') this.chatAttached.delete(id)
+  }
+
+  /**
+   * A prompt typed in the chat box: starts a turn, or steers the running one. Not gated by
+   * "Allow CEO orders": like keystrokes in a terminal pane, it is the user's own input.
+   */
+  async chatSend(id: unknown, text: unknown): Promise<void> {
+    const s = this.chatSession(id)
+    if (typeof text !== 'string') throw new Error('invalid message')
+    if (text.length > CHAT_MAX_PROMPT_CHARS) throw new Error(`the message is longer than ${CHAT_MAX_PROMPT_CHARS} characters`)
+    // Control characters have no business in a prompt; line breaks and tabs do.
+    const clean = text
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
+      .trim()
+    if (clean.length === 0) throw new Error('the message is empty')
+    if (s.driver.state === 'exited') throw new Error('the session has ended')
+    const r = await s.driver.sendPrompt(clean, 'human')
+    if (!r.ok) throw new Error(r.reason)
   }
 
   // ---- permissions ----
@@ -364,7 +455,7 @@ export class SessionManager implements HostedSessions {
         const s = this.sessions.get(id)
         if (!s) return void result.failed.push({ agentId: id, reason: REASON_NOT_CONNECTED })
         try {
-          const r = await s.driver.sendPrompt(plan.text)
+          const r = await s.driver.sendPrompt(plan.text, 'order')
           if (r.ok) result.delivered.push(id)
           else result.failed.push({ agentId: id, reason: r.reason })
         } catch {
@@ -377,10 +468,24 @@ export class SessionManager implements HostedSessions {
 
   // ---- lifecycle ----
 
-  /** Stops taking new sessions. The pty host (killed by the caller) takes the processes down. */
+  /** Stops taking new sessions. The pty host (killed by the caller) takes the terminal processes down. */
   close(): void {
     this.closing = true
     for (const s of this.sessions.values()) if (s.removeTimer) clearTimeout(s.removeTimer)
+  }
+
+  /**
+   * App quit: drops the chat-based sessions (their threads stay in the provider's own history) and
+   * stops what the providers keep running, e.g. the shared Codex app-server and its process tree.
+   */
+  async shutdown(): Promise<void> {
+    this.close()
+    const drops = [...this.sessions.values()]
+      .filter((s) => s.driver.surface === 'chat' && s.driver.state !== 'exited')
+      .map((s) => s.driver.stop().catch(() => {}))
+    const timeout = new Promise<void>((r) => setTimeout(r, 3000))
+    await Promise.race([Promise.all(drops), timeout])
+    await Promise.all([...this.providerTable.values()].map((p) => p.shutdown?.().catch(() => {})))
   }
 
   /** Coalesces bursts of changes into one broadcast. */

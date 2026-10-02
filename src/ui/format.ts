@@ -3,7 +3,7 @@
 import type { AgentEvent, Activity } from '../../shared/events'
 import type { OrderResult } from '../../shared/orders'
 import { PROVIDER_TARGET_PREFIX } from '../../shared/orders'
-import type { PermissionRequestInfo, ProviderInfo, SessionInfo, SessionState } from '../../shared/sessions'
+import type { PermissionMode, PermissionRequestInfo, ProviderId, ProviderInfo, SessionInfo, SessionState } from '../../shared/sessions'
 
 /** The slice of a world team the shell needs (see scene/OfficeScene TeamInfo). */
 export interface TeamLike {
@@ -325,4 +325,98 @@ export function observedTeams<T extends { id: string }>(
 export function cleanError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)
   return msg.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '')
+}
+
+// ---- providers with their own account (Codex) -------------------------------------------------
+
+/** Does the provider need the user to sign in before a session can start? */
+export function loginHint(p: Pick<ProviderInfo, 'account'> | undefined): boolean {
+  return p?.account?.loggedIn === false
+}
+
+export interface UsageInfo {
+  /** 0-100, rounded. */
+  percent: number
+  label: string
+  tone: 'ok' | 'warn' | 'danger'
+  /** Tooltip: what the number means and when the window resets. */
+  title: string
+}
+
+function windowName(minutes: number | undefined): string {
+  if (!minutes || !Number.isFinite(minutes) || minutes <= 0) return ''
+  if (minutes % 1440 === 0) return `${minutes / 1440}-day `
+  if (minutes % 60 === 0) return `${minutes / 60}-hour `
+  return `${Math.round(minutes)}-minute `
+}
+
+/** The provider's rate-limit window as a small meter, or null when it reports none. */
+export function usageInfo(usage: ProviderInfo['usage'], now = Date.now()): UsageInfo | null {
+  if (!usage || !Number.isFinite(usage.usedPercent)) return null
+  const percent = Math.round(Math.min(100, Math.max(0, usage.usedPercent)))
+  let title = `${percent}% of the ${windowName(usage.windowMinutes)}limit used`
+  if (usage.resetsAt && Number.isFinite(usage.resetsAt)) {
+    const d = new Date(usage.resetsAt)
+    const day = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+    const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    title += usage.resetsAt > now ? `\nResets ${day}, ${time} (in ${ago(usage.resetsAt - now)})` : `\nResets ${day}, ${time}`
+  }
+  return { percent, label: `${percent}%`, tone: percent >= 95 ? 'danger' : percent >= 80 ? 'warn' : 'ok', title }
+}
+
+/** What each permission mode means for a provider (the new-session dialog's help line). */
+export function modeHints(provider: ProviderId | null): Record<PermissionMode, string> {
+  if (provider === 'codex') {
+    return {
+      default: 'Ask before every command and file change',
+      acceptEdits: 'Run sandboxed commands freely; ask to leave the sandbox',
+      plan: 'Read-only: looks and plans, changes nothing'
+    }
+  }
+  return {
+    default: 'Asks before edits and commands',
+    acceptEdits: 'File edits run without asking',
+    plan: 'Plans first, changes nothing'
+  }
+}
+
+export function modelPlaceholder(provider: ProviderId | null): string {
+  if (provider === 'codex') return 'Account default, e.g. gpt-6-luna'
+  if (provider === 'claude-code') return 'Default, e.g. opus or sonnet'
+  return 'Provider default'
+}
+
+export interface ComposerState {
+  enabled: boolean
+  /** A turn is running: the prompt is added to it instead of starting one. */
+  steer: boolean
+  /** Why the box is disabled. */
+  reason: string | null
+}
+
+/** What the chat composer may do in a session state. */
+export function composerState(state: SessionState, providerLabel: string): ComposerState {
+  switch (state) {
+    case 'idle':
+      return { enabled: true, steer: false, reason: null }
+    case 'busy':
+    case 'waiting-permission':
+      return { enabled: true, steer: true, reason: null }
+    case 'starting':
+      return { enabled: false, steer: false, reason: `${providerLabel} is starting…` }
+    case 'needs-attention':
+      return { enabled: false, steer: false, reason: `${providerLabel} can't take a prompt right now. See the notice above.` }
+    case 'exited':
+      return { enabled: false, steer: false, reason: 'This session has ended. Start a new one to continue.' }
+  }
+}
+
+/** "1.2s", "45s", "3m 05s" for a command's duration. */
+export function duration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`
 }

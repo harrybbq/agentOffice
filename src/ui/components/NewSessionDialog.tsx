@@ -3,21 +3,24 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PermissionMode, ProviderId } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
-import { cleanError, shortenPath } from '../format'
+import { cleanError, loginHint, modeHints, modelPlaceholder, shortenPath } from '../format'
 import { cx } from '../hooks'
 import { IconAlert, IconClose, IconFolder } from '../icons'
+import { LoginPrompt } from './ProviderAccount'
 
-const MODES: { id: PermissionMode; label: string; hint: string }[] = [
-  { id: 'default', label: 'Ask', hint: 'Asks before edits and commands' },
-  { id: 'acceptEdits', label: 'Accept edits', hint: 'File edits run without asking' },
-  { id: 'plan', label: 'Plan', hint: 'Plans first, changes nothing' }
+/** What each mode means differs per provider: the help line comes from format.modeHints. */
+const MODES: { id: PermissionMode; label: string }[] = [
+  { id: 'default', label: 'Ask' },
+  { id: 'acceptEdits', label: 'Accept edits' },
+  { id: 'plan', label: 'Plan' }
 ]
 
 export function NewSessionDialog() {
   const app = useApp()
   const providers = useAppState((s) => s.providers)
   const recent = useAppState((s) => s.recentFolders)
-  const firstAvailable = providers.find((p) => p.available)?.id ?? null
+  // A provider that is ready to go comes first; one that still needs a sign-in is the fallback.
+  const firstAvailable = (providers.find((p) => p.available && !loginHint(p)) ?? providers.find((p) => p.available))?.id ?? null
 
   const [provider, setProvider] = useState<ProviderId | null>(firstAvailable)
   const [cwd, setCwd] = useState(recent[0] ?? '')
@@ -27,6 +30,8 @@ export function NewSessionDialog() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const dialog = useRef<HTMLDivElement>(null)
+  const chosen = providers.find((p) => p.id === provider)
+  const needsLogin = loginHint(chosen)
 
   useEffect(() => {
     if (!provider && firstAvailable) setProvider(firstAvailable)
@@ -69,6 +74,7 @@ export function NewSessionDialog() {
   const start = async () => {
     if (busy) return
     if (!provider) return setError('No provider is available.')
+    if (needsLogin) return setError(`Sign in to ${chosen?.label ?? 'the provider'} first.`)
     if (!cwd.trim()) return setError('Pick the folder the agent should work in.')
     setBusy(true)
     setError(null)
@@ -113,14 +119,24 @@ export function NewSessionDialog() {
                   className={cx('provider-card', provider === p.id && 'is-selected')}
                   disabled={!p.available}
                   aria-pressed={provider === p.id}
-                  onClick={() => setProvider(p.id)}
+                  onClick={() => {
+                    setProvider(p.id)
+                    setError(null)
+                  }}
                 >
                   <span className="provider-name">{p.label}</span>
-                  <span className="provider-note">{p.available ? (p.version ?? 'Ready') : (p.reason ?? 'Not available')}</span>
+                  <span className={cx('provider-note', p.available && loginHint(p) && 'is-warn')}>
+                    {!p.available
+                      ? (p.reason ?? 'Not available')
+                      : loginHint(p)
+                        ? 'Sign in required'
+                        : [p.version, p.account?.plan && `${p.account.plan} plan`].filter(Boolean).join(' · ') || 'Ready'}
+                  </span>
                 </button>
               ))}
               {providers.length === 0 && <p className="field-hint">No providers reported by the app.</p>}
             </div>
+            {chosen && needsLogin && <LoginPrompt provider={chosen} variant="dialog" />}
           </fieldset>
 
           <div className="field">
@@ -163,7 +179,7 @@ export function NewSessionDialog() {
                 </button>
               ))}
             </div>
-            <p className="field-hint">{MODES.find((m) => m.id === mode)?.hint}</p>
+            <p className="field-hint">{modeHints(provider)[mode]}</p>
           </fieldset>
 
           <div className="field-pair">
@@ -177,7 +193,7 @@ export function NewSessionDialog() {
               <label htmlFor="ns-model">
                 Model <span className="optional">optional</span>
               </label>
-              <input id="ns-model" className="input" value={model} onChange={(ev) => setModel(ev.target.value)} placeholder="Provider default" maxLength={80} spellCheck={false} />
+              <input id="ns-model" className="input" value={model} onChange={(ev) => setModel(ev.target.value)} placeholder={modelPlaceholder(provider)} maxLength={80} spellCheck={false} />
             </div>
           </div>
 
@@ -192,7 +208,7 @@ export function NewSessionDialog() {
             <button type="button" className="btn btn-ghost" onClick={() => app.closeDialog()}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={busy || !provider}>
+            <button type="submit" className="btn btn-primary" disabled={busy || !provider || needsLogin}>
               {busy ? 'Starting…' : 'Start session'}
             </button>
           </footer>

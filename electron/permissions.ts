@@ -1,6 +1,9 @@
-// Pending permission requests of hosted sessions. A driver adds a request and holds the agent's
-// question open (for Claude Code: the PermissionRequest hook's HTTP response) until the CEO office
-// decides, or until the agent gives up on us (answered in the terminal, hook timeout, interrupt).
+// Pending permission requests of hosted sessions. A driver adds a request with a resolver callback
+// (`onResolved`) and holds the agent's question open until the CEO office decides, or until the
+// agent gives up on us (answered in the terminal, hook timeout, interrupt). What "holding open"
+// means is the driver's business: for Claude Code it is the PermissionRequest hook's HTTP response
+// (with an abort signal when Claude hangs up), for Codex a JSON-RPC server request that is
+// answered on the app-server pipe. The registry knows neither.
 //
 // Decisions only ever arrive through `decide()`, which the main process calls from renderer IPC.
 // No Electron imports: the tests load this file under plain Node.
@@ -31,7 +34,10 @@ export interface NewPermission {
 export interface PermissionHandlers {
   /** Called exactly once when the request leaves the registry, however it was resolved. */
   onResolved(outcome: PermissionOutcome, decision: PermissionDecision | null): void
-  /** Aborts when the agent stops waiting for us (e.g. Claude Code closed the hook connection). */
+  /**
+   * Optional: aborts when the agent stops waiting for us (e.g. Claude Code closed the hook
+   * connection). Drivers that learn it another way call `resolveElsewhere()` / `clearSession()`.
+   */
   signal?: AbortSignal
 }
 

@@ -271,6 +271,46 @@ export class ClaudeHookMapper {
     }
   }
 
+  // ---- provider-neutral entry points (drivers that don't speak hooks, e.g. Codex) ----
+
+  /**
+   * An agent started doing something. `agentId` is the manager or a subagent's world id; an unknown
+   * subagent is added (named `name`). While the agent waits on a permission (hosted), the activity
+   * is remembered and shown once the request is resolved.
+   */
+  activity(agentId: string, activity: Activity, detail: string, now = Date.now(), name = ''): AgentEvent[] {
+    if (agentId !== this.rootId && this.ended.has(agentId)) return []
+    const events: AgentEvent[] = []
+    if (!this.actors.has(this.rootId)) events.push(this.put(this.rootId, 'idle', '', now))
+    if (agentId !== this.rootId && !this.actors.has(agentId)) {
+      this.addSub(agentId, name)
+      if (!this.actors.has(agentId)) return events // too many subagents
+    }
+    const a = this.actors.get(agentId)
+    const text = oneLine(detail)
+    if (a && a.waiting > 0 && this.holdWaiting) a.before = { activity, detail: text }
+    else events.push(this.put(agentId, activity, text, now))
+    return events
+  }
+
+  /** The agent's turn is over, however it ended: nothing is pending any more, and it is idle. */
+  settle(agentId: string, now = Date.now()): AgentEvent[] {
+    const a = this.actors.get(agentId)
+    if (!a) return agentId === this.rootId ? [this.put(this.rootId, 'idle', '', now)] : []
+    a.waiting = 0
+    a.before = null
+    return [this.put(agentId, 'idle', '', now)]
+  }
+
+  /** A subagent is finished: it reports back and leaves. */
+  finish(subId: string, now = Date.now()): AgentEvent[] {
+    if (subId === this.rootId || !this.actors.has(subId)) return []
+    const e = this.put(subId, 'done', '', now)
+    this.actors.delete(subId)
+    this.remember(subId)
+    return [e]
+  }
+
   /**
    * The session got another title: its manager goes by the new name. Returns the event that tells
    * the world, unless the manager isn't there yet or waits on the human (a repeated `waiting`

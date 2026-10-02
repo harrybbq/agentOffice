@@ -2,10 +2,12 @@
 import type { AgentEvent } from './events'
 import type { ThemeManifest } from './theme'
 import type { OrderRequest, OrderResult } from './orders'
+import type { ChatEvent, ChatItem } from './chat'
 import type {
   PermissionDecision,
   PermissionOutcome,
   PermissionRequestInfo,
+  ProviderId,
   ProviderInfo,
   SessionInfo,
   StartSessionRequest,
@@ -45,6 +47,20 @@ export const IPC = {
   termAck: 'agent-office:term:ack',
   /** main -> renderer: { id, data } */
   termData: 'agent-office:term:data',
+
+  // ---- chat (sessions with surface 'chat') ----
+  /** invoke: returns the current ChatItem[] and starts streaming chatEvent for that session to the caller */
+  chatAttach: 'agent-office:chat:attach',
+  /** send (no reply) */
+  chatDetach: 'agent-office:chat:detach',
+  /** invoke: the user typed a prompt in the chat box (starts a turn, or steers the running one) */
+  chatSend: 'agent-office:chat:send',
+  /** main -> renderer: one ChatEvent */
+  chatEvent: 'agent-office:chat:event',
+  /** invoke: start the provider's own login flow (opens the system browser) */
+  providerLogin: 'agent-office:providers:login',
+  /** main -> renderer: ProviderInfo[] changed (login state, usage) */
+  providersChanged: 'agent-office:providers:changed',
 
   // ---- permissions ----
   /** invoke */
@@ -89,6 +105,11 @@ export interface AgentOfficeBridge {
 
   sessions: {
     providers(): Promise<ProviderInfo[]>
+    /** Login state / usage changed. */
+    onProvidersChanged(cb: (providers: ProviderInfo[]) => void): () => void
+    /** Starts the provider's login (system browser). Resolves when the flow was started; watch
+     *  onProvidersChanged for account.loggedIn. Rejects with a readable message on failure. */
+    login(provider: ProviderId): Promise<void>
     list(): Promise<SessionInfo[]>
     /** Rejects with a readable message if the folder is invalid or the provider unavailable. */
     start(req: StartSessionRequest): Promise<SessionInfo>
@@ -110,6 +131,17 @@ export interface AgentOfficeBridge {
     /** Flow control: call after rendering every TERM_ACK_CHARS chars. */
     ack(id: string, chars: number): void
     onData(cb: (id: string, data: string) => void): () => void
+  }
+
+  chat: {
+    /** Current items; ChatEvents for this session stream to onEvent until detach. */
+    attach(id: string): Promise<ChatItem[]>
+    detach(id: string): void
+    /** A prompt typed by the user in the chat box. If a turn is running it is added to that turn
+     *  (steer). Not gated by allowOrders: like typing in a terminal, it is the user's own input.
+     *  Rejects with a readable message if the session can't take input (exited, not logged in). */
+    send(id: string, text: string): Promise<void>
+    onEvent(cb: (e: ChatEvent) => void): () => void
   }
 
   permissions: {

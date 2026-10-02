@@ -791,14 +791,14 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   // ---- providers and validation: the renderer never picks a command, args or env ----
   const providers = await manager.providers()
   assert.deepEqual(providers.map((p) => [p.id, p.available]), [['claude-code', true], ['codex', false], ['antigravity', false]])
-  assert.equal(providers[1].reason, 'driver coming in phase B')
+  assert.equal(providers[1].reason, 'no driver') // this manager was built without the Codex provider (tests/codex.test.ts has it)
   assert.equal(providers[2].reason, 'driver coming in phase C')
   assert.ok(providers[0].version)
   const bad = async (req: unknown, re: RegExp) => assert.rejects(manager.start(req), re)
   await bad(null, /invalid/)
   await bad({ provider: 'bash', cwd: dir }, /unknown provider/)
   await bad({ provider: 'constructor', cwd: dir }, /unknown provider/)
-  await bad({ provider: 'codex', cwd: dir }, /phase B/)
+  await bad({ provider: 'codex', cwd: dir }, /no driver/)
   await bad({ provider: 'claude-code', cwd: join(dir, 'missing') }, /does not exist/)
   await bad({ provider: 'claude-code', cwd: join(dir, 'x', '..', 'nope') }, /does not exist/)
   await bad({ provider: 'claude-code', cwd: 'relative\\path' }, /absolute/)
@@ -1247,4 +1247,4 @@ await t('only the clipboard is allowed, and only for the app window', () => {
 
 console.log(`\n${pass} hosted-session tests passed`)
 
-await import('./ui.test.ts')
+await import('./codex.test.ts')

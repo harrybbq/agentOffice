@@ -40,6 +40,12 @@
     },
     "simulate": {
       "tint": "#76b7b2"
+    },
+    "codex": {
+      "tint": "#10a37f"
+    },
+    "antigravity": {
+      "tint": "#5b8def"
     }
   },
   "activities": {

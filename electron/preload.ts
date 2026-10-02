@@ -2,7 +2,8 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/events'
 import { IPC, type AgentOfficeBridge, type RendererSettings } from '../shared/ipc'
-import type { PermissionRequestInfo, SessionInfo } from '../shared/sessions'
+import type { ChatEvent } from '../shared/chat'
+import type { PermissionRequestInfo, ProviderInfo, SessionInfo } from '../shared/sessions'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
   const listener = (_evt: IpcRendererEvent, payload: T) => cb(payload)
@@ -22,6 +23,8 @@ const bridge: AgentOfficeBridge = {
 
   sessions: {
     providers: () => ipcRenderer.invoke(IPC.listProviders),
+    onProvidersChanged: (cb) => subscribe<ProviderInfo[]>(IPC.providersChanged, cb),
+    login: (provider) => ipcRenderer.invoke(IPC.providerLogin, provider),
     list: () => ipcRenderer.invoke(IPC.listSessions),
     start: (req) => ipcRenderer.invoke(IPC.startSession, req),
     stop: (id) => ipcRenderer.invoke(IPC.stopSession, id),
@@ -37,6 +40,13 @@ const bridge: AgentOfficeBridge = {
     resize: (id, cols, rows) => ipcRenderer.send(IPC.termResize, id, cols, rows),
     ack: (id, chars) => ipcRenderer.send(IPC.termAck, id, chars),
     onData: (cb) => subscribe<{ id: string; data: string }>(IPC.termData, (m) => cb(m.id, m.data))
+  },
+
+  chat: {
+    attach: (id) => ipcRenderer.invoke(IPC.chatAttach, id),
+    detach: (id) => ipcRenderer.send(IPC.chatDetach, id),
+    send: (id, text) => ipcRenderer.invoke(IPC.chatSend, id, text),
+    onEvent: (cb) => subscribe<ChatEvent>(IPC.chatEvent, cb)
   },
 
   permissions: {

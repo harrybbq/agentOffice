@@ -3,9 +3,13 @@
 // Electron. Nothing here talks to a real agent. It is loaded only when the real bridge is missing
 // (see src/main.tsx) and is code-split out of the main bundle.
 //
-// URL parameters: ?stub=demo (default: two sessions, permission requests, a simulated external
-// team) | ?stub=empty (nothing running) · ?orders=off · ?overlay=1
-// Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id)).
+// URL parameters: ?stub=demo (default: two Claude sessions, a Codex chat session, permission
+// requests, a simulated external team) | ?stub=empty (nothing running) · ?orders=off · ?overlay=1
+// · ?codex=loggedout (Codex needs a sign-in; "Log in" succeeds after a few seconds)
+// · ?play=0 (the Codex session does not start its scripted turn by itself) · ?speed=0.5 (script speed)
+// Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id),
+// codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout()).
+// The Codex side (chat sessions, the scripted turn) lives in ./stubCodex.ts.
 import { parseAgentEvent } from '../../shared/events'
 import type { Activity, AgentEvent } from '../../shared/events'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
@@ -20,6 +24,7 @@ import type {
   StartSessionRequest
 } from '../../shared/sessions'
 import { subagentId } from '../../shared/sessions'
+import { createCodexStub } from './stubCodex'
 
 const ESC = '\x1b'
 const dim = (s: string) => `${ESC}[2m${s}${ESC}[0m`
@@ -36,11 +41,7 @@ interface FakeSession {
   timers: number[]
 }
 
-const PROVIDERS: ProviderInfo[] = [
-  { id: 'claude-code', label: 'Claude Code', available: true, version: '2.1.284 (stub)' },
-  { id: 'codex', label: 'Codex', available: false, reason: 'Driver coming in phase B' },
-  { id: 'antigravity', label: 'Antigravity', available: false, reason: 'Not installed' }
-]
+const DAY = 86_400_000
 
 /** The repo's bundled themes, loaded lazily (this module is only ever loaded without Electron). */
 const THEME_FILES = import.meta.glob<{ default: any }>('../../themes/*/*.json')
@@ -56,6 +57,31 @@ export function createStubBridge(): AgentOfficeBridge {
     allowOrders: params.get('orders') !== 'off',
     officeWideTimeoutMs: 10 * 60_000,
     windowsBuild: 0
+  }
+
+  const loggedOut = params.get('codex') === 'loggedout'
+  let PROVIDERS: ProviderInfo[] = [
+    { id: 'claude-code', label: 'Claude Code', available: true, version: '2.1.284 (stub)' },
+    {
+      id: 'codex',
+      label: 'Codex',
+      available: true,
+      version: '0.160.0 (stub)',
+      account: loggedOut ? { loggedIn: false } : { loggedIn: true, plan: 'free' },
+      usage: loggedOut ? undefined : { usedPercent: 12, resetsAt: Date.now() + 19 * DAY, windowMinutes: 43200 }
+    },
+    { id: 'antigravity', label: 'Antigravity', available: false, reason: 'Not installed' }
+  ]
+  const providerCbs = new Set<(p: ProviderInfo[]) => void>()
+  const setCodexAccount = (loggedIn: boolean) => {
+    PROVIDERS = PROVIDERS.map((p) =>
+      p.id !== 'codex'
+        ? p
+        : loggedIn
+          ? { ...p, account: { loggedIn: true, plan: 'free' }, usage: { usedPercent: 12, resetsAt: Date.now() + 19 * DAY, windowMinutes: 43200 } }
+          : { ...p, account: { loggedIn: false }, usage: undefined }
+    )
+    providerCbs.forEach((cb) => cb(PROVIDERS))
   }
 
   const eventCbs = new Set<(e: AgentEvent) => void>()
@@ -91,6 +117,29 @@ export function createStubBridge(): AgentOfficeBridge {
   const later = (s: FakeSession, ms: number, fn: () => void) => {
     s.timers.push(window.setTimeout(() => s.info.state !== 'exited' && fn(), ms))
   }
+
+  const speed = Number(params.get('speed'))
+  const codex = createCodexStub(
+    {
+      info: (id) => sessions.get(id)?.info,
+      setState: (id, state) => {
+        const s = sessions.get(id)
+        if (s) setState(s, state)
+      },
+      activity: (id, activity, detail) => {
+        const s = sessions.get(id)
+        if (s) emit({ agentId: id, parentId: null, provider: 'codex', displayName: s.info.title, activity, detail })
+      },
+      requestPermission: (id, tool, summary, detail) => {
+        const s = sessions.get(id)!
+        return requestPermission(s, id, s.info.title, tool, summary, detail).id
+      },
+      dropPermissions: (id) => {
+        for (const p of pending.filter((x) => x.sessionId === id)) settle(p.id, 'elsewhere')
+      }
+    },
+    { speed: Number.isFinite(speed) && speed > 0 ? speed : 1 }
+  )
 
   const welcome = (s: FakeSession) => {
     out(
@@ -182,6 +231,7 @@ export function createStubBridge(): AgentOfficeBridge {
         startedAt: Date.now() + counter,
         permissionMode: req.permissionMode ?? 'default',
         model: req.model,
+        surface: req.provider === 'codex' ? 'chat' : 'terminal',
         canReceiveOrders: false
       },
       buffer: '',
@@ -191,7 +241,7 @@ export function createStubBridge(): AgentOfficeBridge {
       timers: []
     }
     sessions.set(id, s)
-    emit({ agentId: id, parentId: null, displayName: s.info.title, activity: 'idle', detail: '' })
+    emit({ agentId: id, parentId: null, provider: req.provider, displayName: s.info.title, activity: 'idle', detail: '' })
     return s
   }
 
@@ -215,7 +265,7 @@ export function createStubBridge(): AgentOfficeBridge {
       createdAt: Date.now()
     }
     pending = [...pending, req]
-    emit({ agentId, parentId: agentId === s.info.id ? null : s.info.id, displayName, activity: 'waiting', detail: summary })
+    emit({ agentId, parentId: agentId === s.info.id ? null : s.info.id, provider: s.info.provider, displayName, activity: 'waiting', detail: summary })
     out(
       s,
       `\r\n${fg(221, '╭─')} ${bold(tool)} ${dim('needs permission')}\r\n${fg(221, '│')}  ${summary}\r\n${fg(221, '│')}  Do you want to proceed?\r\n${fg(221, '│')}  ${fg(75, '❯ 1. Yes')}   2. Yes, and don't ask again   3. No\r\n${fg(221, '╰─')}\r\n`
@@ -241,6 +291,7 @@ export function createStubBridge(): AgentOfficeBridge {
       emit({
         agentId: req.agentId,
         parentId: req.agentId === s.info.id ? null : s.info.id,
+        provider: s.info.provider,
         displayName: req.displayName,
         activity: how === 'denied' ? 'idle' : 'exec',
         detail: req.summary
@@ -248,6 +299,7 @@ export function createStubBridge(): AgentOfficeBridge {
       if (!pending.some((p) => p.sessionId === s.info.id)) setState(s, 'busy')
     }
     pushPerms()
+    codex.settled(id, how)
     return how === 'elsewhere' ? 'resolved-elsewhere' : how
   }
 
@@ -260,7 +312,8 @@ export function createStubBridge(): AgentOfficeBridge {
     s.info.state = 'exited'
     s.info.exitCode = code
     s.info.canReceiveOrders = false
-    emit({ agentId: id, parentId: null, displayName: s.info.title, activity: 'done', detail: '' })
+    codex.exited(id)
+    emit({ agentId: id, parentId: null, provider: s.info.provider, displayName: s.info.title, activity: 'done', detail: '' })
     pushSessions()
   }
 
@@ -280,6 +333,13 @@ export function createStubBridge(): AgentOfficeBridge {
       const w1 = addWorker(a, 'Explore', 'read', 'src/scene/roster.ts')
       addWorker(a, 'Tests', 'exec', 'npm test')
       addWorker(b, 'Docs', 'web', 'vite.dev/guide')
+      if (!loggedOut) {
+        // A resumed Codex session: it has an earlier exchange, and plays its scripted turn the
+        // first time its chat is opened (unless ?play=0).
+        const c = create({ provider: 'codex', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'gpt-6-luna', model: 'gpt-6-luna' }, 'idle')
+        c.info.canReceiveOrders = true
+        codex.add(c.info.id, { history: true, autoplay: params.get('play') !== '0' })
+      }
       pushSessions()
 
       // A simulated external team the app can't answer (shows as "answer in its own terminal").
@@ -322,7 +382,7 @@ export function createStubBridge(): AgentOfficeBridge {
         ['read', 'shared/sessions.ts']
       ]
       window.setInterval(() => {
-        const live = [...sessions.values()].filter((s) => s.info.state !== 'exited' && s.workers.length > 0)
+        const live = [...sessions.values()].filter((s) => s.info.state !== 'exited' && s.workers.length > 0 && s.info.surface === 'terminal')
         const s = live[Math.floor(Math.random() * live.length)]
         if (!s) return
         const w = s.workers[Math.floor(Math.random() * s.workers.length)]
@@ -349,7 +409,10 @@ export function createStubBridge(): AgentOfficeBridge {
       out(s, `\r\n${bold('Quick safety check:')} Is this a project you created or one you trust?\r\n  ${fg(75, '❯ No, exit')}\r\n    Yes, I trust this folder\r\n`)
       setState(s, 'needs-attention')
     },
-    emit
+    emit,
+    codex,
+    codexId: () => [...sessions.values()].find((s) => s.info.surface === 'chat' && s.info.state !== 'exited')?.info.id ?? null,
+    logout: () => setCodexAccount(false)
   }
   ;(window as unknown as Record<string, unknown>).__stub = stubHandle
   // Kept from the old dev bridge: __agentOfficeEmit({ agentId: 'a', activity: 'read', ... })
@@ -398,6 +461,10 @@ export function createStubBridge(): AgentOfficeBridge {
           continue
         }
         res.delivered.push(s.info.id)
+        if (s.info.surface === 'chat') {
+          void codex.deliver(s.info.id, req.text, 'order')
+          continue
+        }
         out(s, `${req.text.replace(/\n/g, ' ')}`)
         fakeTurn(s, req.text)
       }
@@ -414,18 +481,29 @@ export function createStubBridge(): AgentOfficeBridge {
 
     sessions: {
       providers: async () => PROVIDERS,
+      onProvidersChanged: (cb) => (providerCbs.add(cb), () => providerCbs.delete(cb)),
+      login: async (provider) => {
+        await new Promise((r) => setTimeout(r, 250))
+        if (provider !== 'codex') throw new Error('This provider has no sign-in of its own')
+        // The real flow opens the system browser; here it just succeeds after a moment.
+        window.setTimeout(() => setCodexAccount(true), 3500)
+      },
       list: async () => [...sessions.values()].map((s) => ({ ...s.info })),
       start: async (req) => {
         await new Promise((r) => setTimeout(r, 300))
         const p = PROVIDERS.find((x) => x.id === req.provider)
         if (!p?.available) throw new Error(`${p?.label ?? req.provider} is not available: ${p?.reason ?? 'unknown provider'}`)
+        if (p.account?.loggedIn === false) throw new Error(`${p.label} is not signed in. Log in first.`)
         if (!req.cwd.trim()) throw new Error('Pick a folder first')
         if (/missing|nope/i.test(req.cwd)) throw new Error(`Folder not found: ${req.cwd}`)
-        const s = create(req)
+        const s = create(req.provider === 'codex' && !req.title?.trim() ? { ...req, title: req.model?.trim() || 'gpt-6-luna', model: req.model?.trim() || 'gpt-6-luna' } : req)
+        if (s.info.surface === 'chat') codex.add(s.info.id)
         pushSessions()
-        const untrusted = /untrusted/i.test(req.cwd)
+        // Only the terminal stub has a folder-trust question.
+        const untrusted = s.info.surface === 'terminal' && /untrusted/i.test(req.cwd)
         later(s, 900, () => {
           if (untrusted) stubHandle.attention(s.info.id)
+          else if (s.info.surface === 'chat') setState(s, 'idle')
           else {
             setState(s, 'idle')
             welcome(s)
@@ -439,6 +517,7 @@ export function createStubBridge(): AgentOfficeBridge {
       interrupt: async (id) => {
         const s = sessions.get(id)
         if (!s || s.info.state === 'exited') return
+        if (s.info.surface === 'chat') return codex.interrupt(id)
         s.timers.forEach((t) => window.clearTimeout(t))
         s.timers = []
         for (const p of pending.filter((x) => x.sessionId === id)) settle(p.id, 'elsewhere')
@@ -457,6 +536,7 @@ export function createStubBridge(): AgentOfficeBridge {
       attach: async (id) => {
         const s = sessions.get(id)
         if (!s) throw new Error('unknown session')
+        if (s.info.surface === 'chat') throw new Error('this session has no terminal')
         s.attached = true
         return { data: s.buffer, cols: 80, rows: 24 }
       },
@@ -472,6 +552,8 @@ export function createStubBridge(): AgentOfficeBridge {
       ack: () => undefined,
       onData: (cb) => (dataCbs.add(cb), () => dataCbs.delete(cb))
     },
+
+    chat: codex.chat,
 
     permissions: {
       list: async () => [...pending],

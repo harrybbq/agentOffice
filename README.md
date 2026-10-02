@@ -83,8 +83,9 @@ the current screen when you show it.
 
 ## Hosted sessions
 
-The app can launch agents itself and be your main window onto them. Phase A hosts **Claude Code**;
-Codex and Antigravity are listed as providers but have no driver yet.
+The app can launch agents itself and be your main window onto them. It hosts **Claude Code** in an
+embedded terminal (described first) and **Codex** in a chat view (see [Codex](#codex)).
+Antigravity is listed as a provider but has no driver yet.
 
 **How a session is launched.** You pick a provider and a folder. The main process then:
 
@@ -178,6 +179,77 @@ is idle.
 `npx electron scripts/e2e-phase-a.cjs` (after `npx electron-vite build`) runs the whole flow against
 the real CLI in a scratch folder: start, permission approved from the registry, an order over the
 inbox socket, an interrupt, stop. It uses one short real session.
+
+### Codex
+
+Codex has no terminal UI to embed. The app hosts it through **`codex app-server`**, Codex's own
+JSON-RPC interface over stdio, and shows the session in a chat view instead of a terminal
+(`SessionInfo.surface` is `chat`). Protocol notes and measurements: `docs/spikes-phase-b.md`.
+
+**How it runs.** One `codex app-server` process serves every Codex session of the app; each
+session is one Codex thread on it. The process is started the first time Codex is needed (the
+provider list, or a new session), by spawning the native `codex.exe` of the npm package directly:
+no shell, no console window, `CLAUDE*`, `AI_AGENT` and `CODEX_*` variables removed (a `CODEX_HOME`
+you set yourself is kept). It uses your normal Codex home, so it shares the login, the thread
+history, and the plugins and MCP servers of the Codex desktop app. `~/.codex/config.toml` is never
+written. Quitting the app closes the server and kills its process tree; if the app dies, the
+server sees its input close and exits by itself. If the server crashes it is restarted with a
+backoff (1 s, 2 s, 5 s, 15 s, 30 s): the session shows `needs-attention` with a notice, loses the
+turn that was running, and reconnects to its thread when the server is back.
+
+**Login.** The provider list shows whether Codex is logged in, the plan, and the usage of the
+rate-limit window, and is updated when either changes. **Log in** starts Codex's own ChatGPT login:
+the app-server returns a login address, the app opens it in your browser (only an `https` address
+on `auth.openai.com` or `chatgpt.com` is ever opened), and the list updates when the login
+completes. Starting a session while logged out is refused with "Not logged in to Codex — use Log
+in". A login done in the Codex CLI or desktop app counts too: it is the same Codex home.
+
+**Permission modes.** Codex has an approval policy and a sandbox instead of Claude's modes:
+
+| Mode in the app | Approval policy | Sandbox | Effect |
+|---|---|---|---|
+| `default` | `untrusted` | `workspace-write` | every command and file change asks first |
+| `acceptEdits` | `on-request` | `workspace-write` | work inside the folder runs unasked; Codex asks only to leave the sandbox |
+| `plan` | `on-request` | `read-only` | nothing is written unless you approve leaving the sandbox |
+
+Both are sent with every turn and again on resume, because a resumed thread forgets them. If the
+server answers with another sandbox than requested (on Windows `workspace-write` silently becomes
+read-only until the Windows sandbox is set up in Codex), the chat shows a warning.
+
+**Approvals.** Codex asks on the same pipe (`item/commandExecution/requestApproval`,
+`item/fileChange/requestApproval`, `item/permissions/requestApproval`, and yes/no questions of
+plugins). Each becomes a card in the CEO inbox, like Claude's: "Command: node -e …" (the command
+itself, not the PowerShell wrapper Codex runs it in) or "Edit: path (+N more)" with the diff.
+Allow answers `accept`; deny answers `decline`, and the turn goes on with the model knowing it was
+refused. Codex's answer has no field for a reason, so a deny message is sent into the running turn
+right after the decision. A card disappears ("resolved elsewhere") when Codex withdraws the request
+or the turn ends. There is no "always allow" from the app. Questions the inbox can't express (a
+form, a link to open, a multiple-choice question from the model) are declined with a notice in the
+chat.
+
+**Chat and orders.** What you type in the chat box is a real user turn; while a turn is running it
+is added to that turn (`turn/steer`) and the model reads it when its current tool call is done. It
+is not gated by **Allow CEO orders**, like typing in a terminal. Orders from the order bar reach
+Codex sessions the same way (target: the session, `provider:codex`, or everyone) and arrive as an
+ordinary user message, without the `[CEO order via Agent Office]` line; the session's briefing
+(sent as the thread's developer instructions, template in `electron/drivers/briefing.ts`) says so.
+Delivery is confirmed by the server's answer, so there is no timeout. Interrupt ends the turn at
+once; the command that was running is shown as interrupted.
+
+**Stop and resume.** Stopping a session unsubscribes from its thread; nothing is archived or
+deleted, so the thread stays in your Codex history (`codex resume`, the desktop app). A session
+started with a thread id to resume loads the thread's last turns into the chat. The history Codex
+keeps differs a little from what was live: declined commands and approval cards are not in it.
+
+**What the world shows.** Commands are `exec` (or `read` when Codex recognises a read, listing or
+search), file changes `write`, web searches `web`, plugin and MCP tools `exec` (`capture` for
+screenshot tools), a pending approval `waiting`. Sub-agent threads become workers of the session;
+that part is written from the protocol types and has not been seen running.
+
+`npx electron scripts/e2e-phase-b.cjs` runs the flow against the real app-server on your account,
+in a scratch folder, with four short turns: approval allowed, approval denied with a message, an
+order in the middle of a turn, an interrupt, then a restart and resume. It also watches for console
+windows while Codex and its commands run.
 
 ## Setup
 

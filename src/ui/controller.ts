@@ -9,6 +9,7 @@ import type {
   PermissionDecision,
   PermissionOutcome,
   PermissionRequestInfo,
+  ProviderId,
   ProviderInfo,
   SessionInfo,
   StartSessionRequest
@@ -16,6 +17,7 @@ import type {
 import type { WaitingInfo } from '../agents'
 import { WorldController } from '../worldController'
 import type { TeamInfo } from '../worldController'
+import { ChatManager } from './chats'
 import { appendLog, cleanError, orderSummary, orderTargets, pushRecent, retainExited, sessionOrder, vanished } from './format'
 import type { LogEntry, OrderSummary } from './format'
 import { Store, useStore } from './store'
@@ -62,6 +64,9 @@ export interface AppState {
   themeName: string
   worldError: string | null
   providers: ProviderInfo[]
+  /** Providers whose login was started here and has not finished yet. */
+  loggingIn: ReadonlySet<ProviderId>
+  loginError: { provider: ProviderId; text: string } | null
   sessions: SessionInfo[]
   permissions: PermissionRequestInfo[]
   /** Ids being answered right now (buttons disabled). */
@@ -133,6 +138,7 @@ export class AppController {
   readonly store: Store<AppState>
   readonly world: WorldController
   readonly terminals: TerminalManager
+  readonly chats: ChatManager
   private pendingLog: LogEntry[] = []
   private logTimer = 0
   private seq = 0
@@ -146,6 +152,8 @@ export class AppController {
   /** Set by the order bar so shortcuts can focus it. */
   focusOrderBar: () => void = () => undefined
   focusInbox: () => void = () => undefined
+  /** Set by the chat composer. */
+  focusChat: (draft?: string) => void = () => undefined
 
   constructor(
     readonly bridge: AgentOfficeBridge,
@@ -158,6 +166,8 @@ export class AppController {
       themeName: '',
       worldError: null,
       providers: [],
+      loggingIn: new Set(),
+      loginError: null,
       sessions: [],
       permissions: [],
       deciding: new Set(),
@@ -184,6 +194,7 @@ export class AppController {
       onOfficeWide: (officeWideEndsAt) => this.store.set({ officeWideEndsAt })
     })
     this.terminals = new TerminalManager(bridge)
+    this.chats = new ChatManager(bridge)
     this.terminals.setTheme(this.store.get().layout.uiTheme)
     document.documentElement.dataset.uiTheme = this.store.get().layout.uiTheme
   }
@@ -195,6 +206,11 @@ export class AppController {
     // A pushed list is newer than the initial list() answer still in flight.
     let pushedSessions = false
     let pushedPermissions = false
+    let pushedProviders = false
+    b.sessions.onProvidersChanged((list) => {
+      pushedProviders = true
+      this.setProviders(list)
+    })
     b.sessions.onChanged((list) => {
       pushedSessions = true
       this.setSessions(list)
@@ -214,7 +230,7 @@ export class AppController {
       b.sessions.list().catch(() => [] as SessionInfo[]),
       b.permissions.list().catch(() => [] as PermissionRequestInfo[])
     ])
-    this.store.set({ providers })
+    if (!pushedProviders) this.setProviders(providers)
     if (!pushedSessions) this.setSessions(sessions)
     if (!pushedPermissions) this.setPermissions(permissions)
     const last = readJson<unknown>(SELECTED_KEY, null)
@@ -260,21 +276,43 @@ export class AppController {
     }))
   }
 
+  /** Login state and usage arrive here; a finished login clears its "signing in" note. */
+  private setProviders(providers: ProviderInfo[]): void {
+    this.store.set((s) => {
+      const done = providers.filter((p) => p.account?.loggedIn && s.loggingIn.has(p.id)).map((p) => p.id)
+      return {
+        providers,
+        loggingIn: done.length > 0 ? new Set([...s.loggingIn].filter((id) => !done.includes(id))) : s.loggingIn,
+        loginError: s.loginError && done.includes(s.loginError.provider) ? null : s.loginError
+      }
+    })
+  }
+
   private setSessions(list: SessionInfo[]): void {
     const present = new Set(list.map((s) => s.id))
     for (const id of [...this.dismissed]) if (!present.has(id)) this.dismissed.delete(id)
-    const sessions = retainExited(this.store.get().sessions, list, (id) => this.terminals.has(id)).filter(
+    const sessions = retainExited(this.store.get().sessions, list, (id) => this.terminals.has(id) || this.chats.has(id)).filter(
       (s) => !this.dismissed.has(s.id)
     )
-    this.terminals.prune(new Set(sessions.map((s) => s.id)))
+    const live = new Set(sessions.map((s) => s.id))
+    this.terminals.prune(live)
+    this.chats.prune(live)
     this.store.set((s) => ({ sessions, everHosted: withIds(s.everHosted, sessions) }))
   }
 
   private setPermissions(next: PermissionRequestInfo[]): void {
     const prev = this.store.get().permissions
-    for (const req of vanished(prev, next, this.decidedHere)) this.addResolved(req, 'resolved-elsewhere')
+    for (const req of vanished(prev, next, this.decidedHere)) {
+      this.addResolved(req, 'resolved-elsewhere')
+      // The same request's card in the chat (the main process's own item update overrides this).
+      this.chats.resolveApproval(req.id, 'resolved-elsewhere')
+    }
     const known = new Set(prev.map((p) => p.id))
-    const fresh = next.some((p) => !known.has(p.id))
+    // A request of the chat session on screen shows as a card in that chat: no need to open the
+    // inbox over it. Anything else new opens the inbox.
+    const s0 = this.store.get()
+    const onScreen = s0.layout.panelOpen && s0.layout.tab === 'terminal' && s0.sessions.find((x) => x.id === s0.selectedId)?.surface === 'chat' ? s0.selectedId : null
+    const fresh = next.some((p) => !known.has(p.id) && p.sessionId !== onScreen)
     this.store.set((s) => ({
       permissions: next,
       layout: fresh && !s.layout.inboxOpen ? { ...s.layout, inboxOpen: true } : s.layout
@@ -295,14 +333,17 @@ export class AppController {
   /** Selects a session or world team: focuses its branch and (for hosted sessions) its terminal. */
   select(id: string | null, opts: { focusTerminal?: boolean; reveal?: boolean; focusWorld?: boolean } = {}): void {
     const s = this.store.get()
-    const hosted = !!id && s.sessions.some((x) => x.id === id)
+    const session = id ? s.sessions.find((x) => x.id === id) : undefined
+    const hosted = !!session
     const patch: Partial<AppState> = { selectedId: id }
     if (id && (opts.reveal ?? true) && hosted) patch.layout = { ...s.layout, panelOpen: true, tab: 'terminal' }
     this.store.set(patch)
     writeJson(SELECTED_KEY, id)
     if (patch.layout) this.saveLayout()
     if (id && (opts.focusWorld ?? true)) this.world.focusTeam(id)
-    if (hosted && opts.focusTerminal) window.setTimeout(() => this.terminals.focus(), 80)
+    if (session && opts.focusTerminal) {
+      window.setTimeout(() => (session.surface === 'chat' ? this.focusChat() : this.terminals.focus()), 80)
+    }
   }
 
   selectByIndex(index: number): void {
@@ -316,8 +357,24 @@ export class AppController {
     // Providers can change (CLI installed since launch).
     void this.bridge.sessions
       .providers()
-      .then((providers) => this.store.set({ providers }))
+      .then((providers) => this.setProviders(providers))
       .catch(() => undefined)
+  }
+
+  /** Starts the provider's own sign-in (system browser). The result arrives via onProvidersChanged. */
+  async login(provider: ProviderId): Promise<void> {
+    if (this.store.get().loggingIn.has(provider)) return
+    this.store.set((s) => ({ loggingIn: new Set([...s.loggingIn, provider]), loginError: null }))
+    try {
+      await this.bridge.sessions.login(provider)
+      // Already signed in: nothing will be pushed, so ask once.
+      this.setProviders(await this.bridge.sessions.providers())
+    } catch (err) {
+      this.store.set((s) => ({
+        loggingIn: new Set([...s.loggingIn].filter((id) => id !== provider)),
+        loginError: { provider, text: cleanError(err) }
+      }))
+    }
   }
 
   closeDialog(): void {
@@ -358,6 +415,7 @@ export class AppController {
     // For the main process, stopping an already exited session forgets it.
     void this.bridge.sessions.stop(id).catch(() => undefined)
     this.terminals.dispose(id)
+    this.chats.dispose(id)
     this.store.set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId
@@ -376,6 +434,7 @@ export class AppController {
       outcome = 'unknown-request'
     }
     this.addResolved(req, outcome)
+    this.chats.resolveApproval(req.id, outcome === 'unknown-request' ? 'resolved-elsewhere' : outcome)
     window.setTimeout(() => this.decidedHere.delete(req.id), 10_000)
     this.store.set((s) => {
       const deciding = new Set(s.deciding)
@@ -383,6 +442,20 @@ export class AppController {
       // Hide the card right away; the next onChanged confirms it.
       return { deciding, permissions: s.permissions.filter((p) => p.id !== req.id) }
     })
+  }
+
+  /** Stops waiting for a sign-in that was started here (the browser tab may have been closed). */
+  cancelLogin(provider: ProviderId): void {
+    this.store.set((s) => ({ loggingIn: new Set([...s.loggingIn].filter((id) => id !== provider)) }))
+  }
+
+  /**
+   * Allow / Deny from an approval card in the chat: the same request the inbox shows, so both go
+   * through decide(). `fallback` describes the request when it is not in the pending list (any more).
+   */
+  decideById(requestId: string, decision: PermissionDecision, fallback: Omit<PermissionRequestInfo, 'id'>): Promise<void> {
+    const req = this.store.get().permissions.find((p) => p.id === requestId) ?? { ...fallback, id: requestId }
+    return this.decide(req, decision)
   }
 
   /** The CEO speaks (bubble, envelopes, PA banner), then the order is sent. */

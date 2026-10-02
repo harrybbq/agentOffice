@@ -1,11 +1,11 @@
 // The selected session's live terminal: header (title, folder, state, Interrupt / Stop), a banner
 // when the session needs the terminal or has exited, and the xterm instance itself.
-import { useEffect, useRef, useState } from 'react'
+// Sessions with a chat surface are shown by ChatView instead; this view then holds no terminal.
+import { useEffect, useRef } from 'react'
 import { useApp, useAppState } from '../controller'
-import { shortenPath, STATE_LABEL } from '../format'
 import { cx } from '../hooks'
-import { IconAlert, IconInterrupt, IconPlus, IconStop, IconTerminal } from '../icons'
-import { StateDot, Swatch } from './Sidebar'
+import { IconAlert, IconPlus, IconTerminal } from '../icons'
+import { SessionHeader } from './SessionHeader'
 
 export function TerminalView({ hidden }: { hidden: boolean }) {
   const app = useApp()
@@ -15,9 +15,10 @@ export function TerminalView({ hidden }: { hidden: boolean }) {
   const providers = useAppState((s) => s.providers)
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
   const mount = useRef<HTMLDivElement>(null)
-  const [confirmStop, setConfirmStop] = useState(false)
 
-  const session = sessions.find((s) => s.id === selectedId) ?? null
+  const selected = sessions.find((s) => s.id === selectedId) ?? null
+  // A chat session has no pty: never attach a terminal to it.
+  const session = selected && selected.surface !== 'chat' ? selected : null
   const team = teams.find((t) => t.id === selectedId) ?? null
   const sessionId = session?.id ?? null
 
@@ -29,85 +30,15 @@ export function TerminalView({ hidden }: { hidden: boolean }) {
   // Overlay mode hides the shell: don't hold a terminal attached that nobody can see.
   useEffect(() => {
     app.terminals.show(overlay ? null : sessionId)
-    setConfirmStop(false)
   }, [app, sessionId, overlay])
 
   useEffect(() => {
     if (!hidden) app.terminals.scheduleFit(0)
   }, [app, hidden])
 
-  const running = session && session.state !== 'exited'
-
   return (
     <div className="termview" hidden={hidden}>
-      {session && (
-        <header className="term-head">
-          <Swatch color={team?.color} />
-          <div className="term-id">
-            <span className="term-title">{session.title}</span>
-            <span className="term-cwd" title={session.cwd}>
-              {shortenPath(session.cwd, 3)}
-            </span>
-          </div>
-          <span className={cx('state-chip', `state-chip-${session.state}`)}>
-            <StateDot state={session.state} />
-            {STATE_LABEL[session.state]}
-          </span>
-          <span className="term-meta">
-            {session.permissionMode !== 'default' && (
-              <span className="meta-chip" title="Permission mode">
-                {session.permissionMode}
-              </span>
-            )}
-            {session.model && (
-              <span className="meta-chip" title="Model">
-                {session.model}
-              </span>
-            )}
-          </span>
-          <div className="term-actions">
-            {confirmStop ? (
-              <>
-                <span className="term-confirm">Stop this session?</span>
-                <button
-                  type="button"
-                  className="btn btn-danger btn-sm"
-                  autoFocus
-                  onClick={() => {
-                    setConfirmStop(false)
-                    app.stop(session.id)
-                  }}
-                >
-                  Stop
-                </button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirmStop(false)}>
-                  Cancel
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={!running}
-                  onClick={() => {
-                    app.interrupt(session.id)
-                    app.terminals.focus()
-                  }}
-                  title="Interrupt the running turn (Esc)"
-                >
-                  <IconInterrupt />
-                  Interrupt
-                </button>
-                <button type="button" className="btn btn-ghost btn-sm" disabled={!running} onClick={() => setConfirmStop(true)} title="Stop the session">
-                  <IconStop />
-                  Stop
-                </button>
-              </>
-            )}
-          </div>
-        </header>
-      )}
+      {session && <SessionHeader session={session} onInterrupted={() => app.terminals.focus()} />}
 
       {session?.state === 'needs-attention' && (
         <div className="term-banner is-warn" role="status">

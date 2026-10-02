@@ -1,9 +1,11 @@
 // What the session manager needs from a provider. One AgentDriver instance runs one hosted session.
-// The Claude Code driver is the first; Codex (`codex app-server`) and Antigravity come later and
-// must fit the same interface, so nothing here is specific to hooks, TUIs or PTYs.
+// A driver is terminal-based (Claude Code: the official TUI in a pty, structured events from hooks)
+// or chat-based (Codex: `codex app-server`, no TUI, a ChatItem list instead), see `surface`.
+// Nothing here is specific to hooks, TUIs or PTYs.
 //
 // No Electron imports: drivers get everything they need through DriverContext, and tests build one
 // with fakes.
+import type { ChatEvent, ChatItem } from '../../shared/chat'
 import type {
   PermissionDecision,
   PermissionMode,
@@ -33,8 +35,11 @@ export interface ValidatedStart {
 }
 
 export type PromptResult =
-  /** `queued`: handed over mid-turn, where delivery can't be confirmed. */
+  /** `queued`: handed over mid-turn; the agent takes it in when its running tool call is done. */
   { ok: true; queued: boolean } | { ok: false; reason: string }
+
+/** Who a prompt comes from: a CEO order (order bar), or the user typing in the session's chat box. */
+export type PromptOrigin = 'order' | 'human'
 
 export interface PtyHandlers {
   onExit(exitCode: number | null): void
@@ -72,12 +77,15 @@ export interface DriverEvents {
   /** `canReceiveOrders` (or anything else in SessionInfo) may have changed. */
   onChanged(): void
   onExit(exitCode: number | null): void
+  /** Chat-based drivers: the session's chat list changed. */
+  onChat(e: ChatEvent): void
 }
 
 export interface DriverContext {
   /** App session id: the terminal id, and the world id of the session's manager. */
   sessionId: string
   start: ValidatedStart
+  /** Terminal-based drivers spawn here. Chat-based drivers don't use it. */
   pty: PtyHost
   /** World events (AgentEvent) go here. */
   sink: EventSink
@@ -87,14 +95,18 @@ export interface DriverContext {
 
 export interface AgentDriver {
   readonly provider: ProviderId
+  /** How the user talks to the session: an embedded terminal, or the chat view. */
+  readonly surface: 'terminal' | 'chat'
   readonly state: SessionState
   readonly providerSessionId: string | undefined
   /** Can a prompt be delivered right now? */
   readonly canReceiveOrders: boolean
   /** Launches the agent. Rejects with a readable message if it can't. */
   start(): Promise<void>
-  /** Delivers a prompt / order into the session. Never throws. */
-  sendPrompt(text: string): Promise<PromptResult>
+  /** Delivers a prompt / order into the session. Never throws. `origin` defaults to 'order'. */
+  sendPrompt(text: string, origin?: PromptOrigin): Promise<PromptResult>
+  /** Chat-based drivers: the current chat list (a copy), oldest first. */
+  chatItems?(): ChatItem[]
   /** Answers one of this session's pending permission requests. */
   answerPermission(requestId: string, decision: PermissionDecision): PermissionOutcome
   /** The session's title changed: its manager in the world goes by the new name. */
@@ -113,6 +125,12 @@ export interface ProviderDefinition {
   probe(): Promise<ProviderInfo>
   /** Absent while the driver doesn't exist yet. */
   createDriver?(ctx: DriverContext): AgentDriver
+  /** Providers with their own account: starts the login flow (system browser). Rejects with a readable message. */
+  login?(): Promise<void>
+  /** Calls `cb` whenever probe() would now answer differently (login state, usage). */
+  onChanged?(cb: () => void): void
+  /** App quit: stops whatever the provider keeps running besides its sessions. */
+  shutdown?(): Promise<void>
 }
 
 /** Shared by the manager and drivers that host a TUI. */
