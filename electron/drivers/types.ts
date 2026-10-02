@@ -26,7 +26,10 @@ export interface ValidatedStart {
   permissionMode: PermissionMode
   model?: string
   resume?: string
+  /** The title at launch: the user's own, or the provider label until the model is known. */
   title: string
+  /** The title the user typed, if any. It always wins and never changes. */
+  userTitle?: string
 }
 
 export type PromptResult =
@@ -64,6 +67,8 @@ export interface DriverEvents {
   onState(state: SessionState): void
   /** The provider's own session id became known. */
   onProviderSession(id: string): void
+  /** The session reported which model it runs (at start, and again if it changes). */
+  onModel(modelId: string): void
   /** `canReceiveOrders` (or anything else in SessionInfo) may have changed. */
   onChanged(): void
   onExit(exitCode: number | null): void
@@ -92,6 +97,8 @@ export interface AgentDriver {
   sendPrompt(text: string): Promise<PromptResult>
   /** Answers one of this session's pending permission requests. */
   answerPermission(requestId: string, decision: PermissionDecision): PermissionOutcome
+  /** The session's title changed: its manager in the world goes by the new name. */
+  setTitle(title: string): void
   /** Interrupts the running turn. */
   interrupt(): void
   /** Asks the agent to exit and kills the process tree if it doesn't. Resolves once it is gone. */

@@ -190,6 +190,12 @@ export function ptyPromptWrites(text: string): PtyWrite[] | null {
   return writes
 }
 
+/** The model id in a hook payload (`model`: a string, or an object with an `id`), or null. */
+export function reportedModel(v: unknown): string | null {
+  const id = isRecord(v) ? v.id : v
+  return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/.test(id) ? id : null
+}
+
 /** Is this a plausible inbox socket for this platform? (It comes from the agent's own hook.) */
 export function isInboxSocketPath(v: unknown, platform: NodeJS.Platform = process.platform): v is string {
   if (typeof v !== 'string' || v.length === 0 || v.length > 400 || /[\u0000-\u001f]/.test(v)) return false
@@ -268,6 +274,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   /** Temp files of this session: its settings and its briefing. */
   private tempFiles: string[] = []
   private providerSession: string | undefined
+  private model: string | undefined
   private exited = false
   private exitWaiters: Array<() => void> = []
   /** Resolved by the next real UserPromptSubmit. */
@@ -358,6 +365,13 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       this.ctx.events.onProviderSession(this.providerSession)
     }
 
+    // SessionStart names the model; a later hook may name another one after `/model`.
+    const model = reportedModel(body.model)
+    if (model && model !== this.model) {
+      this.model = model
+      this.ctx.events.onModel(model)
+    }
+
     const mapped = this.mapper.handle(body)
     for (const e of mapped.events) this.ctx.sink.emit(e)
     const mainThread = mapped.agentId === this.id
@@ -424,6 +438,11 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
 
   answerPermission(requestId: string, decision: PermissionDecision): PermissionOutcome {
     return this.ctx.permissions.decide(requestId, decision)
+  }
+
+  setTitle(title: string): void {
+    if (this.exited) return
+    for (const e of this.mapper.rename(title)) this.ctx.sink.emit(e)
   }
 
   interrupt(): void {

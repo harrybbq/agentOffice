@@ -311,7 +311,8 @@ export class Roster {
   /**
    * Makes sure an agent (and, if needed, an implicit parent) exists.
    * Returns the entries created by this call, parents first, and any branches allocated.
-   * Existing entries are returned in `upgraded` when an implicit manager receives its own first event.
+   * Existing entries are returned in `upgraded` when an implicit manager receives its own first
+   * event, or when an agent's display name changed (a session is renamed once its model is known).
    */
   ensure(e: SpawnInput): { created: RosterEntry[]; upgraded: RosterEntry | null; branches: Block[] } {
     const created: RosterEntry[] = []
@@ -322,6 +323,10 @@ export class Roster {
         existing.implicit = false
         existing.displayName = e.displayName
         existing.provider = e.provider
+        return { created, upgraded: existing, branches }
+      }
+      if (existing.role !== 'boss' && e.displayName && e.displayName !== existing.displayName) {
+        existing.displayName = e.displayName
         return { created, upgraded: existing, branches }
       }
       return { created, upgraded: null, branches }

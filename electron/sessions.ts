@@ -24,6 +24,7 @@ import type { EventSink } from './adapters/types'
 import type { AgentDriver, ProviderDefinition, PtyHost, ValidatedStart } from './drivers/types'
 import { parsePermissionDecision, PermissionRegistry } from './permissions'
 import { PTY_MAX_WRITE_CHARS } from './ptyProtocol'
+import { assignTitles } from './sessionTitles'
 
 export const MAX_LIVE_SESSIONS = 8
 /** An exited session stays in the list this long, so its last screen and exit code can be seen. */
@@ -60,6 +61,10 @@ interface Session {
   id: string
   start: ValidatedStart
   startedAt: number
+  /** The user's own title, or the model name (provider label until it is known); see sessionTitles.ts. */
+  title: string
+  /** The model id the session reported. */
+  model?: string
   driver: AgentDriver
   exitCode?: number | null
   removeTimer?: NodeJS.Timeout
@@ -109,13 +114,14 @@ export class SessionManager implements HostedSessions {
       id: s.id,
       provider: s.start.provider,
       cwd: s.start.cwd,
-      title: s.start.title,
+      title: s.title,
       state: s.driver.state,
       startedAt: s.startedAt,
       permissionMode: s.start.permissionMode,
       canReceiveOrders: s.driver.canReceiveOrders
     }
-    if (s.start.model) info.model = s.start.model
+    const model = s.model ?? s.start.model
+    if (model) info.model = model
     if (s.driver.providerSessionId) info.providerSessionId = s.driver.providerSessionId
     if (s.driver.state === 'exited') info.exitCode = s.exitCode ?? null
     return info
@@ -154,11 +160,11 @@ export class SessionManager implements HostedSessions {
     const model = optional(o.model, /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,99}$/, 'model')
     const resume = optional(o.resume, /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/, 'session to resume')
     if (o.title !== undefined && typeof o.title !== 'string') throw new Error('invalid title')
-    const title = (typeof o.title === 'string' ? cleanText(o.title).slice(0, 60) : '') || basename(cwd) || cwd
+    const userTitle = (typeof o.title === 'string' ? cleanText(o.title).slice(0, 60) : '') || undefined
 
     const probe = await def.probe()
     if (!probe.available) throw new Error(`${def.label} is not available: ${probe.reason ?? 'not installed'}`)
-    return { start: { provider: def.id, cwd, permissionMode, model, resume, title }, def }
+    return { start: { provider: def.id, cwd, permissionMode, model, resume, title: userTitle ?? def.label, userTitle }, def }
   }
 
   async start(input: unknown): Promise<SessionInfo> {
@@ -177,20 +183,54 @@ export class SessionManager implements HostedSessions {
       events: {
         onState: () => this.changed(),
         onProviderSession: () => this.changed(),
+        onModel: (model) => this.onModel(id, model),
         onChanged: () => this.changed(),
         onExit: (code) => this.onExit(id, code)
       }
     })
-    const session: Session = { id, start, startedAt: Date.now(), driver }
+    const session: Session = { id, start, startedAt: Date.now(), title: start.title, driver }
     this.sessions.set(id, session)
+    this.retitle() // another live session may already go by this name
     try {
       await driver.start()
     } catch (err) {
       this.sessions.delete(id)
+      this.retitle()
       throw err instanceof Error ? err : new Error('could not start the session')
     }
     this.changed()
     return this.info(session)
+  }
+
+  private onModel(id: string, model: string): void {
+    const s = this.sessions.get(id)
+    if (!s || s.model === model) return
+    s.model = model
+    this.retitle()
+    this.changed()
+  }
+
+  /**
+   * Gives every live session its title: the user's own, else the model name, made unique with the
+   * folder name. The drivers pass a new title on to the world (manager name, branch sign).
+   */
+  private retitle(): void {
+    const live = [...this.sessions.values()].filter((s) => s.driver.state !== 'exited')
+    const titles = assignTitles(
+      live.map((s) => ({
+        id: s.id,
+        userTitle: s.start.userTitle,
+        providerLabel: PROVIDER_LABELS[s.start.provider],
+        model: s.model,
+        folder: basename(s.start.cwd)
+      }))
+    )
+    for (const s of live) {
+      const title = titles.get(s.id)
+      if (!title || title === s.title) continue
+      s.title = title
+      s.driver.setTitle(title)
+    }
   }
 
   private onExit(id: string, exitCode: number | null): void {

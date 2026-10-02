@@ -271,6 +271,20 @@ export class ClaudeHookMapper {
     }
   }
 
+  /**
+   * The session got another title: its manager goes by the new name. Returns the event that tells
+   * the world, unless the manager isn't there yet or waits on the human (a repeated `waiting`
+   * would read as a new request); then its next event carries the name.
+   */
+  rename(name: string, now = Date.now()): AgentEvent[] {
+    if (!name || name === this.rootName) return []
+    this.rootName = name
+    const a = this.actors.get(this.rootId)
+    if (!a) return []
+    a.displayName = name
+    return a.waiting > 0 || a.activity === 'waiting' ? [] : [this.put(this.rootId, a.activity, a.detail, now)]
+  }
+
   /** A permission request is pending for this agent: it waits on the human. */
   waiting(agentId: string, detail: string, now = Date.now()): AgentEvent[] {
     const a = this.actors.get(agentId) ?? (agentId === this.rootId ? this.addRoot() : null)

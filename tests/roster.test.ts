@@ -95,6 +95,16 @@ t('branch released only when the whole team has left; slot reused', () => {
   assert.equal(r.layout.branch('m2')!.slot, 2)
 })
 
+t('an agent that reports a new display name is renamed in place', () => {
+  const r = mk()
+  r.ensure(ev('m1', null, 'Claude Code'))
+  const same = r.ensure(ev('m1', null, 'Claude Code'))
+  assert.equal(same.upgraded, null)
+  const up = r.ensure(ev('m1', null, 'Opus 5.5'))
+  assert.equal(up.created.length, 0); assert.equal(up.branches.length, 0)
+  assert.equal(up.upgraded?.displayName, 'Opus 5.5'); assert.equal(r.get('m1')!.displayName, 'Opus 5.5')
+})
+
 t('implicit parent created first (with a branch), then upgraded', () => {
   const r = mk()
   const { created, branches } = r.ensure({ agentId: 'w1', parentId: 'abcdef123456', provider: 'codex', displayName: 'W' })

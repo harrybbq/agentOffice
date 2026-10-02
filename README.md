@@ -41,7 +41,10 @@ The app is your main window onto the agents, not only a viewer:
 - **Sessions (left).** Hosted sessions grouped by provider, each with its team colour, folder and
   state dot (starting, needs attention, idle, working, waiting for permission, exited), a badge for
   pending requests and `+N` for its subagents. **New session** opens a dialog: provider, folder
-  (type or paste a path, or **Browse…**), permission mode, optional title and model. Sessions that
+  (type or paste a path, or **Browse…**), permission mode, optional title and model. A session
+  without a title of its own is named after its model ("Opus 5.5"; "Claude Code" until the model
+  is known), with the folder added when two sessions would share a name ("Opus 5.5 · api"). The
+  manager and the branch sign in the world carry the same name. Sessions that
   run outside the app are listed under **Observed**.
 - **World (centre).** The office. Click a session to focus its branch; double-click the world or
   use the corner button to fit the whole office again.
@@ -116,7 +119,7 @@ read the session's inbox endpoint. Observation hooks time out after 5 s, so a de
 Claude.
 
 **What the session knows.** The briefing is about 200 words appended to Claude's system prompt:
-it was started from Agent Office, it manages the team named after the session, its subagents show
+it was started from Agent Office, it manages a team (named as the session was at launch), its subagents show
 up as workers, permission requests also appear in your CEO inbox, orders from the order bar
 may arrive as a cross-session message starting with `[CEO order via Agent Office]`, and
 cross-session messaging tools are disabled. It is context

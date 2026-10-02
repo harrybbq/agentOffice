@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PermissionMode, ProviderId } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
-import { cleanError, folderName, shortenPath } from '../format'
+import { cleanError, shortenPath } from '../format'
 import { cx } from '../hooks'
 import { IconAlert, IconClose, IconFolder } from '../icons'
 
@@ -171,7 +171,7 @@ export function NewSessionDialog() {
               <label htmlFor="ns-title">
                 Title <span className="optional">optional</span>
               </label>
-              <input id="ns-title" className="input" value={title} onChange={(ev) => setTitle(ev.target.value)} placeholder={cwd ? folderName(cwd) : 'Folder name'} maxLength={60} />
+              <input id="ns-title" className="input" value={title} onChange={(ev) => setTitle(ev.target.value)} placeholder="Defaults to the model name" maxLength={60} />
             </div>
             <div className="field">
               <label htmlFor="ns-model">

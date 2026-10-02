@@ -29,11 +29,14 @@ import {
   isInboxSocketPath,
   permissionDecisionBody,
   ptyPromptWrites,
+  reportedModel,
   sanitizeForTerminal,
   sweepSessionFiles,
   scrubbedEnv
 } from '../electron/drivers/claude.ts'
 import { CEO_ORDER_TAG, claudeBriefing, taggedOrder } from '../electron/drivers/claudeBriefing.ts'
+import { assignTitles } from '../electron/sessionTitles.ts'
+import { friendlyModelName } from '../shared/models.ts'
 import {
   SessionStateMachine,
   START_ATTENTION_MS,
@@ -833,7 +836,8 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   assert.equal(info.provider, 'claude-code')
   assert.equal(info.permissionMode, 'default')
   assert.equal(info.cwd, dir)
-  assert.ok(dir.endsWith(info.title)) // the folder name
+  assert.equal(info.title, 'Claude Code') // the provider, until the session reports its model
+  assert.equal(info.model, 'claude-opus-5-5') // as requested, for now
   assert.equal(info.canReceiveOrders, false)
   const spawn = pty.spawned.get(id)!.opts
   const settingsFile = join(sessionsDir, `${id}.settings.json`)
@@ -891,7 +895,12 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
     s.once('error', reject)
     s.listen(pipe, () => resolve(s))
   })
-  assert.deepEqual((await hook('SessionStart', { source: 'startup', model: 'claude-opus-5-5', _ao: { socket: pipe, token: 'inbox-secret-token' } }).result).body, {})
+  assert.deepEqual((await hook('SessionStart', { source: 'startup', model: 'claude-opus-5-5[1m]', _ao: { socket: pipe, token: 'inbox-secret-token' } }).result).body, {})
+  // The session is now named after its model, in the list and in the world (manager, branch sign).
+  assert.equal(manager.list()[0].title, 'Opus 5.5')
+  assert.equal(manager.list()[0].model, 'claude-opus-5-5[1m]')
+  assert.equal(world[world.length - 1].agentId, id)
+  assert.equal(world[world.length - 1].displayName, 'Opus 5.5')
   assert.equal(state(), 'idle')
   assert.ok(inbox.has(id))
   await until(() => sessionLists.length > 0 && sessionLists[sessionLists.length - 1][0].state === 'idle', 'sessionsChanged idle')
@@ -1064,6 +1073,10 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   allowOrders = true
   const s2 = (await manager.start({ provider: 'claude-code', cwd: dir, title: '  My\tTeam\n' })).id
   assert.equal(manager.list()[0].title, 'My Team')
+  // The user's own title never changes, whatever model the session reports.
+  await http(port, 'POST', '/hooks/claude-code', pty.spawned.get(s2)!.opts.env.AO_TOKEN, common('Notification', { model: 'claude-sonnet-5-5' })).result
+  assert.equal(manager.list()[0].title, 'My Team')
+  assert.equal(manager.list()[0].model, 'claude-sonnet-5-5')
   const tok2 = pty.spawned.get(s2)!.opts.env.AO_TOKEN
   const hook2 = (name: string, extra: Record<string, unknown> = {}) => http(port, 'POST', '/hooks/claude-code', tok2, common(name, extra))
   assert.match((await manager.sendOrder({ target: s2, text: 'hi' })).failed[0].reason, /not ready/)
@@ -1174,6 +1187,53 @@ await t('a snapshot restores the mouse encoding and the hidden cursor', () => {
   m.decPrivate([25], false)
   m.reset()
   assert.equal(m.serialize(), '')
+})
+
+await t('sessions are named after their model, uniquely', () => {
+  assert.equal(friendlyModelName('claude-opus-5-5'), 'Opus 5.5')
+  assert.equal(friendlyModelName('claude-sonnet-5-5'), 'Sonnet 5.5')
+  assert.equal(friendlyModelName('claude-haiku-4-5-20251001'), 'Haiku 4.5')
+  assert.equal(friendlyModelName('claude-fable-5-1'), 'Fable 5.1')
+  assert.equal(friendlyModelName('claude-opus-5-5[1m]'), 'Opus 5.5')
+  assert.equal(friendlyModelName('claude-opus-4'), 'Opus 4')
+  assert.equal(friendlyModelName('claude-3-5-sonnet-20241022'), 'Sonnet 3.5')
+  assert.equal(friendlyModelName('opus'), 'Opus')
+  // Unknown ids pass through unchanged.
+  assert.equal(friendlyModelName('gpt-6-luna'), 'gpt-6-luna')
+  assert.equal(friendlyModelName('claude-opus-5-5-preview-x'), 'claude-opus-5-5-preview-x')
+
+  assert.equal(reportedModel('claude-opus-5-5[1m]'), 'claude-opus-5-5[1m]')
+  assert.equal(reportedModel({ id: 'claude-fable-5-1', display_name: 'Fable' }), 'claude-fable-5-1')
+  assert.equal(reportedModel('two words'), null)
+  assert.equal(reportedModel(undefined), null)
+
+  const s = (id: string, folder: string, model?: string, userTitle?: string) => ({ id, folder, model, userTitle, providerLabel: 'Claude Code' })
+  const titles = (list: ReturnType<typeof s>[]) => [...assignTitles(list).values()]
+  assert.deepEqual(titles([s('a', 'api')]), ['Claude Code']) // model not known yet
+  assert.deepEqual(titles([s('a', 'api', 'claude-opus-5-5')]), ['Opus 5.5'])
+  assert.deepEqual(titles([s('a', 'api', 'claude-opus-5-5'), s('b', 'web', 'claude-sonnet-5-5')]), ['Opus 5.5', 'Sonnet 5.5'])
+  // The same model twice: the folder tells them apart; the same folder too: a number.
+  assert.deepEqual(titles([s('a', 'api', 'claude-opus-5-5'), s('b', 'web', 'claude-opus-5-5')]), ['Opus 5.5 · api', 'Opus 5.5 · web'])
+  assert.deepEqual(
+    titles([s('a', 'api', 'claude-opus-5-5'), s('b', 'api', 'claude-opus-5-5'), s('c', 'api', 'claude-opus-5-5[1m]')]),
+    ['Opus 5.5 · api', 'Opus 5.5 · api #2', 'Opus 5.5 · api #3']
+  )
+  // A title the user typed always wins and is never touched, even when another session clashes with it.
+  assert.deepEqual(
+    titles([s('a', 'api', 'claude-opus-5-5', 'Opus 5.5'), s('b', 'web', 'claude-opus-5-5'), s('c', 'x', 'claude-haiku-4-5', 'Docs')]),
+    ['Opus 5.5', 'Opus 5.5 · web', 'Docs']
+  )
+
+  // The world follows a rename: the manager's next event carries the new name.
+  const m = new ClaudeHookMapper({ rootId: 'S', displayName: 'Claude Code', holdWaiting: true })
+  assert.deepEqual(m.rename('Opus 5.5', 1), []) // not in the world yet
+  assert.equal(m.spawn(2, 'starting')[0].displayName, 'Opus 5.5')
+  const renamed = m.rename('Opus 5.5 · api', 3)
+  assert.deepEqual(renamed.map((e) => [e.agentId, e.displayName, e.activity, e.detail]), [['S', 'Opus 5.5 · api', 'idle', 'starting']])
+  assert.deepEqual(m.rename('Opus 5.5 · api', 4), []) // unchanged
+  m.waiting('S', 'Bash: x', 5)
+  assert.deepEqual(m.rename('Sonnet 5.5', 6), []) // no second "waiting" event
+  assert.equal(m.resume('S', 7)[0].displayName, 'Sonnet 5.5')
 })
 
 await t('only the clipboard is allowed, and only for the app window', () => {

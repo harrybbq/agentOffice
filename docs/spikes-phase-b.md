@@ -1,7 +1,10 @@
 # Phase B feasibility spikes: hosting Codex through `codex app-server` (2026-10-02)
 
 Environment: Windows 11 Home 10.0.26200, Node 24, Codex CLI 0.160.0 (`@openai/codex` from npm, native `codex.exe`).
-No model turn succeeded in these spikes: every turn that was started ran in a scratch `CODEX_HOME` with no login.
+Account: free ChatGPT plan, logged in through the Codex desktop app part-way through (see change 1).
+The logged-out spikes ran in a scratch `CODEX_HOME`. The live spikes ran against the default home in a scratch
+working directory: three threads, eight short turns on `gpt-6-luna` at low reasoning effort. Together with an earlier
+five-turn run of the same script (last section), the usage meter went from 0 % to 1 %.
 
 Scripts are in `scripts/spikes/codex/`:
 
@@ -9,34 +12,33 @@ Scripts are in `scripts/spikes/codex/`:
 |---|---|
 | `rpc.cjs` | Minimal JSON-RPC client for `codex app-server` over stdio: finds `codex.exe`, spawns it without a shell, logs every message both ways, answers server requests, kills its own process tree |
 | `harness.cjs` | Logged-out scenarios: `probe`, `login`, `thread`, `sandbox` |
-| `logged-in-check.cjs` | Everything that needs an account: approval, steer, interrupt, resume, optional subagent. **Not run** (see below) |
+| `logged-in-check.cjs` | Everything that needs an account: approval, decline, file change, steer, interrupt, web search, sandbox escalation, resume, optional subagent |
 | `generated/` | `codex app-server generate-ts --out …` output: 96 top-level files (shared and legacy v1 types) and 639 in `v2/` |
 | `logs/*.log` | One JSON line per message (`t` ms, `dir` `->` `<-` `!!` stderr `--` harness note). Git-ignored (`*.log`) |
 
 Run: `node scripts/spikes/codex/harness.cjs <scenario> [--home default] [--root <scratch dir>]`. Without `--home default`
-the harness sets `CODEX_HOME` to `<root>/codex-home`. Only `probe` and `sandbox` (read-only calls and ephemeral threads)
-were run against the real `~/.codex`.
+the harness sets `CODEX_HOME` to `<root>/codex-home`. Of the harness scenarios, only `probe` and `sandbox` (read-only
+calls and ephemeral threads) were run against the real `~/.codex`. `logged-in-check.cjs` always uses the real home.
 
 ## Summary
 
 | # | Spike | Result |
 |---|---|---|
 | 1 | Protocol surface from generated TS | PASS: every method the driver needs exists in the stable (non-experimental) surface |
-| 2 | Handshake, account, models, login flow, logged-out errors | PASS |
+| 2 | Handshake, account, models, login flow, logged-out errors, a real turn on the free plan | PASS |
 | 3 | Spawning on Windows without a shell | PASS for a console parent. Console-window behaviour under Electron is UNTESTED |
-| 4 | Sandbox and approval configuration on Windows | PARTIAL: values and defaults confirmed; `workspace-write` silently becomes read-only unless the Windows sandbox is configured; what a turn does under each policy is UNTESTED |
-| 5 | Item to world-activity mapping | DESIGN (from types): `commandActions` separates read / list / search from generic exec |
-| 6 | Rich chat feed | DESIGN (from types): `ChatItem` proposal below |
-| 7 | Resume and persistence | PASS for a thread with one failed turn; with real history UNTESTED |
-| 8 | `turn/steer`, `turn/interrupt` | UNTESTED with a live turn; request and error shapes confirmed |
+| 4 | Sandbox and approval configuration on Windows | PASS, with two traps: `workspace-write` silently becomes read-only unless the Windows sandbox is configured, and `on-request` only asks when a command has to leave the sandbox |
+| 5 | Item to world-activity mapping | PARTIAL: `commandExecution`, `fileChange`, `webSearch` seen live; `commandActions` only ever said `unknown`; subagents UNTESTED |
+| 6 | Rich chat feed | PASS for assistant text, command output, file changes and web search; reasoning and plan streams did not occur |
+| 7 | Resume and persistence | PASS, with one trap: resume does not restore the thread's sandbox |
+| 8 | `turn/steer`, `turn/interrupt` | PASS |
 
 ## Changes to the plan
 
-1. **The account state changed during the spikes.** At 13:37 `~/.codex` held only `tmp/`. At 13:40 the Codex desktop
-   app (26.930.21537, under `%LOCALAPPDATA%\OpenAI\Codex`) populated it, including `auth.json`, and `account/read` on
-   the default home now returns `{"type":"chatgpt","planType":"free"}`. The spikes did not log in; `auth.json` was not
-   read. So `logged-in-check.cjs` can be run now. It was not run, because it spends the account's allowance and was
-   specified as a step for after login.
+1. **The account state changed during the spikes, and the free plan works.** At 13:37 `~/.codex` held only `tmp/`.
+   At 13:40 the Codex desktop app (26.930.21537, under `%LOCALAPPDATA%\OpenAI\Codex`) populated it, including
+   `auth.json`, and `account/read` on the default home returns `{"type":"chatgpt","planType":"free"}`. The spikes
+   did not log in and did not read `auth.json`. Eight real turns then ran without any plan error.
 2. **There is no TUI, so there is no terminal to embed.** `codex app-server` is JSON-RPC over stdio. `DriverContext.pty`
    is unused, and `SessionManager.attach()` has nothing to return. A Codex session needs the chat view (spike 6) in
    Phase B, not Phase E, or at least a plain event log pane. `SessionInfo` needs a field saying which surface a session
@@ -60,6 +62,13 @@ were run against the real `~/.codex`.
    the full catalogue of eight.
 9. **Orders are easier than with Claude.** `turn/start` and `turn/steer` both answer the request, so delivery is
    confirmed without a timeout, and approvals are answered on the same pipe. No HTTP route, hook, or socket is needed.
+10. **`on-request` asks far less than Claude's `default` mode.** A command that fits inside the sandbox runs with no
+    approval at all. Only a command that failed in the sandbox and is retried outside it raises an approval. So the
+    app's `default` mode should map to `untrusted` + `workspace-write` (see the permission table).
+11. **`thread/resume` restores the approval policy of the last turn but not the sandbox.** A thread started with
+    `workspace-write` came back as `readOnly`. Pass `sandbox` and `approvalPolicy` again on every resume.
+12. **An interrupt leaves the running command card open.** `turn/completed` arrives with `status: "interrupted"`,
+    but no `item/completed` is sent for the command that was running. The driver has to close open items itself.
 
 ## Spike 1: protocol surface (PASS)
 
@@ -191,8 +200,12 @@ code 0 (23 ms later in one measurement).
 <- {"id":3,"result":{"ordinaryUsageAllowed":true,"rateLimits":{"limitId":"codex","limitName":null,"normalModelSlug":null,"primary":{"usedPercent":0,"windowDurationMins":43200,"resetsAt":1793536961},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":null},"individualLimit":null,"spendControlReached":false,"planType":"free","rateLimitReachedType":null},"rateLimitsByLimitId":{"codex":{…}},"rateLimitResetCredits":{"availableCount":0,"credits":[]},"accountId":"…","rateLimitUpsell":null}}
 ```
 
-- `PlanType` (`generated/PlanType.ts`) includes `"free"`, and the backend reports `ordinaryUsageAllowed: true`, 0 % used,
-  one window of 43,200 minutes (30 days). Whether a turn is accepted on the free plan is the first thing to verify.
+- `PlanType` (`generated/PlanType.ts`) includes `"free"`, and the backend reports `ordinaryUsageAllowed: true` and one
+  window of 43,200 minutes (30 days). There is no secondary (short) window and no credits.
+- The free plan runs turns. Thirteen short turns (the eight here plus five from the earlier run; about 320,000 input
+  tokens in total, roughly 85 % of them cached, and under 1,000 output tokens) moved `usedPercent` from 0 to 1.
+  `account/rateLimits/updated` follows every model response with the same `rateLimits` object, so the app can show
+  usage without polling.
 - `model/list` logged in returns four models: `gpt-6-luna` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`.
 - `account/read` took 0.5 s (it refreshed the account and emitted `account/updated` first).
 
@@ -260,6 +273,42 @@ Consequences:
 - The user's own message is echoed as a `userMessage` item, so the chat view can wait for the echo instead of adding
   the message optimistically.
 
+### A real turn (default home, free plan)
+
+`thread/start {cwd, sandbox: "workspace-write", approvalPolicy: "on-request", developerInstructions}` picked
+`gpt-6-luna`. `<W>` is the scratch working directory and `<T>` the thread id. Token-usage and rate-limit
+notifications and most text deltas are left out of the excerpts from here on.
+
+```
+-> {"method":"turn/start","id":7,"params":{"threadId":"<T>","input":[{"type":"text","text":"Run the command: node -e \"console.log('ao-codex')\"","text_elements":[]}],"effort":"low","approvalPolicy":"on-request"}}
+<- {"id":7,"result":{"turn":{"id":"01a0fcb0-283c-…","items":[],"itemsView":"notLoaded","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":[]}}}
+<- {"method":"turn/started","params":{"threadId":"<T>","turn":{"id":"01a0fcb0-283c-…","status":"inProgress",…}}}
+<- {"method":"item/started","params":{"item":{"type":"userMessage","id":"01a0fcb0-2e9a-…","clientId":null,"content":[{"type":"text","text":"Run the command: …","text_elements":[]}]},"threadId":"<T>","turnId":"…","startedAtMs":1790945799843}}
+<- {"method":"item/completed","params":{"item":{"type":"userMessage",…},…}}
+<- {"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg_0fbb81cd…","text":"","phase":"commentary","memoryCitation":null,"delivery":null,"questions":null},…}}
+<- {"method":"item/agentMessage/delta","params":{"threadId":"<T>","turnId":"…","itemId":"msg_0fbb81cd…","delta":"I"}}   (one per token, about 20 ms apart)
+<- {"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_0fbb81cd…","text":"I’ll run the requested command.","phase":"commentary",…},…}}
+<- {"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-3f0bbc6f-…","pluginId":null,"scriptPath":null,"command":"\"C:\\\\windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"console.log('ao-codex')\\\"\"","cwd":"<W>","processId":"93390","source":"unifiedExecStartup","status":"inProgress","commandActions":[{"type":"unknown","command":"node -e \"console.log('ao-codex')\""}],"aggregatedOutput":null,"exitCode":null,"durationMs":null},"threadId":"<T>","turnId":"…","startedAtMs":…}}
+<- {"method":"item/commandExecution/outputDelta","params":{"threadId":"<T>","turnId":"…","itemId":"exec-3f0bbc6f-…","delta":"ao-codex\n"}}
+<- {"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-3f0bbc6f-…",…,"status":"completed",…,"aggregatedOutput":"ao-codex\n","exitCode":0,"durationMs":116},…}}
+<- {"method":"thread/tokenUsage/updated","params":{"threadId":"<T>","turnId":"…","tokenUsage":{"total":{"totalTokens":13265,"inputTokens":13203,"cachedInputTokens":5888,"cacheWriteInputTokens":0,"outputTokens":62,"reasoningOutputTokens":0},"last":{…},"modelContextWindow":258400}}}
+<- {"method":"account/rateLimits/updated","params":{"rateLimits":{"limitId":"codex",…,"primary":{"usedPercent":0,"windowDurationMins":43200,"resetsAt":1793537731},…,"planType":"free",…}}}
+<- {"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg_0fbb81cd…5c","text":"","phase":"final_answer",…},…}}
+<- {"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg_0fbb81cd…5c","text":"ao-codex","phase":"final_answer",…},…}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"idle"}}}
+<- {"method":"turn/completed","params":{"threadId":"<T>","turn":{"id":"01a0fcb0-283c-…","items":[{"type":"agentMessage","id":"msg_0fbb81cd…5c","text":"ao-codex","phase":"final_answer",…}],"itemsView":"summary","status":"completed","error":null,"startedAt":1790945798,"completedAt":1790945808,"durationMs":10499}}}
+```
+
+- **No approval was requested.** The sandbox ran the command (see spike 4).
+- `turn/start` answers in about 12 ms with an empty in-progress turn. Everything else arrives as notifications.
+- `turn/completed.turn.items` holds only the final message (`itemsView: "summary"`). Build the chat from
+  `item/started` and `item/completed`, not from the turn object.
+- Commands are wrapped in PowerShell (`powershell.exe -Command "…"`). `commandActions[].command` holds the inner
+  command, which is the one to show.
+- Server request ids start at **0** (`"id":0`). Treat `0` as a valid id.
+- `thread/start` returns the rollout path at once (`~/.codex/sessions/2026/10/02/rollout-…-<threadId>.jsonl`).
+
 ## Spike 3: spawning on Windows (PASS from a console parent)
 
 Resolution chain of the npm install:
@@ -290,7 +339,7 @@ Resolution chain of the npm install:
 - The harness strips `CLAUDE*`, `AI_AGENT` and `CODEX_*` from the environment before spawning. Not stripping them was
   not tested.
 
-## Spike 4: sandbox and approvals on Windows (PARTIAL)
+## Spike 4: sandbox and approvals on Windows (PASS, with two traps)
 
 Values (`v2/AskForApproval.ts`, `v2/SandboxMode.ts`, `v2/SandboxPolicy.ts`, `v2/ApprovalsReviewer.ts`):
 
@@ -329,19 +378,87 @@ What the server applied to `thread/start {cwd, ephemeral: true, …}` (`harness.
   `experimentalFeature/list`; the `windows.sandbox` config key replaced them.
 - Without a configured Windows sandbox, `workspace-write` degrades to read-only **silently**: same response shape, no
   `warning`, no `configWarning`.
-- `approvalPolicy: "on-request"` is accepted natively with every sandbox mode. **UNTESTED**: what a turn does. From
-  the type and field comments: with `on-request` the model runs commands inside the sandbox without asking and
-  requests approval to go beyond it (`reason` on the request, for example network access); `untrusted` asks for
-  anything not known to be safe; `never` does not ask. So under `on-request` a harmless command may raise no approval
-  at all, which is why `logged-in-check.cjs` repeats the command with `untrusted` if `on-request` did not ask.
+- What the policies did in real turns on native Windows (elevated sandbox, `gpt-6-luna`):
+
+  | Policy for the turn | Request | Result |
+  |---|---|---|
+  | `on-request` + `workspaceWrite` | `node -e "console.log('ao-codex')"` | Ran in the sandbox. **No approval request** |
+  | `untrusted` + `workspaceWrite` | `node -e "console.log('ao-declined')"` | `item/commandExecution/requestApproval` before anything ran |
+  | `untrusted` + `workspaceWrite` | create `ao-note.txt` with the patch tool | `item/fileChange/requestApproval` |
+  | `on-request` + `readOnly` | `node -e "require('fs').writeFileSync('ao-escalate.txt','ok')"` | Ran in the sandbox first and failed with `EPERM` (exit 1). The model then asked to run it outside the sandbox: `requestApproval` with a `reason`. After `accept` it ran and the file was written |
+  | `never` + `workspaceWrite` | a 25 s `node -e` timer | Ran in the sandbox, no request |
+
+  So `on-request` means "ask when the sandbox is in the way", not "ask before commands". The read-only sandbox did
+  block a write inside the working directory, so the sandbox works natively.
+- The escalation, as exchanged:
+
+```
+<- {"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-02807fff-…","command":"\"C:\\\\windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"require('fs').writeFileSync('ao-escalate.txt','ok')\\\"\"","cwd":"<W>","processId":"47172","source":"unifiedExecStartup","status":"inProgress","commandActions":[{"type":"unknown","command":"node -e \"require('fs').writeFileSync('ao-escalate.txt','ok')\""}],"aggregatedOutput":null,"exitCode":null,"durationMs":null},…}}
+<- {"method":"item/commandExecution/outputDelta","params":{"threadId":"<T>","turnId":"…","itemId":"exec-02807fff-…","delta":"node:fs:2483\r\n    return binding.writeFileUtf8(\r\n …Error: EPERM: operation not permitted, open '<W>\\ao-escalate.txt'\r\n …"}}
+<- {"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-02807fff-…",…,"status":"failed",…,"aggregatedOutput":"node:fs:2483\r\n…","exitCode":1,…},…}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}
+<- {"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-c9c88d68-…",…,"processId":null,"source":"agent","status":"inProgress",…},…}}
+<- {"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","threadId":"<T>","turnId":"01a0fcb2-2d78-…","itemId":"exec-c9c88d68-…","startedAtMs":1790945940764,"environmentId":"local","reason":"May I run the requested command outside the sandbox to write ao-escalate.txt?","command":"\"C:\\\\windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"require('fs').writeFileSync('ao-escalate.txt','ok')\\\"\"","cwd":"<W>","commandActions":[{"type":"unknown","command":"node -e \"require('fs').writeFileSync('ao-escalate.txt','ok')\""}],"proposedExecpolicyAmendment":["node","-e","require('fs').writeFileSync('ao-escalate.txt','ok')"],"availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["node","-e","require('fs').writeFileSync('ao-escalate.txt','ok')"]}},"cancel"]}}
+-> {"id":0,"result":{"decision":"accept"}}
+<- {"method":"serverRequest/resolved","params":{"threadId":"<T>","requestId":0}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":[]}}}
+<- {"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-c9c88d68-…",…,"processId":"45828","source":"unifiedExecStartup","status":"completed",…,"aggregatedOutput":null,"exitCode":0,"durationMs":87},…}}
+```
+
+- A declined command (`untrusted`, answered `{"decision":"decline"}`):
+
+```
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}
+<- {"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-5a352668-…",…,"processId":null,"source":"agent","status":"inProgress",…},…}}
+<- {"method":"item/commandExecution/requestApproval","id":0,"params":{"kind":"command","threadId":"<T>","turnId":"01a0fcb0-7ae5-…","itemId":"exec-5a352668-…","startedAtMs":1790945822448,"environmentId":"local","command":"\"C:\\\\windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command \"node -e \\\"console.log('ao-declined')\\\"\"","cwd":"<W>","commandActions":[{"type":"unknown","command":"node -e \"console.log('ao-declined')\""}],"proposedExecpolicyAmendment":["node","-e","console.log('ao-declined')"],"availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["node","-e","console.log('ao-declined')"]}},"cancel"]}}
+-> {"id":0,"result":{"decision":"decline"}}
+<- {"method":"serverRequest/resolved","params":{"threadId":"<T>","requestId":0}}
+<- {"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-5a352668-…",…,"status":"declined",…,"aggregatedOutput":null,"exitCode":null,"durationMs":null},…}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":[]}}}
+<- {"method":"item/completed","params":{"item":{"type":"agentMessage",…,"text":"I’m not allowed to run the command.","phase":"final_answer",…},…}}
+<- {"method":"turn/completed","params":{"threadId":"<T>","turn":{…,"status":"completed","error":null,…,"durationMs":4231}}}
+```
+
+  - `decline` is honoured although `availableDecisions` listed only `accept`, the exec-policy amendment and `cancel`.
+    The command never ran, the turn carried on, and the model reported the refusal. `cancel` was not tried.
+  - Every request was bracketed by `thread/status/changed` with `activeFlags: ["waitingOnApproval"]` and followed by
+    `serverRequest/resolved`, also when the app itself answered.
+  - The request repeats `command`, `cwd` and `commandActions`, so a card can be built from the request alone. `reason`
+    is present only for an escalation. `availableDecisions` arrived although `experimentalApi` was off.
+  - The declined command is **not** in the thread's history afterwards: `thread/turns/list` shows only the user
+    message and the answer for that turn.
+- A file-change approval (`untrusted`). The request carries no diff; the `fileChange` item with the same `itemId`,
+  sent 2 ms earlier, does:
+
+```
+<- {"method":"item/started","params":{"item":{"type":"fileChange","id":"exec-dfff31bd-…","changes":[{"path":"<W>\\ao-note.txt","kind":{"type":"add"},"diff":"agent office\ncodex spike\n"}],"status":"inProgress"},"threadId":"<T>","turnId":"01a0fcb0-8bc2-…","startedAtMs":1790945825532}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":["waitingOnApproval"]}}}
+<- {"method":"item/fileChange/requestApproval","id":1,"params":{"threadId":"<T>","turnId":"01a0fcb0-8bc2-…","itemId":"exec-dfff31bd-…","startedAtMs":1790945825534,"reason":null,"grantRoot":null}}
+-> {"id":1,"result":{"decision":"accept"}}
+<- {"method":"serverRequest/resolved","params":{"threadId":"<T>","requestId":1}}
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"active","activeFlags":[]}}}
+<- {"method":"item/completed","params":{"item":{"type":"fileChange","id":"exec-dfff31bd-…","changes":[{"path":"<W>\\ao-note.txt","kind":{"type":"add"},"diff":"agent office\ncodex spike\n"}],"status":"completed"},…,"completedAtMs":1790945828090}}
+<- {"method":"turn/diff/updated","params":{"threadId":"<T>","turnId":"01a0fcb0-8bc2-…","diff":"diff --git a/ao-note.txt b/ao-note.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..57a5bbc05711d5a3fe25c024cfbc26b963a77616\n--- /dev/null\n+++ b/ao-note.txt\n@@ -0,0 +1,2 @@\n+agent office\n+codex spike\n"}}
+```
+
+  - `changes[].path` is absolute. For an added file, `changes[].diff` is the **new file's content**, not a unified
+    diff. `turn/diff/updated` has the unified diff of the whole turn, with paths relative to the working directory;
+    it was sent three times with the same content. The shape of `diff` for an `update` was not observed.
+  - The file was on disk after the turn with the two lines asked for.
 - `thread/shellCommand` "runs unsandboxed with full access" by its own doc comment. Never expose it.
 
-## Spike 5: items to world activities (DESIGN, from types)
+## Spike 5: items to world activities (PARTIAL)
 
 `commandExecution.commandActions` (`v2/CommandAction.ts`) is a best-effort parse of the shell command, one entry per
 piped command: `{type:"read", command, name, path}`, `{type:"listFiles", command, path}`,
 `{type:"search", command, query, path}`, `{type:"unknown", command}`. The approval request carries the same list.
-So reads and searches done through the shell can be told apart from generic execution.
+So reads and searches done through the shell can be told apart from generic execution, by the types. In the live
+turns every command was a `node -e …` and was classified `[{"type":"unknown","command":"node -e …"}]`; a `read`,
+`listFiles` or `search` action was not provoked, so that half of the mapping is still from types only.
+
+Seen live: `commandExecution` (with `source: "unifiedExecStartup"` for a command that ran, and `source: "agent"` with
+`processId: null` for one waiting on approval), `fileChange`, `webSearch`, `agentMessage`, `userMessage`. Not seen:
+`reasoning`, `plan`, `mcpToolCall`, `collabAgentToolCall`.
 
 | Codex event | Activity | Detail |
 |---|---|---|
@@ -362,7 +479,7 @@ So reads and searches done through the shell can be told apart from generic exec
 | `subAgentActivity` `kind: "completed"`, `agentsStates[id].status` in `completed` / `shutdown` / `errored`, or `thread/closed` for a child thread | `done` on the child | |
 | `thread/closed` for the session's thread, process exit, `stop()` | `done` | |
 
-Subagents (all from types; **UNTESTED**):
+Subagents (all from types; **UNTESTED**, no sub-agent turn was run):
 
 - `collabAgentToolCall` has `senderThreadId`, `receiverThreadIds` (for `spawnAgent`, the new agent's thread id),
   `prompt`, `model`, and `agentsStates: {[threadId]: {status: "pendingInit"|"running"|"interrupted"|"completed"|"errored"|"shutdown"|"notFound", message}}`.
@@ -377,7 +494,7 @@ Subagents (all from types; **UNTESTED**):
 - `thread/start` reported `multiAgentMode: "explicitRequestOnly"`, and the session preamble in the rollout says "Do
   not spawn sub-agents unless the user … explicitly" asks. Expect workers only when an order asks for them.
 
-## Spike 6: feeding a rich chat view (DESIGN, from types)
+## Spike 6: feeding a rich chat view (PASS for the streams that occurred)
 
 | Chat element | Start / end | Streaming |
 |---|---|---|
@@ -385,16 +502,39 @@ Subagents (all from types; **UNTESTED**):
 | Assistant text | `item/started` `agentMessage` (empty text), `item/completed` with the full `text` and `phase` | `item/agentMessage/delta {itemId, delta}` |
 | Reasoning | `item/started` / `item/completed` `reasoning` (`summary[]`, `content[]`) | `item/reasoning/summaryPartAdded {summaryIndex}`, `item/reasoning/summaryTextDelta {summaryIndex, delta}`, `item/reasoning/textDelta {contentIndex, delta}` (raw reasoning, only if the model exposes it) |
 | Command card | `item/started` `commandExecution` (`command`, `cwd`, `commandActions`, `status:"inProgress"`), `item/completed` with `aggregatedOutput`, `exitCode`, `durationMs`, `status` | `item/commandExecution/outputDelta {itemId, delta}` (stdout and stderr merged), `item/commandExecution/terminalInteraction {stdin}` |
-| File change card | `item/started` / `item/completed` `fileChange` (`changes: {path, kind: add|delete|update(move_path), diff}[]`, `status`) | `item/fileChange/patchUpdated {itemId, changes}` replaces the change list; `turn/diff/updated {diff}` is the whole turn's unified diff |
-| Web search card | `item/started` / `item/completed` `webSearch` (`query`, `action: search|openPage|findInPage`, `results`) | none |
+| File change card | `item/started` / `item/completed` `fileChange` (`changes: {path, kind: add|delete|update(move_path), diff}[]`, `status`; for `add`, `diff` is the file content) | `item/fileChange/patchUpdated {itemId, changes}` replaces the change list; `turn/diff/updated {diff}` is the whole turn's unified diff |
+| Web search card | `item/started` (empty) / `item/completed` `webSearch` (`query`, `action: search|openPage|findInPage`, `results: {type, domain, title, url, snippet, ref_id}[]`) | none |
 | MCP / tool card | `mcpToolCall` (`server`, `tool`, `arguments`, `result`, `error`, `durationMs`) | `item/mcpToolCall/progress {message}` |
 | Plan / todo list | `turn/plan/updated {explanation, plan: {step, status}[]}` (whole list each time). A `plan` item with free text also exists | `item/plan/delta` (experimental; its doc says deltas may not add up to the final text) |
 | Approval card | server request `item/commandExecution/requestApproval` or `item/fileChange/requestApproval`, keyed to the card by `itemId`; closed by the app's answer or `serverRequest/resolved` | none |
 | Notices | `error` (`willRetry`), `warning`, `thread/compacted`, `turn/completed` with `status: "failed" | "interrupted"`, `model/rerouted` | none |
 | Usage | `thread/tokenUsage/updated {tokenUsage: {total, last, modelContextWindow}}`, `account/rateLimits/updated` | none |
 
-Whether reasoning summaries stream on the free plan's models, and the delta granularity, are to be verified with a
-real turn. `TurnStartParams.summary` (`"auto" | "concise" | "detailed" | "none"`) selects the summary style.
+Observed in the live turns (`gpt-6-luna`, `effort: "low"`):
+
+- **Assistant text streams token by token.** `item/started` with `text: ""`, then one `item/agentMessage/delta` per
+  token about every 20 ms (`"I"`, `"’m"`, `" not"`, `" allowed"`, …), then `item/completed` with the full text. A
+  turn has a `phase: "commentary"` message before tool calls ("I’ll run the requested command.") and a
+  `phase: "final_answer"` message at the end.
+- **Command output streams in chunks**, not lines: one `item/commandExecution/outputDelta` held a whole 20-line Node
+  stack trace, with `\r\n` line ends. `item/completed` repeats everything in `aggregatedOutput` with `exitCode` and
+  `durationMs`.
+- **No reasoning at all**: no `reasoning` item and no `item/reasoning/*` notification in eight turns, and
+  `reasoningOutputTokens: 0`. Whether a higher `effort` or `summary` setting produces them is untested.
+  `TurnStartParams.summary` (`"auto" | "concise" | "detailed" | "none"`) selects the summary style.
+- **No plan**: `turn/plan/updated` never fired for these one-step tasks.
+- **Web search works on the free plan** and needs no approval and no sandbox network access. `item/started` arrives
+  empty, and `item/completed` has the query and the results:
+
+```
+<- {"method":"item/started","params":{"item":{"type":"webSearch","id":"exec-a94fe6ff-…","query":"","action":null,"results":null},"threadId":"<T>","turnId":"…","startedAtMs":1790945868515}}
+<- {"method":"item/completed","params":{"item":{"type":"webSearch","id":"exec-a94fe6ff-…","query":"Electron utilityProcess","action":{"type":"search","query":"Electron utilityProcess","queries":null},"results":[{"type":"text_result","domain":"www.electronjs.org","ref_id":"turn0search0","snippet":"* `allowLoadingUnsignedLibraries` boolean (optional) macOS - With this flag, …","title":"utilityProcess | Electron","url":"https://www.electronjs.org/docs/latest/api/utility-process"},{"type":"text_result","domain":"github.com","ref_id":"turn0search1",…},…]},…}}
+```
+
+  So the web card can only show "searching…" until the item completes (1.6 s here).
+- File changes: see spike 4. `item/fileChange/patchUpdated` did not fire for a one-file patch.
+- Message ids differ by item kind: `msg_…` for assistant messages, `exec-<uuid>` for commands, file changes and web
+  searches, UUIDv7 for user messages and turns.
 
 ### Proposed provider-agnostic chat model
 
@@ -555,7 +695,7 @@ How each provider would fill it:
 The Claude column is a mapping on paper; for Claude the terminal stays the primary surface, and the chat list would be
 a secondary log without streaming text.
 
-## Spike 7: resume and persistence (PASS for an empty thread)
+## Spike 7: resume and persistence (PASS)
 
 - Thread ids are UUIDv7 (`01a0fca4-011e-74c3-996a-dd3ded22601e`). `Thread.sessionId` equals the id for a root thread.
   The id fits the session manager's `resume` pattern (`^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$`).
@@ -565,8 +705,9 @@ a secondary log without streaming text.
     `turn_context`, `world_state`.
   - SQLite: `state_5.sqlite` and `thread_history_1.sqlite` (the thread reported `historyMode: "paginated"`), plus
     `goals_1`, `memories_1`, `queue_1`, `logs_2`.
-- A thread was not listed until after its first turn: `thread/list` 3 ms after `thread/start` returned `data: []`,
-  and the same call after the turn returned the thread. That fits lazy persistence, but indexing lag was not ruled out. `ephemeral: true` threads are never written.
+- In the logged-out scratch home a thread was not listed until after its first turn: `thread/list` 3 ms after
+  `thread/start` returned `data: []`, and the same call after the turn returned the thread. That fits lazy
+  persistence, but indexing lag was not ruled out. `ephemeral: true` threads are never written.
 - `thread/list` output (one entry, paths shortened to `<S>`):
 
 ```json
@@ -605,20 +746,85 @@ a secondary log without streaming text.
     rebuild the chat list. Resume returns the thread's saved approval policy and sandbox, and accepts overrides.
   - `thread/read {threadId, includeTurns: true}` returns the same turns without loading the thread, with the same
     deprecation notice.
-- UNTESTED: resuming a thread that has real assistant and tool items, resuming while the desktop app has the same
-  thread open, and `thread/fork`.
+- With real history (default home, a thread of five turns, second `codex app-server` process):
 
-## Spike 8: `turn/steer` and `turn/interrupt` (UNTESTED with a live turn)
+```
+-> {"method":"thread/list","id":2,"params":{"limit":10,"cwd":"<W>"}}
+<- {"id":2,"result":{"data":[{"id":"01a0fcb0-7a8c-…","preview":"Run the command: node -e \"console.log('ao-declined')\"\nIf you are not allowed to run it, say so in one line and stop.",…,"model":"gpt-6-luna","reasoningEffort":"low","createdAt":1790945819,"updatedAt":1790945819,"recencyAt":1790945866,"status":{"type":"notLoaded"},"path":"C:\\Users\\Harry\\.codex\\sessions\\2026\\10\\02\\rollout-2026-10-02T13-56-59-01a0fcb0-7a8c-….jsonl","cwd":"<W>","cliVersion":"0.160.0","originator":"agent_office_spike","source":"vscode",…,"turns":[]},{"id":"01a0fcb0-27ea-…",…}],"nextCursor":null,"backwardsCursor":"2026-10-02T12:56:59.278Z"}}
+-> {"method":"thread/resume","id":3,"params":{"threadId":"01a0fcb0-7a8c-…","excludeTurns":true}}
+<- {"method":"thread/status/changed","params":{"threadId":"01a0fcb0-7a8c-…","status":{"type":"idle"}}}
+<- {"id":3,"result":{"thread":{…,"status":{"type":"idle"},…,"turns":[]},"model":"gpt-6-luna",…,"approvalPolicy":"never","approvalsReviewer":"user","sandbox":{"type":"readOnly","networkAccess":false},"activePermissionProfile":{"id":":read-only","extends":null},"reasoningEffort":"low","collaborationMode":{"mode":"default","settings":{"model":"gpt-6-luna","reasoning_effort":"low","developer_instructions":null}},…,"turnsBackwardsCursor":"{…}","itemsBackwardsCursor":"{…}"}}
+<- {"method":"thread/tokenUsage/updated","params":{"threadId":"01a0fcb0-7a8c-…","turnId":"…","tokenUsage":{"total":{"totalTokens":120160,…},…}}}
+-> {"method":"thread/turns/list","id":4,"params":{"threadId":"01a0fcb0-7a8c-…","limit":20,"sortDirection":"asc","itemsView":"full"}}
+<- {"id":4,"result":{"data":[
+     {"id":"01a0fcb0-7ae5-…","items":[userMessage, agentMessage],"itemsView":"full","status":"completed",…},                               (the declined command is absent)
+     {"id":"01a0fcb0-8bc2-…","items":[userMessage, fileChange, agentMessage],"status":"completed",…},
+     {"id":"01a0fcb0-a1d6-…","items":[userMessage, agentMessage, commandExecution, userMessage, agentMessage],"status":"completed",…},      (the steered turn)
+     {"id":"01a0fcb1-1c66-…","items":[userMessage, agentMessage, commandExecution],"status":"interrupted",…},
+     {"id":"01a0fcb1-34ab-…","items":[userMessage, webSearch, agentMessage],"status":"completed",…}],
+   "nextCursor":null,"backwardsCursor":"{…}"}}
+```
 
-From `v2/TurnSteerParams.ts`, `v2/TurnInterruptParams.ts`, `v2/CodexErrorInfo.ts` and the error shapes observed.
+  - **The sandbox is not restored.** The thread was started with `workspace-write`, and its last turn set
+    `approvalPolicy: "never"`. Resume returned `approvalPolicy: "never"` (the last turn's override) and
+    `sandbox: readOnly` (the default). Pass both again on `thread/resume`.
+  - `excludeTurns: true` gives no deprecation notice and `turns: []`. `thread/turns/list` with `itemsView: "full"`
+    returns complete items (text, command output, exit codes, diffs), enough to rebuild the chat list.
+  - Resume replays the last `thread/tokenUsage/updated`.
+  - In the list, `updatedAt` stayed at the creation time; `recencyAt` moved with the last turn. Sort by `recencyAt`.
+  - History differs from the live stream in two places: a declined command is missing, and the command that was
+    running when the turn was interrupted is recorded as `status: "failed"`, `exitCode: -1`.
+- UNTESTED: resuming while the desktop app has the same thread open, running a turn after a resume, `thread/fork`.
 
-- `turn/steer {threadId, input: UserInput[], expectedTurnId}` adds user input to the turn that is running.
-  `expectedTurnId` is required: "The request fails when it does not match the currently active turn." The result is
-  `{turnId}`. The `turnTrigger` comment on `TurnStartParams` ("Ignored when this request steers an already-active
-  turn") suggests that `turn/start` during an active turn may itself act as a steer. Do not rely on that; send
-  `turn/steer` when the driver knows a turn is active and fall back to `turn/start` on the "no active turn" error.
-- Steering is refused for review and compaction turns: `codexErrorInfo: {activeTurnNotSteerable: {turnKind: "review" | "compact"}}`.
-- With no active turn (observed):
+## Spike 8: `turn/steer` and `turn/interrupt` (PASS)
+
+### Steer
+
+A turn ran a 25 s command. The steer was sent 1.5 s after the command item started:
+
+```
+<- {"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-e1a7b85c-…",…,"status":"inProgress",…},"threadId":"<T>","turnId":"01a0fcb0-a1d6-…",…}}                  t = 15.6 s
+-> {"method":"turn/steer","id":10,"params":{"threadId":"<T>","expectedTurnId":"01a0fcb0-a1d6-…","input":[{"type":"text","text":"Also: end your final answer with the exact word steered-ok.","text_elements":[]}]}}   t = 17.2 s
+<- {"id":10,"result":{"turnId":"01a0fcb0-a1d6-…"}}                                                                                                   1 ms later
+-> {"method":"turn/steer","id":11,"params":{"threadId":"<T>","expectedTurnId":"00000000-0000-7000-8000-000000000000","input":[{"type":"text","text":"ignored","text_elements":[]}]}}
+<- {"error":{"code":-32600,"message":"expected active turn id `00000000-0000-7000-8000-000000000000` but found `01a0fcb0-a1d6-…`"},"id":11}
+<- {"method":"item/commandExecution/outputDelta","params":{…,"itemId":"exec-e1a7b85c-…","delta":"slow-done\n"}}                                    t = 40.7 s
+<- {"method":"item/completed","params":{"item":{"type":"commandExecution","id":"exec-e1a7b85c-…",…,"status":"completed",…,"aggregatedOutput":"slow-done\n","exitCode":0,"durationMs":25116},…}}
+<- {"method":"item/started","params":{"item":{"type":"userMessage","id":"01a0fcb1-1687-…","clientId":null,"content":[{"type":"text","text":"Also: end your final answer with the exact word steered-ok.","text_elements":[]}]},"threadId":"<T>","turnId":"01a0fcb0-a1d6-…",…}}   t = 40.8 s
+<- {"method":"item/completed","params":{"item":{"type":"userMessage","id":"01a0fcb1-1687-…",…},…}}
+<- {"method":"item/completed","params":{"item":{"type":"agentMessage",…,"text":"slow-done steered-ok","phase":"final_answer",…},…}}
+<- {"method":"turn/completed","params":{"threadId":"<T>","turn":{"id":"01a0fcb0-a1d6-…",…,"status":"completed","error":null,…,"durationMs":31314}}}
+```
+
+- `turn/steer` is acknowledged at once with the same `turnId`: no new turn, one `turn/started`, one `turn/completed`.
+- The model sees the steer **after the running tool call finishes**, not during it. The steer shows up as a second
+  `userMessage` item in the same turn at that moment, and the final answer obeyed it. This matches Claude's inbox
+  behaviour ("absorbed between tool calls"), with the difference that delivery is observable.
+- The running command was not disturbed.
+- A wrong `expectedTurnId` is refused with a message that names the active turn. With no active turn the error is
+  `no active turn to steer` (below).
+- Steering is refused for review and compaction turns, by the types:
+  `codexErrorInfo: {activeTurnNotSteerable: {turnKind: "review" | "compact"}}`. Not provoked.
+
+### Interrupt
+
+```
+<- {"method":"item/started","params":{"item":{"type":"commandExecution","id":"exec-3fb4c1ac-…",…,"processId":"95398","status":"inProgress",…},"threadId":"<T>","turnId":"01a0fcb1-1c66-…",…}}   t = 46.8 s
+-> {"method":"turn/interrupt","id":13,"params":{"threadId":"<T>","turnId":"01a0fcb1-1c66-…"}}                                                       t = 48.367 s
+<- {"id":13,"result":{}}                                                                                                                             t = 48.418 s
+<- {"method":"thread/status/changed","params":{"threadId":"<T>","status":{"type":"idle"}}}
+<- {"method":"turn/completed","params":{"threadId":"<T>","turn":{"id":"01a0fcb1-1c66-…","items":[],"itemsView":"notLoaded","status":"interrupted","error":null,"startedAt":1790945860,"completedAt":1790945866,"durationMs":6134}}}   t = 48.419 s
+```
+
+- The turn ended 52 ms after the request, with `status: "interrupted"`, `error: null` and the thread back to `idle`.
+  Unlike Claude there is a clear end-of-turn signal after an interrupt.
+- **No `item/completed` was sent for the running command.** The history later shows it as `status: "failed"`,
+  `exitCode: -1`, `durationMs: 6818`. The driver must close every open item of a turn when `turn/completed` arrives.
+- The thread took the next turn straight away (the web-search turn started 54 ms later and completed normally).
+- When the server shut down afterwards, stderr had `exec_command failed: UnknownProcessId { process_id: 95398 }`.
+  Whether the child `node` process was killed at the interrupt or ran to its 25 s end was not checked.
+
+### With no active turn (logged-out run)
 
 ```
 -> {"method":"turn/steer","id":11,"params":{"threadId":"01a0fca4-011e-…","expectedTurnId":"no-such-turn","input":[{"type":"text","text":"steer with no turn","text_elements":[]}]}}
@@ -627,49 +833,47 @@ From `v2/TurnSteerParams.ts`, `v2/TurnInterruptParams.ts`, `v2/CodexErrorInfo.ts
 <- {"error":{"code":-32600,"message":"no active turn to interrupt"},"id":12}
 ```
 
-- `turn/interrupt {threadId, turnId}` returns `{}`. Expected, not observed: the turn ends with `turn/completed` and
-  `turn.status: "interrupted"`, running command items end with a non-`completed` status, and pending approval
-  requests are closed with `serverRequest/resolved`. If that holds, Codex has none of Claude's "no Stop after an
-  interrupt" problem.
-- Unknown: whether a steer is delivered while the turn is blocked on an approval; when the model sees a steer
-  (between tool calls, as with Claude's inbox, or sooner); whether a steered message appears as a `userMessage` item
-  in the same turn.
+- Still unknown: whether a steer is delivered while the turn is blocked on an approval, and whether `turn/start`
+  during an active turn acts as a steer (the `turnTrigger` comment on `TurnStartParams` hints at it). The driver
+  should send `turn/steer` when it knows a turn is active and fall back to `turn/start` on "no active turn to steer".
 - The user's config has `[desktop] followUpQueueMode = "steer"`, and the experimental surface has `thread/queue/*`
   for queued follow-ups: the desktop app offers both "steer now" and "queue for after this turn".
 
-## To verify after the user logs in
+## Live verification with the logged-in account
 
-The user is logged in now (free plan), so this is one command:
+Run as three invocations against the default home, with the bare server arguments from change 5, working directory
+`…\scratchpad\codex-live\ws-logged-in`:
 
 ```
-node scripts/spikes/codex/logged-in-check.cjs
-node scripts/spikes/codex/logged-in-check.cjs --only account          # no model use at all
-node scripts/spikes/codex/logged-in-check.cjs --subagent              # adds one turn that asks for a sub-agent
+node scripts/spikes/codex/logged-in-check.cjs --root <scratch> --only account,approval
+node scripts/spikes/codex/logged-in-check.cjs --root <scratch> --only decline,filechange,steer,interrupt,websearch,resume
+node scripts/spikes/codex/logged-in-check.cjs --root <scratch> --only escalate
 ```
 
-It uses the default home, a scratch working directory, five short turns, and harmless commands
-(`node -e "console.log('ao-codex')"` and a 25 s `node -e` timer). It answers every approval with `accept`. Output goes
-to `scripts/spikes/codex/logs/logged-in*.log` and a summary is printed at the end. It starts the desktop app's three
-MCP servers for its one thread (see change 5).
+Logs: `logs/logged-in-1-on-request.log`, `logged-in-2-main.log`, `logged-in-resume.log`, `logged-in-3-escalate.log`.
+The first of these also contains lines from another run of the script that was writing `logged-in.log` at the same
+time (thread `01a0fcaf-0735-…`); the excerpts in this document are from thread `01a0fcb0-27ea-…`.
+Without `--only` the script runs all seven turns in one thread. `--only account` uses no model.
 
-1. **Does the free plan run a turn at all**, and with which default model (`gpt-6-luna` expected)?
-2. `on-request` on native Windows with `workspace-write`: does `node -e …` raise
-   `item/commandExecution/requestApproval`, or run in the sandbox without asking? If it does not ask, the script
-   repeats with `untrusted`.
-3. The approval request as sent (fields present, `commandActions`, `proposedExecpolicyAmendment`), the effect of
-   `accept`, and whether `serverRequest/resolved` and `thread/status/changed … waitingOnApproval` are emitted.
-4. Item and delta sequence of a normal turn: `agentMessage` deltas, reasoning summary deltas, command output deltas,
-   exit code.
-5. `turn/steer` mid-command: the response, whether the turn id stays the same, whether a `userMessage` item appears,
-   whether the final answer reflects the steer; the error for a wrong `expectedTurnId`.
-6. `turn/interrupt` mid-command: final `turn.status`, how long it takes, state of the command item, and whether the
-   thread takes another turn afterwards.
-7. Resume in a second process with real history: `thread/turns/list` item types.
-8. With `--subagent`: whether child threads' notifications arrive on the same connection.
+| Question | Answer |
+|---|---|
+| Does the free plan run a turn? | Yes. Eight turns, no plan or limit error. Default model `gpt-6-luna` |
+| Free-tier limits | One 30-day window, no short window, no credits. 0 % to 1 % over thirteen short turns |
+| Does `on-request` ask for `node -e "console.log(…)"`? | No. It runs in the sandbox |
+| When does `on-request` ask? | When a command failed in the sandbox and the model retries it outside (`reason` set) |
+| Approval accepted | Command ran (`exitCode: 0`); file change applied |
+| Approval declined | Item `status: "declined"`, turn continues, model reports it |
+| Approval lifecycle signals | `waitingOnApproval` flag before, `serverRequest/resolved` after, every time |
+| File-change payload | On the `fileChange` item, not on the request. `add` carries file content; unified diff in `turn/diff/updated` |
+| Web search on free | Works; results on `item/completed` |
+| Steer | Same turn, absorbed after the running tool call, visible as a `userMessage` item |
+| Interrupt | `turn/completed` `interrupted` in 52 ms; running command gets no `item/completed` |
+| List and resume after restart | Works; sandbox must be passed again |
 
-Not covered by the script, to check when the driver exists: `decline` and `cancel` decisions, `acceptForSession`,
-file-change approvals, a turn after `systemError`, steer during a pending approval, console windows under Electron,
-and running next to the desktop app on the same thread store.
+Still to verify, when the driver exists: `cancel` and `acceptForSession` decisions, a `decline` on a file change, a
+`fileChange` `update` diff, reasoning and plan streams at higher effort, sub-agents (`--subagent`), commands that
+classify as `read` / `search`, a turn after `systemError`, steer during a pending approval, whether an interrupt
+kills the child process, console windows under Electron, and running next to the desktop app on the same thread.
 
 ## Proposed driver design
 
@@ -700,13 +904,13 @@ and running next to the desktop app on the same thread store.
 
 | Interface | Codex |
 |---|---|
-| `start()` | `account/read` (refuse if logged out), then `thread/start {cwd, model?, approvalPolicy, sandbox, developerInstructions: briefing}` or `thread/resume {threadId: start.resume, excludeTurns: true, …}`. Compare the returned `sandbox` with what was asked |
+| `start()` | `account/read` (refuse if logged out), then `thread/start {cwd, model?, approvalPolicy, sandbox, developerInstructions: briefing}` or `thread/resume {threadId: start.resume, excludeTurns: true, approvalPolicy, sandbox, …}` (resume does not restore the sandbox). Compare the returned `sandbox` with what was asked |
 | `providerSessionId` | `thread.id` |
 | `state` | `starting` until the thread response; `idle` on `thread/status/changed idle` and `turn/completed`; `busy` on `turn/started` or `active` with no flags; `waiting-permission` while a server request is pending or `activeFlags` is non-empty; `needs-attention` on `systemError` or a logged-out account; `exited` on server exit or stop |
-| `canReceiveOrders` | `idle` (`turn/start`) and `busy` (`turn/steer`). `waiting-permission`: unknown until verified |
+| `canReceiveOrders` | `idle` (`turn/start`) and `busy` (`turn/steer`, verified). `waiting-permission`: unknown, so `false` for now |
 | `sendPrompt(text)` | no active turn: `turn/start {threadId, input:[{type:"text", text: taggedOrder(text), text_elements: []}]}` gives `{ok: true, queued: false}` on the response. Active turn: `turn/steer {threadId, expectedTurnId, input}` gives `{ok: true, queued: true}`. On "no active turn to steer", retry as `turn/start`. A JSON-RPC error becomes `{ok: false, reason: error.message}` |
-| `answerPermission(id, decision)` | The registry entry holds the JSON-RPC request id. Allow: `{decision: "accept"}`. Deny: `{decision: "decline"}`. Codex's decision has no message field, so a deny message would have to follow as a steer |
-| `interrupt()` | `turn/interrupt {threadId, turnId}` with the id from `turn/started` |
+| `answerPermission(id, decision)` | The registry entry holds the JSON-RPC request id (which can be `0`). Allow: `{decision: "accept"}`. Deny: `{decision: "decline"}` (verified: the turn continues and the model is told). Codex's decision has no message field, so a deny message would have to follow as a steer |
+| `interrupt()` | `turn/interrupt {threadId, turnId}` with the id from `turn/started`. `turn/completed` with `interrupted` follows; close the turn's open items then |
 | `stop()` | interrupt if busy, `thread/unsubscribe`, then `onExit(0)` |
 
 **Permissions**
@@ -715,7 +919,10 @@ and running next to the desktop app on the same thread store.
   `PermissionRegistry` with `toolName` `"Command"` or `"File change"`, `summary` from `command` or the item's paths,
   `detail` from the command, cwd, `reason`, and the item's diffs.
 - `serverRequest/resolved` for a request the app has not answered, `turn/completed`, and server exit all resolve the
-  card as `resolved-elsewhere`.
+  card as `resolved-elsewhere`. `serverRequest/resolved` also follows the app's own answer, so ignore it for
+  requests already answered.
+- For a file change, take `summary` and `detail` from the `fileChange` item with the request's `itemId` (it arrives
+  just before the request); the request itself has no paths or diff.
 - `acceptForSession` gives an "allow for this session" button later. `proposedExecpolicyAmendment` would give
   "always allow commands like this"; leave it out at first.
 - `item/tool/requestUserInput` (the model asks the user a question) is a second kind of blocking request that
@@ -726,11 +933,17 @@ and running next to the desktop app on the same thread store.
 
 | `PermissionMode` | `approvalPolicy` | `sandbox` | Notes |
 |---|---|---|---|
-| `default` | `on-request` | `read-only` | Codex's own default. Reading runs free; writing or network needs an approval |
-| `acceptEdits` | `on-request` | `workspace-write` | Edits and commands inside the folder run without asking, which is wider than Claude's `acceptEdits` (commands still ask there). Needs the Windows sandbox; if the response says `readOnly`, tell the user and offer `windowsSandbox/setupStart` |
-| `plan` | `on-request` | `read-only` | Plus the `plan` collaboration mode, which is on the experimental surface (`collaborationMode/list`, `ModeKind = "plan" | "default"`). Without it, a developer instruction is the only way to ask for a plan |
+| `default` | `untrusted` | `workspace-write` | **Recommended.** Verified: a plain `node -e` command and a patch inside the folder both raised an approval before anything ran, and ran after `accept`. This is the only combination that sends commands and edits to the CEO inbox the way Claude's `default` does |
+| `acceptEdits` | `on-request` | `workspace-write` | Verified: commands inside the folder run without asking, which is wider than Claude's `acceptEdits` (commands still ask there). The model asks only to leave the sandbox |
+| `plan` | `on-request` | `read-only` | Plus the `plan` collaboration mode, which is on the experimental surface (`collaborationMode/list`, `ModeKind = "plan" | "default"`). Without it, a developer instruction is the only way to ask for a plan. Verified for this pair: a write is refused by the sandbox (`EPERM`), then the model asks to run it outside, with a `reason` |
 
-`never` and `danger-full-access` are not offered. `untrusted` (ask for nearly everything) could back a stricter mode.
+- Alternative for `default`: `on-request` + `read-only`, Codex's own default. It asks far less: nothing for commands
+  that only read, and for a write only after the sandboxed attempt failed. Choose it if "trust the sandbox" is the
+  intended behaviour.
+- Both `workspace-write` rows need the Windows sandbox. If the `thread/start` response says `readOnly`, tell the user
+  and offer `windowsSandbox/setupStart`.
+- Untested: `untrusted` + `read-only` (whether an approved command then runs outside the sandbox or fails in it).
+- `never` and `danger-full-access` are not offered.
 
 **World events**
 
@@ -753,8 +966,8 @@ and running next to the desktop app on the same thread store.
    narrower with the `granular` policy?
 4. Should the app trigger the Windows sandbox setup itself when it is missing, or only explain how? (`elevated` raises
    a UAC prompt and changes ACLs across the user profile; `unelevated` needs nothing.)
-5. Does the free plan's allowance make a hosted Codex session useful in practice? `account/rateLimits/read` gives the
-   numbers for a usage readout in the sidebar.
+5. Is the free plan's allowance enough in practice? Thirteen trivial turns cost 1 % of the 30-day window. Real coding
+   turns are far larger. `account/rateLimits/updated` gives the numbers for a usage readout in the sidebar.
 6. `codex app-server daemon` and `proxy` (a shared local daemon that the CLI's `codex agents` also uses) were not
    explored. They could let the app see sessions it did not start.
 7. Pin the protocol to the installed CLI version? The surface is marked experimental, and fields outside the stable
@@ -762,23 +975,34 @@ and running next to the desktop app on the same thread store.
 
 ## Not tested
 
-- Any successful model turn: items, deltas, approvals, steer, interrupt, subagents (see "To verify").
+- Sub-agents, reasoning and plan streams, MCP tool calls, `cancel` / `acceptForSession` (see "Live verification").
 - A successful login through `account/login/start`, and login while the desktop app holds port 1455.
 - Console-window behaviour when spawned from Electron; a packaged build.
 - `--listen ws://` and `unix://` transports; the daemon.
 - `windowsSandbox/setupStart`; what the `unelevated` sandbox restricts.
-- Whether the bare overrides remove the tools as well as the MCP start-up notifications.
+- Whether the bare overrides remove the plugin tools as well as the MCP start-up notifications (the live turns ran
+  with the overrides; shell, patch and web search all worked).
 - Two app-server processes on one home at the same time with live turns (the desktop app's own `codex.exe` processes
   were running during every default-home spike, with no visible conflict for read-only calls and ephemeral threads).
 
 ## Leftovers from these spikes
 
-- Nothing was written to `~/.codex` by the harness beyond what `codex` itself does on start (log and state database
-  writes). The twelve threads started there were `ephemeral` and no turn ran.
+- The harness wrote nothing to `~/.codex` beyond what `codex` itself does on start (log and state database
+  writes); its twelve threads there were `ephemeral` and no turn ran.
+- The live checks left **four threads in the user's real Codex history** (they show up in the desktop app and
+  `codex resume`, originator `agent_office_spike`): `01a0fcaf-0735-7571-9cea-60fb756ce0b4` (the earlier run),
+  `01a0fcb0-27ea-77c1-9acb-874a42b30573`, `01a0fcb0-7a8c-7c41-840c-875008468334`,
+  `01a0fcb2-2d35-7c92-a9f3-e7c70d5f55c2`. Remove them with `codex delete <id>` or `codex archive <id>` if they are
+  not wanted. `config.toml` was not changed.
+- The scratch working directory holds `ao-note.txt` and `ao-escalate.txt`.
 - The scratch home and working directory are under the session scratchpad (`…\scratchpad\codex-spike`), outside the repo.
 - `scripts/spikes/codex/generated/` is untracked (735 files). Decide whether to commit it or regenerate on demand.
 
 ## Logged-in results (2026-10-02, free ChatGPT plan, codex-cli 0.160.0) — VERIFIED
+
+This section is the first logged-in run, made with an earlier five-turn version of the script and without the bare
+server arguments. The sections above hold the later, fuller runs and the JSON. Where they differ, the sections above
+are the more detailed measurement.
 
 Ran `node scripts/spikes/codex/logged-in-check.cjs` (5 short turns, default CODEX_HOME, scratch cwd).
 
@@ -795,7 +1019,8 @@ Ran `node scripts/spikes/codex/logged-in-check.cjs` (5 short turns, default CODE
   `item/commandExecution/outputDelta`, `thread/tokenUsage/updated`, `account/rateLimits/updated`, `turn/completed`.
 - **`turn/steer` works mid-command:** same turn id, a second `userMessage` item appears, and the final answer
   honoured the steer. A wrong `expectedTurnId` → error -32600.
-- **`turn/interrupt` works:** turn ends `status: "interrupted"` ~1.6 s later; the next turn runs normally.
+- **`turn/interrupt` works:** turn ends `status: "interrupted"` ~1.6 s after the command started (the script waits
+  1.5 s before interrupting; the turn ends about 50 ms after the request); the next turn runs normally.
 - **Resume in a new process works** (`thread/list` with cwd filter → `thread/resume` → `thread/turns/list`
   returns full items). **Resume resets policy**: response showed `approvalPolicy: "never"`, sandbox `readOnly`
   → the driver must pass approvalPolicy/sandbox again on resume / every `turn/start`.
@@ -804,4 +1029,5 @@ Ran `node scripts/spikes/codex/logged-in-check.cjs` (5 short turns, default CODE
 - Each thread start/resume launches the desktop app's MCP servers (`node_repl`, `codex_apps`, `cua_repl`).
 - Harmless stderr noise on exit after an interrupt (`UnknownProcessId`, `failed to record rollout items`).
 
-Still unverified: fileChange approvals + diff payload, webSearch, subagent (collab) threads, plan mode.
+Verified since (spikes 4 and 6): fileChange approvals and the diff payload, a declined approval, webSearch, and the
+`on-request` escalation out of a read-only sandbox. Still unverified: subagent (collab) threads, plan mode.
