@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+ <defs><clipPath id="tile"><rect x="2" y="2" width="60" height="60" rx="14"/></clipPath></defs>
+ <rect x="2" y="2" width="60" height="60" rx="14" fill="#2b2d42"/>
+ <g clip-path="url(#tile)">
+ <rect x="2" y="40" width="60" height="22" fill="#353852"/>
+ <g>
+  <ellipse cx="17" cy="43" rx="6.82" ry="2.2" fill="#000" opacity=".28"/>
+  <rect x="11.5" y="30" width="11" height="13" rx="5" fill="#4fb3a8" stroke="#1b1c2b" stroke-width="1.1"/>
+  <rect x="12.6" y="38.8" width="8.8" height="3.2" rx="2.4" fill="#000" opacity=".16"/>
+  
+  <circle cx="17" cy="27.14" r="5.2" fill="#f0c8a0" stroke="#1b1c2b" stroke-width="1.1"/>
+  <path d="M 11.8 26.1 a 5.2 5.2 0 0 1 10.4 0 q -5.2 -3.64 -10.4 0 z" fill="#3b2a20" stroke="#1b1c2b" stroke-width="0.9" stroke-linejoin="round"/>
+ </g>
+ <g>
+  <ellipse cx="47" cy="43" rx="6.82" ry="2.2" fill="#000" opacity=".28"/>
+  <rect x="41.5" y="30" width="11" height="13" rx="5" fill="#5b8def" stroke="#1b1c2b" stroke-width="1.1"/>
+  <rect x="42.6" y="38.8" width="8.8" height="3.2" rx="2.4" fill="#000" opacity=".16"/>
+  
+  <circle cx="47" cy="27.14" r="5.2" fill="#f0c8a0" stroke="#1b1c2b" stroke-width="1.1"/>
+  <path d="M 41.8 26.1 a 5.2 5.2 0 0 1 10.4 0 q -5.2 -3.64 -10.4 0 z" fill="#d9b25f" stroke="#1b1c2b" stroke-width="0.9" stroke-linejoin="round"/>
+ </g>
+ <g>
+  <ellipse cx="32" cy="44" rx="8.73" ry="2.82" fill="#000" opacity=".28"/>
+  <rect x="24.96" y="27.36" width="14.08" height="16.64" rx="6.4" fill="#d97757" stroke="#1b1c2b" stroke-width="1.41"/>
+  <rect x="26.37" y="38.62" width="11.26" height="4.1" rx="3.07" fill="#000" opacity=".16"/>
+  <path d="M 30.34 28.13 h 3.33 l -0.64 2.56 l 1.41 5.89 l -2.43 2.43 l -2.43 -2.43 l 1.41 -5.89 z" fill="#c0392b" stroke="#1b1c2b" stroke-width="0.64"/>
+  <circle cx="32" cy="23.7" r="6.66" fill="#f0c8a0" stroke="#1b1c2b" stroke-width="1.41"/>
+  <path d="M 25.34 22.37 a 6.66 6.66 0 0 1 13.31 0 q -6.66 -4.66 -13.31 0 z" fill="#5a3825" stroke="#1b1c2b" stroke-width="1.15" stroke-linejoin="round"/>
+ </g>
+ <rect x="7" y="43" width="50" height="9" rx="2.5" fill="#a1887f" stroke="#1b1c2b" stroke-width="1.1"/>
+ <rect x="7" y="49" width="50" height="3" rx="1.5" fill="#7d6558"/></g>
+ <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="13.25" fill="none" stroke="#4a4e73" stroke-width="1.5"/>
+</svg>
