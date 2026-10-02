@@ -27,11 +27,11 @@ export class EventBus implements EventSink {
     if (this.ready) this.send(e)
   }
 
-  /** Top-level sessions (managers) currently live: their last event isn't `done`. */
-  topLevelIds(): string[] {
-    const out: string[] = []
+  /** Live top-level sessions with their provider (order targets). */
+  topLevel(): { id: string; provider: string }[] {
+    const out: { id: string; provider: string }[] = []
     for (const { event } of this.snapshot.values()) {
-      if (event.parentId === null && event.activity !== 'done') out.push(event.agentId)
+      if (event.parentId === null && event.activity !== 'done') out.push({ id: event.agentId, provider: event.provider })
     }
     return out
   }

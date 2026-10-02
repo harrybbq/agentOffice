@@ -1,5 +1,5 @@
 // Scene-independent record of live agents: survives game recreation (theme / overlay change)
-// and feeds the HUD's waiting list.
+// and feeds the inbox's waiting list.
 import type { AgentEvent } from '../shared/events'
 
 export interface WaitingInfo {
@@ -50,7 +50,7 @@ export class AgentStore {
   }
 
   /** Follows parentIds through live agents to the top-level session. */
-  private rootOf(e: AgentEvent): string {
+  rootOf(e: Pick<AgentEvent, 'agentId' | 'parentId'>): string {
     let id = e.agentId
     let parent = e.parentId
     for (let guard = 0; parent && guard < 32; guard++) {

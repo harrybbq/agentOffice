@@ -3,10 +3,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { claudeCodeHooksAdapter } from '../adapters/claude-code-hooks'
+import { createClaudeCodeHooksAdapter } from '../adapters/claude-code-hooks'
 import { genericAdapter, ingestEvents } from '../adapters/generic'
 import type { EventSink, HttpAdapter } from '../adapters/types'
-import { checkToken } from './auth'
+import { authenticate, authorise, type Auth, type SessionTokens } from './auth'
 
 export const HOST = '127.0.0.1'
 export const MAX_BODY = 256 * 1024
@@ -16,6 +16,10 @@ export interface IngestServerOptions {
   /** Called on every request so a regenerated token applies immediately. */
   getToken: () => string
   sink: EventSink
+  /** Tokens of sessions the app launched. They only reach the Claude Code hooks route. */
+  sessionTokens?: SessionTokens
+  /** The `/hooks/claude-code` adapter. Default: a stand-alone one that only knows external sessions. */
+  claudeHooks?: HttpAdapter
 }
 
 export interface IngestServer {
@@ -33,20 +37,23 @@ export class PortInUseError extends Error {
   }
 }
 
-const adapters: HttpAdapter[] = [genericAdapter, claudeCodeHooksAdapter]
+type Verdict = { ok: true; auth: Auth } | { ok: false; status: number; message: string }
 
-type Verdict = { ok: true } | { ok: false; status: number; message: string }
-
-/** Shared gate for HTTP requests and WebSocket upgrades. Order: Origin, OPTIONS, Host, token. */
-function gate(req: IncomingMessage, port: number, token: string): Verdict {
+/**
+ * Shared gate for HTTP requests and WebSocket upgrades. Order: Origin, OPTIONS, Host, token, then
+ * what that token may reach (a per-session token only POSTs to the Claude Code hooks route).
+ */
+function gate(req: IncomingMessage, port: number, token: string, sessionTokens?: SessionTokens): Verdict {
   if (req.headers.origin !== undefined) return { ok: false, status: 403, message: 'browser requests are not allowed' }
   if (req.method === 'OPTIONS') return { ok: false, status: 403, message: 'forbidden' }
   const host = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : ''
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
     return { ok: false, status: 403, message: 'bad host' }
   }
-  if (!checkToken(req, token)) return { ok: false, status: 401, message: 'unauthorized' }
-  return { ok: true }
+  const auth = authenticate(req, token, sessionTokens)
+  if (!auth) return { ok: false, status: 401, message: 'unauthorized' }
+  if (!authorise(auth, req, pathOf(req))) return { ok: false, status: 403, message: 'not allowed for this token' }
+  return { ok: true, auth }
 }
 
 function pathOf(req: IncomingMessage): string {
@@ -77,10 +84,10 @@ class HttpError extends Error {
   }
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req: IncomingMessage, max: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length'])
-    if (Number.isFinite(declared) && declared > MAX_BODY) {
+    if (Number.isFinite(declared) && declared > max) {
       reject(new HttpError(413, 'payload too large'))
       return
     }
@@ -90,7 +97,7 @@ function readBody(req: IncomingMessage): Promise<string> {
     req.on('data', (chunk: Buffer) => {
       if (failed) return
       size += chunk.length
-      if (size > MAX_BODY) {
+      if (size > max) {
         failed = true
         reject(new HttpError(413, 'payload too large'))
         return
@@ -109,8 +116,8 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const text = await readBody(req)
+async function readJson(req: IncomingMessage, max: number): Promise<unknown> {
+  const text = await readBody(req, max)
   try {
     return JSON.parse(text)
   } catch {
@@ -129,14 +136,20 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
 }
 
 export function startIngestServer(opts: IngestServerOptions): Promise<IngestServer> {
-  const { port, getToken, sink } = opts
+  const { port, getToken, sink, sessionTokens } = opts
+  const adapters: HttpAdapter[] = [genericAdapter, opts.claudeHooks ?? createClaudeCodeHooksAdapter()]
 
   const onRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const v = gate(req, port, getToken())
+    const v = gate(req, port, getToken(), sessionTokens)
     if (!v.ok) {
       sendJson(res, v.status, { error: v.message })
       return
     }
+    // A client that hangs up before we answer (Claude Code abandoning a pending hook) aborts this.
+    const gone = new AbortController()
+    res.on('close', () => {
+      if (!res.writableEnded) gone.abort()
+    })
     const path = pathOf(req)
     try {
       if (req.method === 'GET' && path === '/health') {
@@ -148,13 +161,14 @@ export function startIngestServer(opts: IngestServerOptions): Promise<IngestServ
         sendJson(res, 404, { error: 'not found' })
         return
       }
-      const body = await readJson(req)
-      const out = await adapter.handle(body, sink)
-      sendJson(res, 200, out ?? {})
+      const body = await readJson(req, adapter.maxBody ?? MAX_BODY)
+      const out = await adapter.handle(body, sink, { auth: v.auth, signal: gone.signal })
+      // The adapter may have held the request for a long time; the client can be gone by now.
+      if (!gone.signal.aborted && !res.destroyed) sendJson(res, 200, out ?? {})
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500
       if (status === 500) console.error('[agent-office] ingest error:', err)
-      if (!res.headersSent) {
+      if (!res.headersSent && !res.destroyed) {
         res.setHeader('Connection', 'close')
         sendJson(res, status, { error: err instanceof HttpError ? err.message : 'internal error' })
       }
@@ -166,14 +180,18 @@ export function startIngestServer(opts: IngestServerOptions): Promise<IngestServ
   const server: Server = createServer({ maxHeaderSize: 16 * 1024 }, (req, res) => {
     void onRequest(req, res)
   })
+  // Both bound how long a client may take to SEND a request. Neither limits how long we take to
+  // answer, so a PermissionRequest held open for minutes is not cut (checked on Node 24: a response
+  // held for 75 s under requestTimeout = 30 s was still delivered).
   server.requestTimeout = 30_000
   server.headersTimeout = 10_000
+  server.timeout = 0
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY })
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on('error', () => socket.destroy())
-    const v = gate(req, port, getToken())
+    const v = gate(req, port, getToken(), sessionTokens)
     if (!v.ok) return rejectUpgrade(socket, v.status, v.message)
     if (pathOf(req) !== '/ws') return rejectUpgrade(socket, 404, 'not found')
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))

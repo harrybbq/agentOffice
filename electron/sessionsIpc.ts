@@ -1,0 +1,55 @@
+// IPC for hosted sessions, terminals and permissions (channels: shared/ipc.ts).
+// Every handler checks that the sender is the app's own window, and the session manager validates
+// every argument. This is the ONLY way a permission is approved or an order is sent.
+import { dialog, ipcMain, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { IPC } from '../shared/ipc'
+import type { SessionManager } from './sessions'
+
+export interface SessionIpcOptions {
+  manager: SessionManager
+  /** The current main window (it is replaced when overlay mode toggles). */
+  getWindow: () => BrowserWindow | null
+}
+
+export function registerSessionIpc(opts: SessionIpcOptions): void {
+  const { manager, getWindow } = opts
+  const ours = (sender: WebContents): boolean => {
+    const win = getWindow()
+    return !!win && !win.isDestroyed() && sender === win.webContents
+  }
+  const handle = <R>(channel: string, fn: (...args: unknown[]) => R): void => {
+    ipcMain.handle(channel, (e: IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (!ours(e.sender)) throw new Error('unauthorised sender')
+      return fn(...args)
+    })
+  }
+  const on = (channel: string, fn: (...args: unknown[]) => void): void => {
+    ipcMain.on(channel, (e: IpcMainEvent, ...args: unknown[]) => {
+      if (ours(e.sender)) fn(...args)
+    })
+  }
+
+  handle(IPC.listProviders, () => manager.providers())
+  handle(IPC.listSessions, () => manager.list())
+  handle(IPC.startSession, (req) => manager.start(req))
+  handle(IPC.stopSession, (id) => manager.stop(id))
+  handle(IPC.interruptSession, (id) => manager.interrupt(id))
+  handle(IPC.pickFolder, async () => {
+    const win = getWindow()
+    if (!win || win.isDestroyed()) return null
+    const res = await dialog.showOpenDialog(win, {
+      title: 'Choose the folder to work in',
+      properties: ['openDirectory']
+    })
+    return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0]
+  })
+
+  handle(IPC.termAttach, (id) => manager.attach(id))
+  on(IPC.termDetach, (id) => manager.detach(id))
+  on(IPC.termWrite, (id, data) => manager.write(id, data))
+  on(IPC.termResize, (id, cols, rows) => manager.resize(id, cols, rows))
+  on(IPC.termAck, (id, chars) => manager.ack(id, chars))
+
+  handle(IPC.listPermissions, () => manager.listPermissions())
+  handle(IPC.decidePermission, (id, decision) => manager.decide(id, decision))
+}

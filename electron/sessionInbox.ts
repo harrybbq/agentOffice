@@ -1,12 +1,15 @@
 // Per-session delivery info for CEO orders: Claude Code's inbox socket (a named pipe on Windows, a
 // unix socket elsewhere) and its auth token, keyed by session id.
 //
-// Filled by the Claude Code hook adapter (milestone 2) from CLAUDE_CODE_MESSAGING_SOCKET /
-// CLAUDE_CODE_MESSAGING_TOKEN. Kept IN MEMORY ONLY: never written to disk, never logged, never sent
-// to the renderer. Imports only node:net so tests can load it without Electron.
+// Filled by a hosted session's SessionStart command hook (hook/claude-session-start.cjs), which reads
+// CLAUDE_CODE_MESSAGING_SOCKET / CLAUDE_CODE_MESSAGING_TOKEN. Kept IN MEMORY ONLY: never written to
+// disk, never logged, never sent to the renderer. Imports only node:net so tests can load it
+// without Electron.
 //
-// Protocol (docs/claude-code-hooks-notes.md): connect, write `{"type":"auth","token":"..."}\n`, then
-// the message text + `\n`, then close.
+// Protocol (docs/spikes-phase-a.md, spike 4a): one connection per message. Write
+// `{"type":"auth","token":"..."}\n`, then ONE JSON line shaped like an SDK user message, then close.
+// A plain-text second line is silently dropped by Claude Code. The socket never answers, so
+// delivery can only be confirmed by the session's UserPromptSubmit hook.
 import { createConnection } from 'node:net'
 import { REASON_NOT_CONNECTED } from '../shared/orders'
 
@@ -17,10 +20,10 @@ export interface SessionEndpoint {
 
 export const DELIVERY_TIMEOUT_MS = 5000
 
-/** One message per line on the wire: newlines inside the text become spaces. */
+/** The auth line, then the message as one JSON line. Newlines stay inside the JSON string. */
 export function wirePayload(token: string, text: string): string {
-  const line = text.replace(/\r\n|\r|\n/g, ' ')
-  return `${JSON.stringify({ type: 'auth', token })}\n${line}\n`
+  const message = { type: 'user', message: { role: 'user', content: text } }
+  return `${JSON.stringify({ type: 'auth', token })}\n${JSON.stringify(message)}\n`
 }
 
 /**

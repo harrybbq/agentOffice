@@ -108,7 +108,7 @@ const DRIFT_HOME_MS = 4000
 /** Late events for an agent that already left are ignored for this long. */
 const DEPARTED_GRACE_MS = 30_000
 
-const MIN_ZOOM = 0.5
+const MIN_ZOOM = 0.3
 const MAX_FIT_ZOOM = 2
 const MAX_ZOOM = 4
 const FIT_PAD = 40
@@ -176,6 +176,8 @@ export class OfficeScene extends Phaser.Scene {
   private fastUntil = 0
   private alive = true
   private autoFit = true
+  /** Branch the camera was last asked to show; re-framed when the view is resized. */
+  private focusedTeam: string | null = null
   private lastDown = 0
   private dragging = false
   private downAt: Point = { x: 0, y: 0 }
@@ -245,7 +247,11 @@ export class OfficeScene extends Phaser.Scene {
     this.setupCameraInput()
     this.fitCamera(false)
     const onResize = () => {
-      if (this.autoFit) this.fitCamera(false)
+      if (this.autoFit) return this.fitCamera(false)
+      // The shell's panels resize the view: keep the focused branch framed.
+      const b = this.focusedTeam ? this.layout.branch(this.focusedTeam) : undefined
+      if (b) this.frame(blockRect(b), false, MAX_FIT_ZOOM)
+      else this.focusedTeam = null
     }
     this.scale.on(Phaser.Scale.Events.RESIZE, onResize)
 
@@ -328,22 +334,30 @@ export class OfficeScene extends Phaser.Scene {
     this.apply(e)
   }
 
-  /** Pans/zooms to a team's branch (HUD legend click). Double-click the scene to auto-fit again. */
+  /** Pans/zooms to a team's branch (session list click). Double-click the scene to auto-fit again. */
   focusTeam(teamId: string): void {
     const b = this.layout?.branch(teamId)
     if (!b) return
     this.autoFit = false
+    this.focusedTeam = teamId
     this.frame(blockRect(b), true, MAX_FIT_ZOOM)
   }
 
+  /** Back to the auto-fitted view of the whole office (same as a double-click). */
+  fitAll(): void {
+    this.autoFit = true
+    this.focusedTeam = null
+    this.fitCamera(true)
+  }
+
   /**
-   * The CEO speaks (speech bar): a bubble over the CEO and a sealed order envelope flying to the
+   * The CEO speaks (order bar): a bubble over the CEO and a sealed order envelope flying to each
    * target team's manager, or to every manager for 'all'.
    */
-  showOrder(target: string, text: string): void {
+  showOrder(targets: 'all' | readonly string[], text: string): void {
     if (!this.roster) return
     this.chars.get(BOSS_ID)?.say(`“${text}”`, 4500)
-    const ids = target === 'all' ? this.roster.managers().map((m) => m.id) : [target]
+    const ids = targets === 'all' ? this.roster.managers().map((m) => m.id) : targets
     ids.forEach((id, i) => this.time.delayedCall(i * 160, () => this.flyOrder(id, text)))
   }
 
@@ -876,6 +890,7 @@ export class OfficeScene extends Phaser.Scene {
         if (dy === 0) return
         this.stopCameraEffects()
         this.autoFit = false
+        this.focusedTeam = null
         const before = cam.getWorldPoint(p.x, p.y)
         cam.setZoom(Phaser.Math.Clamp(cam.zoom * (dy > 0 ? 0.9 : 1.1), MIN_ZOOM, MAX_ZOOM))
         const after = cam.getWorldPoint(p.x, p.y)
@@ -888,6 +903,7 @@ export class OfficeScene extends Phaser.Scene {
       if (now - this.lastDown < DOUBLE_CLICK_MS) {
         this.lastDown = 0
         this.autoFit = true
+        this.focusedTeam = null
         this.fitCamera(true)
         return
       }
@@ -902,6 +918,7 @@ export class OfficeScene extends Phaser.Scene {
         this.dragging = true
         this.stopCameraEffects()
         this.autoFit = false
+        this.focusedTeam = null
       }
       cam.scrollX -= (p.x - p.prevPosition.x) / cam.zoom
       cam.scrollY -= (p.y - p.prevPosition.y) / cam.zoom

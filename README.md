@@ -40,13 +40,88 @@ At the bottom of the window: pick **Whole office** or one team, type, press **En
 the field). The CEO says it in a speech bubble and a sealed order envelope flies to the manager(s).
 For the whole office a PA banner also runs across the top. The result shows as a toast.
 
-Orders are **off by default**: the app starts read-only. Turn on **Allow CEO orders** in the tray.
-Orders go to a session's Claude Code inbox socket (named pipe / unix socket, see
-`docs/claude-code-hooks-notes.md`). The socket path and token come from the hook adapter (milestone 2),
-are kept in memory only and are never written to disk or logged. Until that adapter exists, sends fail
-with "not connected (install the Claude Code hook — milestone 2)". The bar is hidden in overlay mode.
+Orders are **off by default**. Turn on **Allow CEO orders** in the tray. Orders reach sessions the
+app launched itself (see [Hosted sessions](#hosted-sessions)); a session started in some other
+terminal can be watched but not addressed. The bar is hidden in overlay mode.
 
-Apart from that opt-in, the app only watches agents and never controls them.
+## Hosted sessions
+
+The app can launch agents itself and be your main window onto them. Phase A hosts **Claude Code**;
+Codex and Antigravity are listed as providers but have no driver yet.
+
+**How a session is launched.** You pick a provider and a folder. The main process then:
+
+1. resolves the official `claude` executable from a fixed table (the renderer never supplies a
+   command, arguments or environment),
+2. writes a temporary settings file to `<config dir>/sessions/<session id>.settings.json`,
+3. starts `claude --settings <that file> --permission-mode <mode>` (plus `--model` / `--resume` if
+   you chose them) in a pseudo-terminal, with the folder as working directory, and
+4. shows that terminal in the app. It is the real Claude Code TUI: typing in the pane is typing
+   in your own terminal.
+
+**Your settings files are never modified.** Not `~/.claude/settings.json`, not the project's
+`.claude/`. Everything the app needs is in the temporary file, whose hooks Claude Code *adds* to
+your own. The file holds the app's port and a script path but no secret, and it is deleted when
+the session ends (leftovers of a crash are removed at the next start). Claude Code itself still
+writes what it always writes: its transcript, and its record that you trusted the folder.
+
+**What the temporary file injects.** `type: "http"` hooks for UserPromptSubmit, PreToolUse,
+PostToolUse, PostToolUseFailure, PermissionRequest, Notification, Stop, SubagentStart, SubagentStop
+and SessionEnd, all posting to the app's `/hooks/claude-code`, and one `type: "command"` hook on
+SessionStart (`hook/claude-session-start.cjs`, run with `node`, which must be on your PATH). The
+command hook exists because SessionStart cannot be an http hook and because only a command hook can
+read the session's inbox endpoint. Observation hooks time out after 5 s, so a dead app never stalls
+Claude.
+
+**Session states.** `starting` → `idle` once SessionStart arrives. If it doesn't within about 4 s
+the session shows `needs-attention`: Claude Code is asking something only the terminal can answer,
+usually "do you trust this folder?" or a login. Answer it in the pane; the app never accepts folder
+trust for you. Then `busy` while a turn runs, `waiting-permission` while a request is pending, back
+to `idle` on Stop, and `exited` when the process ends. Claude Code sends no Stop after Esc or
+Ctrl+C, so after an interrupt the app reads the terminal title (`✳` = waiting for input) and
+settles on `idle` about 2.5 s later.
+
+**Permission flow.** When Claude Code needs approval it calls the PermissionRequest hook and the
+app holds that HTTP request open (the hook's timeout is one hour). A card appears in your office
+and the blocked agent walks over with a memo. Claude Code shows its own dialog in the terminal at
+the same time; whichever is answered first wins.
+
+- You decide in the app: the held request is answered with allow, or deny plus your message, and
+  the terminal prints "Allowed by PermissionRequest hook".
+- You answer in the terminal, press Esc, or the hook times out: Claude Code closes the connection
+  and the card disappears ("resolved elsewhere").
+- Sessions you did not start from the app get an empty answer at once, so their own terminal
+  dialog decides. They show up in the office but cannot be approved from it.
+
+**Orders.** With **Allow CEO orders** on, the speech bar delivers text to one session, to every
+session of a provider, or to the whole office. Delivery uses the session's Claude Code inbox socket
+(a named pipe on Windows), reported by the SessionStart hook and kept in memory only. The agent
+sees an order as a message from a teammate session, not as you typing: it cannot approve a
+permission, and a slash command arrives as plain text. An idle session confirms an order through
+its UserPromptSubmit hook within a few seconds; a busy session queues it and picks it up between
+tool calls, which the app reports as delivered. If a session has no inbox socket, a short order is
+typed into its terminal instead, and only while it is idle.
+
+**Security rules.**
+
+- Approving a permission and sending an order travel over the app's internal IPC only. **No HTTP
+  route does either**, because every agent the app launches can reach the HTTP port.
+- Each hosted session gets its own random ingest token. It is accepted on `/hooks/claude-code`
+  only, and only as that session; it cannot post to `/events`, open `/ws`, or speak for another
+  session. It is revoked when the session ends. The global token in `config.json` is never given
+  to an agent.
+- An inbox endpoint is only accepted from a hosted session's own token. Inbox tokens and session
+  tokens are never written to disk, logged, or sent to the renderer.
+- The renderer chooses a provider id and a folder. The folder must exist; model and resume ids are
+  checked against a strict pattern; the permission mode is one of `default`, `acceptEdits`, `plan`.
+- Agents run in a separate terminal host process. Stopping a session kills its whole process tree,
+  and quitting the app (or the app dying) takes every hosted agent down with it.
+- `CLAUDE*` and `AI_AGENT` environment variables are removed before launching, so a session never
+  inherits the identity of a Claude Code terminal the app was started from.
+
+`npx electron scripts/e2e-phase-a.cjs` (after `npx electron-vite build`) runs the whole flow against
+the real CLI in a scratch folder: start, permission approved from the registry, an order over the
+inbox socket, an interrupt, stop. It uses one short real session.
 
 ## Setup
 
@@ -56,7 +131,7 @@ Requires **Node 22.12+** (Electron 44).
 npm install
 npm run dev          # starts the app; first run creates the config + token
 npm run simulate     # in another terminal: fake teams so you can watch without a real agent
-npm test             # roster, world/pathfinding, corridors, movement rules, orders, session inbox
+npm test             # roster, world/pathfinding, corridors, movement rules, orders, session inbox, hosted sessions
 ```
 
 `npm run simulate -- --teams 3 --speed 2 --once` changes the number of teams, the speed, and whether it loops.
@@ -79,7 +154,7 @@ For testing, `AGENT_OFFICE_USER_DATA=<dir>` runs a second, isolated instance wit
 `__agentOfficeDev.officeWide(true|false)` in devtools toggles office-wide mode.
 
 - The ingest server listens on **127.0.0.1 only** (default port 47821).
-- Every request must carry the token in the **`X-Agent-Office-Token` header**. The token is never accepted in the URL.
+- Every request must carry a token in the **`X-Agent-Office-Token` header**: the global one from the config file, or a hosted session's own (which only reaches `/hooks/claude-code`, see [Hosted sessions](#hosted-sessions)). A token is never accepted in the URL.
 - Requests with a browser `Origin` header or an unexpected `Host` are rejected. This protects against malicious web pages and DNS rebinding.
 - The token is 32 random bytes, generated on first run. Replace it any time from the tray (**Regenerate token**) or by editing the config file.
 
@@ -116,7 +191,7 @@ An adapter turns one source's native format into `AgentEvent`s. The scene never 
 
 - **External adapters** are scripts or tools that POST common-format events to `/events` or `/ws`. You can write them in any language, and the app needs no changes. This is the easiest route for new AI tools.
 - **Built-in adapters** live in `electron/adapters/` and come in two kinds:
-  - `HttpAdapter`: owns a route such as `/hooks/claude-code`, receives the tool's raw payload, and returns a JSON response. That response is where approve/deny decisions will go in the future.
+  - `HttpAdapter`: owns a route such as `/hooks/claude-code`, receives the tool's raw payload, and returns a JSON response. The response can be held open: that is how a hosted Claude Code session's permission request waits for your decision.
   - `BackgroundAdapter`: `start(sink)` / `stop()`, for things like tailing log files.
 
   Both call `sink.emit(event)`.
@@ -141,7 +216,7 @@ another branch's door, so no branch becomes a thoroughfare) to the new lot, then
 (floor, walls, furniture, sign) and the team moves in.
 Only buildings and built corridors are walkable. When a whole team has left, its branch is demolished
 and corridors nobody else needs retract. Branches never move once placed. The camera fits everything
-(zoom floor 0.5×; wheel to zoom, drag to pan, double-click to refit, click a team in the legend to jump to it).
+(zoom floor 0.3×; wheel to zoom, drag to pan, double-click to refit, click a team in the legend to jump to it).
 
 Both maps are orthogonal [Tiled](https://www.mapeditor.org/) JSON (embedded tilesets), same tile size:
 - **`locations`** object layer: point objects whose *class/type* is the location type.
@@ -172,11 +247,13 @@ See `themes/office/` (generated by `scripts/gen-office-map.cjs`) and `docs/art-d
 ## Project layout
 
 ```
-electron/   main process: window, tray, config, ingest server, adapters, theme protocol
+electron/   main process: window, tray, config, ingest server, adapters, theme protocol,
+            hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process)
+hook/       the SessionStart command hook injected into hosted Claude Code sessions
 shared/     event format, theme format, IPC contract
 src/        renderer: Phaser scene, characters, roster, HUD
 themes/     bundled themes
-scripts/    simulate.ts, map generator
+scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI)
 docs/       research notes (hooks, art direction)
 ```
 
@@ -185,7 +262,8 @@ docs/       research notes (hooks, art direction)
    ✅ Dynamic branches per session, A* pathfinding, sealed CEO office
    ✅ Corridor + construction animation when a team arrives, demolition when it leaves
    ✅ Team colours + distinct managers, branch-confined workers, memo relay via managers, CEO speech bar UI + gated `sendOrder` plumbing
-2. Claude Code hook adapter + install snippet, real order delivery (fills the session inbox registry)
+2. ✅ Phase A (main process): hosted Claude Code sessions in an embedded terminal, hook adapter, permission
+   requests answered from the app, real order delivery. Next: Codex (B) and Antigravity (C) drivers, and an
+   install snippet so sessions started in your own terminal report in too
 3. Claude Code transcript watcher (zero setup), prison theme
 4. Real pixel art
-5. (Later) approve/deny permission requests from your office

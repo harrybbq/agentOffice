@@ -1,0 +1,81 @@
+/* Design tokens. Dark by default; [data-ui-theme='light'] on <html> swaps the palette.
+   --term-bg must match terminalTheme() in ui/terminals.ts. */
+:root {
+  color-scheme: dark;
+
+  --bg: #0e0f14;
+  --surface: #14151c;
+  --surface-2: #1a1c25;
+  --surface-3: #22242f;
+  --surface-hover: rgba(255, 255, 255, 0.045);
+  --surface-active: rgba(255, 255, 255, 0.075);
+  --float: rgba(22, 24, 32, 0.94);
+  --border: #252834;
+  --border-strong: #343848;
+
+  --text: #e6e8ef;
+  --text-2: #a3a8b8;
+  --text-3: #6d7285;
+
+  --accent: #7c8cff;
+  --accent-strong: #6474f2;
+  --accent-weak: rgba(124, 140, 255, 0.14);
+  --accent-text: #b3bcff;
+  --on-accent: #0d0f1a;
+
+  --ok: #4cc38a;
+  --ok-weak: rgba(76, 195, 138, 0.14);
+  --warn: #f0b64f;
+  --warn-weak: rgba(240, 182, 79, 0.13);
+  --danger: #ef6b66;
+  --danger-weak: rgba(239, 107, 102, 0.14);
+  --info: #5fb8e8;
+
+  --term-bg: #111218;
+
+  --shadow-float: 0 10px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --font: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --mono: 'Cascadia Mono', 'Cascadia Code', 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root[data-ui-theme='light'] {
+  color-scheme: light;
+
+  --bg: #eceef3;
+  --surface: #f6f7fa;
+  --surface-2: #ffffff;
+  --surface-3: #eceef4;
+  --surface-hover: rgba(20, 24, 40, 0.05);
+  --surface-active: rgba(20, 24, 40, 0.085);
+  --float: rgba(255, 255, 255, 0.96);
+  --border: #dfe2ea;
+  --border-strong: #c9cdd9;
+
+  --text: #1c1e26;
+  --text-2: #565b6b;
+  --text-3: #8a8fa0;
+
+  --accent: #4a5be0;
+  --accent-strong: #3d4dcc;
+  --accent-weak: rgba(74, 91, 224, 0.1);
+  --accent-text: #3a49c2;
+  --on-accent: #ffffff;
+
+  --ok: #1f9d63;
+  --ok-weak: rgba(31, 157, 99, 0.12);
+  --warn: #b97a09;
+  --warn-weak: rgba(214, 150, 30, 0.16);
+  --danger: #d1453f;
+  --danger-weak: rgba(209, 69, 63, 0.1);
+  --info: #1f86c2;
+
+  --term-bg: #fbfbfd;
+
+  --shadow-float: 0 10px 28px rgba(30, 34, 60, 0.16), 0 0 0 1px rgba(30, 34, 60, 0.08);
+  --shadow-modal: 0 24px 64px rgba(30, 34, 60, 0.28), 0 0 0 1px rgba(30, 34, 60, 0.08);
+}

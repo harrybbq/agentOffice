@@ -280,8 +280,17 @@ await t('session inbox: writes the auth line, then the message, to the session s
   const res = await inbox.deliver('sess-1', 'Ship the release\nnotes today')
   assert.deepEqual(res, { ok: true })
   await received
-  assert.equal(got, '{"type":"auth","token":"tok-123"}\nShip the release notes today\n')
-  assert.equal(wirePayload('t', 'a'), '{"type":"auth","token":"t"}\na\n')
+  // Wire format from docs/spikes-phase-a.md (4a): auth line, then ONE JSON line. Newlines survive
+  // inside the JSON string; a plain-text second line is silently dropped by Claude Code.
+  const lines = (got as unknown as string).split('\n')
+  assert.equal(lines.length, 3)
+  assert.equal(lines[2], '')
+  assert.deepEqual(JSON.parse(lines[0]), { type: 'auth', token: 'tok-123' })
+  assert.deepEqual(JSON.parse(lines[1]), { type: 'user', message: { role: 'user', content: 'Ship the release\nnotes today' } })
+  assert.equal(
+    wirePayload('t', 'a\nb'),
+    '{"type":"auth","token":"t"}\n{"type":"user","message":{"role":"user","content":"a\\nb"}}\n'
+  )
   // Tokens never leak through serialisation.
   assert.ok(!JSON.stringify(inbox).includes('tok-123'))
   await new Promise<void>((r) => (server as Server).close(() => r()))
@@ -300,4 +309,6 @@ await t('session inbox: unregistered session -> not connected; dead socket -> fa
   await assert.rejects(deliverToSocket({ socketPath: socketPath('missing2'), token: 'x' }, 'hi', 2000))
 })
 
-console.log(`\n${pass} rules tests passed`)
+console.log(`\n${pass} rules tests passed\n`)
+
+await import('./hosted.test.ts')

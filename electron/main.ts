@@ -18,15 +18,25 @@ import {
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type RendererSettings } from '../shared/ipc'
-import { planOrder, type OrderResult } from '../shared/orders'
+import { createClaudeCodeHooksAdapter } from './adapters/claude-code-hooks'
 import { EventBus } from './bus'
+import { claudeProvider, sweepSessionFiles } from './drivers/claude'
+import { SessionTokens } from './ingest/auth'
+import { HOST, startIngestServer, type IngestServer } from './ingest/server'
+import { PtyHostClient } from './ptyClient'
 import { SessionInbox } from './sessionInbox'
-import { startIngestServer, type IngestServer } from './ingest/server'
+import { SessionManager } from './sessions'
+import { registerSessionIpc } from './sessionsIpc'
 import { isValidThemeName, listThemes, loadTheme, registerThemeProtocol, registerThemeScheme } from './themes'
 
 const HERE = dirname(fileURLToPath(import.meta.url)) // out/main
 const PRELOAD = join(HERE, '../preload/index.cjs')
 const RENDERER_HTML = join(HERE, '../renderer/index.html')
+const PTY_HOST = join(HERE, 'ptyHost.js')
+// Run by `node` from a hosted session's SessionStart hook, so it must be a real file on disk.
+const SESSION_START_HOOK = app.isPackaged
+  ? join(process.resourcesPath, 'hook', 'claude-session-start.cjs')
+  : join(HERE, '../../hook/claude-session-start.cjs')
 const DEV_URL = process.env.ELECTRON_RENDERER_URL
 const OVERLAY_SHORTCUT = 'CommandOrControl+Shift+O'
 
@@ -36,8 +46,13 @@ let server: IngestServer | null = null
 let serverStatus = 'starting…'
 let quitting = false
 const bus = new EventBus()
-/** Session inbox sockets + tokens (memory only; filled by the Claude Code hook adapter in M2). */
+/** Session inbox sockets + tokens (memory only; filled by each hosted session's SessionStart hook). */
 const inbox = new SessionInbox()
+/** Ingest tokens of hosted sessions (memory only). Each only reaches the hooks route, for its session. */
+const sessionTokens = new SessionTokens()
+let ptyHost: PtyHostClient | null = null
+let sessions: SessionManager | null = null
+let shutdownDone = false
 
 // ---------- pre-ready ----------
 
@@ -47,8 +62,16 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => showWindow())
-  app.on('before-quit', () => {
+  app.on('before-quit', (e) => {
     quitting = true
+    // Hosted agents must not outlive the app: kill their process trees before we go.
+    if (shutdownDone || !ptyHost) return
+    e.preventDefault()
+    sessions?.close()
+    void ptyHost.shutdown().finally(() => {
+      shutdownDone = true
+      app.quit()
+    })
   })
   // Keep running in the tray when windows go away (also covers overlay recreation).
   app.on('window-all-closed', () => {})
@@ -73,12 +96,19 @@ async function onReady(): Promise<void> {
   session.defaultSession.setPermissionCheckHandler(() => false)
 
   registerThemeProtocol()
+  createSessions()
   registerIpc()
   createTray()
   createWindow()
 
   try {
-    server = await startIngestServer({ port: getConfig().port, getToken: () => getConfig().token, sink: bus })
+    server = await startIngestServer({
+      port: getConfig().port,
+      getToken: () => getConfig().token,
+      sink: bus,
+      sessionTokens,
+      claudeHooks: createClaudeCodeHooksAdapter(sessions ?? undefined)
+    })
     serverStatus = `listening on 127.0.0.1:${server.port}`
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -108,19 +138,34 @@ function rendererSettings(): RendererSettings {
   }
 }
 
-/** CEO speech bar -> session inbox(es). Validated, gated by the tray toggle, never throws. */
-async function sendOrder(input: unknown): Promise<OrderResult> {
-  const plan = planOrder(input, { allowOrders: getConfig().allowOrders, known: bus.topLevelIds() })
-  if (!plan.ok) return plan.result
-  const result: OrderResult = { delivered: [], failed: [] }
-  await Promise.all(
-    plan.targets.map(async (id) => {
-      const r = await inbox.deliver(id, plan.text)
-      if (r.ok) result.delivered.push(id)
-      else result.failed.push({ agentId: id, reason: r.reason })
-    })
-  )
-  return result
+/** Sends to the current window, if it can listen. `win` is replaced when overlay mode toggles. */
+function toRenderer(channel: string, payload: unknown): void {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, payload)
+}
+
+/** Hosted sessions: the pty host, the provider table and the manager that the IPC handlers call. */
+function createSessions(): void {
+  const sessionsDir = join(app.getPath('userData'), 'sessions')
+  sweepSessionFiles(sessionsDir) // leftovers of a crash; the single-instance lock means nobody uses them
+  const host = new PtyHostClient(PTY_HOST, (id, data) => sessions?.terminalData(id, data))
+  ptyHost = host
+  sessions = new SessionManager({
+    pty: host,
+    sink: bus,
+    providers: [
+      claudeProvider({
+        sessionsDir,
+        hookScript: SESSION_START_HOOK,
+        inbox,
+        ingest: { baseUrl: () => (server ? `http://${HOST}:${server.port}` : null), tokens: sessionTokens }
+      })
+    ],
+    allowOrders: () => getConfig().allowOrders,
+    worldTopLevel: () => bus.topLevel(),
+    onSessionsChanged: (list) => toRenderer(IPC.sessionsChanged, list),
+    onPermissionsChanged: (pending) => toRenderer(IPC.permissionsChanged, pending),
+    onTerminalData: (id, data) => toRenderer(IPC.termData, { id, data })
+  })
 }
 
 function fromOurWindow(e: IpcMainInvokeEvent): boolean {
@@ -137,7 +182,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.getSettings, guard(() => rendererSettings()))
   ipcMain.handle(IPC.listThemes, guard(() => listThemes()))
   ipcMain.handle(IPC.loadTheme, guard((name: unknown) => loadTheme(name)))
-  ipcMain.handle(IPC.sendOrder, guard((req: unknown) => sendOrder(req)))
+  ipcMain.handle(IPC.sendOrder, guard((req: unknown) => sessions!.sendOrder(req)))
+  registerSessionIpc({ manager: sessions!, getWindow: () => win })
 }
 
 function pushSettings(): void {
@@ -164,8 +210,10 @@ function createWindow(): void {
   const prev = win && !win.isDestroyed() ? win.getBounds() : null
 
   const w = new BrowserWindow({
-    width: prev?.width ?? 1000,
-    height: prev?.height ?? 700,
+    width: prev?.width ?? 1440,
+    height: prev?.height ?? 900,
+    minWidth: 1000,
+    minHeight: 650,
     x: prev?.x,
     y: prev?.y,
     title: 'Agent Office',
@@ -214,6 +262,11 @@ function createWindow(): void {
   w.once('ready-to-show', () => (process.env.AGENT_OFFICE_SHOW_INACTIVE === '1' ? w.showInactive() : w.show()))
 
   bus.attach(w.webContents)
+  // A (re)loading or replaced renderer has lost its terminals: stop streaming until it attaches again.
+  sessions?.detachAll()
+  w.webContents.on('did-start-loading', () => {
+    if (win === w) sessions?.detachAll()
+  })
   const old = win
   win = w
   // destroy() skips the 'close' handler, so the hide-to-tray logic doesn't interfere.
