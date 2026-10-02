@@ -201,6 +201,8 @@ async function main() {
   log(`started session ${id} state=${info.state} title=${JSON.stringify(info.title)}`)
   const settingsFile = path.join(USER_DATA, 'sessions', `${id}.settings.json`)
   check('temp settings file written under userData/sessions', fs.existsSync(settingsFile))
+  const briefingFile = path.join(USER_DATA, 'sessions', `${id}.briefing.md`)
+  check('briefing file written (appended to the system prompt)', fs.existsSync(briefingFile) && /Agent Office/.test(fs.readFileSync(briefingFile, 'utf8')))
   check('world: manager spawned (idle, provider claude-code)', world[0] && world[0].agentId === id && world[0].parentId === null && world[0].provider === 'claude-code' && world[0].displayName === 'e2e team')
 
   // Folder trust (first run in this folder): no hooks fire until it is accepted.
@@ -312,7 +314,7 @@ async function main() {
   check('state exited', state() === 'exited', `exitCode=${manager.list()[0] && manager.list()[0].exitCode}`)
   check('SessionEnd hook (polite /exit)', !!hookSince('SessionEnd', t), (hookSince('SessionEnd', t) || { body: {} }).body.reason)
   check('world: manager done', world[world.length - 1].activity === 'done' && world[world.length - 1].agentId === id)
-  check('temp settings file deleted', !fs.existsSync(settingsFile))
+  check('temp settings + briefing files deleted', !fs.existsSync(settingsFile) && !fs.existsSync(briefingFile))
   check('session token revoked, inbox endpoint forgotten', tokens.size === 0 && !inbox.has(id))
   check('all hooks came in with the per-session token', hooks.length > 0)
 

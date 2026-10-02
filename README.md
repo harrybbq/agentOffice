@@ -18,7 +18,7 @@ Characters walk to where the work happens:
 When a subagent starts, its manager hands over a folder at a free desk. When it finishes, it carries a report back to the manager.
 
 ### Who may go where
-- **Each team has its own colour** (theme `teams.colors`): the branch sign, the HUD legend, the manager's
+- **Each team has its own colour** (theme `teams.colors`): the branch sign, the session list, the manager's
   clipboard and collar, and a collar + chest badge on every worker of that team. Each manager also has a
   **distinct face** (hairstyle, hair colour, skin tone), picked deterministically per team and kept unique
   among live managers where possible. Body colour = provider, as before.
@@ -29,20 +29,54 @@ When a subagent starts, its manager hands over a folder at a free desk. When it 
   badge), and waits there while anyone in its team is waiting. It then goes home. The manager's own
   activity meanwhile is collapsed to the latest event and done afterwards. A manager that is waiting
   itself goes to the inbox directly. Managers use corridors and the HQ but never walk through another
-  branch. The "Waiting on you" panel still lists every waiting agent, grouped by team.
+  branch. The CEO inbox still lists every waiting agent.
 - **Office-wide orders** (see below) lift the branch rule: workers may use the nearest station
   anywhere, bring memos straight to the HQ inbox and use the corridors. The mode shows a green
   "Office-wide task in progress" pill. It ends when every team that received the order has gone `idle`/`done`,
   after a timeout (`officeWideMinutes`, default 10), or when you click the pill. Workers then walk home.
 
-### CEO speech bar
-At the bottom of the window: pick **Whole office** or one team, type, press **Enter** (Esc leaves
-the field). The CEO says it in a speech bubble and a sealed order envelope flies to the manager(s).
-For the whole office a PA banner also runs across the top. The result shows as a toast.
+### The window
+The app is your main window onto the agents, not only a viewer:
 
-Orders are **off by default**. Turn on **Allow CEO orders** in the tray. Orders reach sessions the
-app launched itself (see [Hosted sessions](#hosted-sessions)); a session started in some other
-terminal can be watched but not addressed. The bar is hidden in overlay mode.
+- **Sessions (left).** Hosted sessions grouped by provider, each with its team colour, folder and
+  state dot (starting, needs attention, idle, working, waiting for permission, exited), a badge for
+  pending requests and `+N` for its subagents. **New session** opens a dialog: provider, folder
+  (type or paste a path, or **Browse…**), permission mode, optional title and model. Sessions that
+  run outside the app are listed under **Observed**.
+- **World (centre).** The office. Click a session to focus its branch; double-click the world or
+  use the corner button to fit the whole office again.
+- **Order bar (under the world).** Pick **Everyone**, a provider or one session, type, press
+  **Enter** (**Shift+Enter** adds a line, Esc leaves the field). The CEO says it in a speech
+  bubble and a sealed order envelope flies to the manager(s). For more than one session a PA
+  banner also runs across the top. The result shows above the bar ("Delivered to 2", or who
+  failed and why). Orders are **off by default**: turn on **Allow CEO orders** in the tray.
+- **Panel (right, or under the world in a narrow window).** Two tabs. **Terminal** is the
+  selected session's real terminal, with **Interrupt** and **Stop** (asks first). **Events** is
+  the live event log, filterable by activity and by the selected session. Drag the splitter to
+  resize, double-click it to reset; the dock button moves the panel between right and bottom.
+- **CEO inbox.** Permission requests with **Allow** / **Deny** (Deny takes an optional reason
+  that the agent sees). With the list focused: arrows move, **A** allows, **D** denies, **E**
+  shows the full request, Enter opens that session's terminal. Requests that only a terminal can
+  answer are listed below, with a link to it.
+- **Status bar.** Connection, running sessions, pending requests, event count, light / dark
+  interface, panel toggle.
+
+| Shortcut | Does |
+|---|---|
+| Ctrl+N | New session |
+| Ctrl+1 … Ctrl+9 | Select that session and focus its terminal |
+| Ctrl+` | Show / hide the panel |
+| Ctrl+K or / | Focus the order bar (inside a terminal, Ctrl+K and / go to the agent) |
+| Ctrl+Shift+O | Overlay mode (world only, click-through) |
+
+**In the terminal.** Every other key goes to the agent. **Shift+Enter** inserts a new line in the
+agent's input. **Ctrl+V** pastes (as a bracketed paste, so a multi-line paste is not submitted).
+**Ctrl+Shift+C**, or Ctrl+C with a selection, copies. Claude Code's fullscreen interface handles
+the mouse itself (its own selection, paste on right-click, the wheel scrolls its transcript);
+hold **Shift** while dragging for the terminal's own selection. In a program that doesn't use the
+mouse, right-click copies the selection or pastes. While the window is hidden (tray, minimised)
+its terminals are detached, so a throttled window never slows an agent down; they come back with
+the current screen when you show it.
 
 ## Hosted sessions
 
@@ -53,25 +87,40 @@ Codex and Antigravity are listed as providers but have no driver yet.
 
 1. resolves the official `claude` executable from a fixed table (the renderer never supplies a
    command, arguments or environment),
-2. writes a temporary settings file to `<config dir>/sessions/<session id>.settings.json`,
-3. starts `claude --settings <that file> --permission-mode <mode>` (plus `--model` / `--resume` if
-   you chose them) in a pseudo-terminal, with the folder as working directory, and
+2. writes two temporary files to `<config dir>/sessions/`: `<session id>.settings.json` (hooks)
+   and `<session id>.briefing.md` (what the session is told about the app),
+3. starts `claude --settings <settings file> --permission-mode <mode> --append-system-prompt-file
+   <briefing file>` (plus `--model` / `--resume` if you chose them) in a pseudo-terminal, with the
+   folder as working directory, and
 4. shows that terminal in the app. It is the real Claude Code TUI: typing in the pane is typing
    in your own terminal.
 
 **Your settings files are never modified.** Not `~/.claude/settings.json`, not the project's
-`.claude/`. Everything the app needs is in the temporary file, whose hooks Claude Code *adds* to
-your own. The file holds the app's port and a script path but no secret, and it is deleted when
-the session ends (leftovers of a crash are removed at the next start). Claude Code itself still
+`.claude/`. Everything the app needs is in the temporary files. Claude Code *adds* the hooks of the
+settings file to your own. That file holds the app's port and a script path but no secret, and both
+files are deleted when the session ends (leftovers of a crash are removed at the next start). Claude Code itself still
 writes what it always writes: its transcript, and its record that you trusted the folder.
 
-**What the temporary file injects.** `type: "http"` hooks for UserPromptSubmit, PreToolUse,
+**What the temporary file injects.** A deny rule for the `ListAgents` and `SendMessage` tools
+plus `isolatePeerMachines: true`, so a hosted session cannot discover or message your other
+Claude Code sessions. This isolates the hosted session's *outbound* side only: orders from the
+app still arrive (the inbox is inbound, and `crossSessionInbound` is deliberately left unset),
+and another local session could still address a hosted session by name. A full inbound lockdown
+(`crossSessionInbound: "refuse"` with orders typed into the terminal instead) is a possible
+future "strict isolation" option; it is not built. And `type: "http"` hooks for UserPromptSubmit, PreToolUse,
 PostToolUse, PostToolUseFailure, PermissionRequest, Notification, Stop, SubagentStart, SubagentStop
 and SessionEnd, all posting to the app's `/hooks/claude-code`, and one `type: "command"` hook on
 SessionStart (`hook/claude-session-start.cjs`, run with `node`, which must be on your PATH). The
 command hook exists because SessionStart cannot be an http hook and because only a command hook can
 read the session's inbox endpoint. Observation hooks time out after 5 s, so a dead app never stalls
 Claude.
+
+**What the session knows.** The briefing is about 200 words appended to Claude's system prompt:
+it was started from Agent Office, it manages the team named after the session, its subagents show
+up as workers, permission requests also appear in your CEO inbox, orders from the order bar
+may arrive as a cross-session message starting with `[CEO order via Agent Office]`, and
+cross-session messaging tools are disabled. It is context
+only and asks for no change in behaviour. The template is `electron/drivers/claudeBriefing.ts`.
 
 **Session states.** `starting` → `idle` once SessionStart arrives. If it doesn't within about 4 s
 the session shows `needs-attention`: Claude Code is asking something only the terminal can answer,
@@ -93,14 +142,18 @@ the same time; whichever is answered first wins.
 - Sessions you did not start from the app get an empty answer at once, so their own terminal
   dialog decides. They show up in the office but cannot be approved from it.
 
-**Orders.** With **Allow CEO orders** on, the speech bar delivers text to one session, to every
+**Orders.** With **Allow CEO orders** on, the order bar delivers text to one session, to every
 session of a provider, or to the whole office. Delivery uses the session's Claude Code inbox socket
 (a named pipe on Windows), reported by the SessionStart hook and kept in memory only. The agent
-sees an order as a message from a teammate session, not as you typing: it cannot approve a
-permission, and a slash command arrives as plain text. An idle session confirms an order through
+sees an order as a message from another session, not as you typing: Claude Code shows it as
+"Another Claude session sent a message" with its usual caution about such messages, it cannot
+approve a permission, and a slash command arrives as plain text. The first line of an order is
+`[CEO order via Agent Office]`, which the briefing explains. For anything that needs your own
+authority, type it in the session's terminal. An idle session confirms an order through
 its UserPromptSubmit hook within a few seconds; a busy session queues it and picks it up between
 tool calls, which the app reports as delivered. If a session has no inbox socket, a short order is
-typed into its terminal instead, and only while it is idle.
+typed into its terminal instead (without the tag: there it is your own typing), and only while it
+is idle.
 
 **Security rules.**
 
@@ -251,7 +304,8 @@ electron/   main process: window, tray, config, ingest server, adapters, theme p
             hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process)
 hook/       the SessionStart command hook injected into hosted Claude Code sessions
 shared/     event format, theme format, IPC contract
-src/        renderer: Phaser scene, characters, roster, HUD
+src/        renderer: the React shell (src/ui: sessions, terminal, CEO inbox, order bar) and the
+            Phaser world (scene, characters, roster)
 themes/     bundled themes
 scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI)
 docs/       research notes (hooks, art direction)
@@ -262,8 +316,8 @@ docs/       research notes (hooks, art direction)
    ✅ Dynamic branches per session, A* pathfinding, sealed CEO office
    ✅ Corridor + construction animation when a team arrives, demolition when it leaves
    ✅ Team colours + distinct managers, branch-confined workers, memo relay via managers, CEO speech bar UI + gated `sendOrder` plumbing
-2. ✅ Phase A (main process): hosted Claude Code sessions in an embedded terminal, hook adapter, permission
-   requests answered from the app, real order delivery. Next: Codex (B) and Antigravity (C) drivers, and an
+2. ✅ Phase A: hosted Claude Code sessions in an embedded terminal, hook adapter, permission
+   requests answered from the app, real order delivery, the app shell (sessions, terminal, CEO inbox, order bar). Next: Codex (B) and Antigravity (C) drivers, and an
    install snippet so sessions started in your own terminal report in too
 3. Claude Code transcript watcher (zero setup), prison theme
 4. Real pixel art

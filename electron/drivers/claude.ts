@@ -21,6 +21,7 @@ import {
 } from '../adapters/claude-code-hooks'
 import type { RequestContext } from '../adapters/types'
 import { DEFAULT_DENY_MESSAGE, describeToolInput } from '../permissions'
+import { claudeBriefing, taggedOrder } from './claudeBriefing'
 import type { SessionInbox } from '../sessionInbox'
 import { SessionStateMachine, titleHint, type Scheduler } from './sessionState'
 import {
@@ -79,10 +80,25 @@ export function scrubbedEnv(base: NodeJS.ProcessEnv): Record<string, string> {
 }
 
 /**
- * The settings passed with `--settings`. Hooks from this file are ADDED to the user's own. It holds
- * the app's port and a script path, but no secret: the token is read from the env var `AO_TOKEN`.
+ * Tools a hosted session may not use: the ones that list and message other Claude Code sessions
+ * on the machine. A hosted session must not discover or contact the user's own sessions. Orders
+ * from the app still arrive: the inbox socket is inbound and needs neither tool.
  */
-export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string }): { hooks: Record<string, unknown[]> } {
+export const DENIED_TOOLS: readonly string[] = ['ListAgents', 'SendMessage']
+
+export interface ClaudeSettings {
+  permissions: { deny: string[] }
+  /** No discovery of sessions on other machines either. */
+  isolatePeerMachines: true
+  hooks: Record<string, unknown[]>
+}
+
+/**
+ * The settings passed with `--settings`. Hooks and deny rules from this file are ADDED to the
+ * user's own. It holds the app's port and a script path, but no secret: the token is read from the
+ * env var `AO_TOKEN`.
+ */
+export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string }): ClaudeSettings {
   const hooks: Record<string, unknown[]> = {}
   // SessionStart can't be an http hook, and only a command hook sees the inbox socket + token.
   hooks.SessionStart = [
@@ -106,13 +122,17 @@ export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string
     }
     hooks[event] = [TOOL_EVENTS.includes(event) ? { matcher: '*', hooks: [hook] } : { hooks: [hook] }]
   }
-  return { hooks }
+  // `crossSessionInbound` is left unset on purpose: "refuse" keeps the inbox socket bound but drops
+  // every message, which would also drop the app's own orders.
+  return { permissions: { deny: [...DENIED_TOOLS] }, isolatePeerMachines: true, hooks }
 }
 
 /** The command line. Only values the main process validated end up here. */
-export function claudeArgs(start: ValidatedStart, settingsFile: string): string[] {
+export function claudeArgs(start: ValidatedStart, settingsFile: string, briefingFile?: string): string[] {
   // Always pass the mode: without the flag a session ran in `auto` on this machine (spikes).
   const args = ['--settings', settingsFile, '--permission-mode', start.permissionMode]
+  // Where the session runs (drivers/claudeBriefing.ts), added to Claude's own system prompt.
+  if (briefingFile) args.push('--append-system-prompt-file', briefingFile)
   if (start.model) args.push('--model', start.model)
   if (start.resume) args.push('--resume', start.resume)
   return args
@@ -198,7 +218,7 @@ export function findClaudeExecutable(env: NodeJS.ProcessEnv = process.env, platf
   return candidates.find((c) => existsSync(c)) ?? null
 }
 
-/** Removes temp settings files a crashed run left behind. Only call when no session is running. */
+/** Removes temp settings and briefing files a crashed run left behind. Only call when no session is running. */
 export function sweepSessionFiles(sessionsDir: string): void {
   let names: string[] = []
   try {
@@ -207,7 +227,7 @@ export function sweepSessionFiles(sessionsDir: string): void {
     return
   }
   for (const name of names) {
-    if (!name.endsWith('.settings.json')) continue
+    if (!name.endsWith('.settings.json') && !name.endsWith('.briefing.md')) continue
     try {
       rmSync(join(sessionsDir, name), { force: true })
     } catch {
@@ -245,7 +265,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   private readonly id: string
   private readonly mapper: ClaudeHookMapper
   private machine: SessionStateMachine | null = null
-  private settingsFile: string | null = null
+  /** Temp files of this session: its settings and its briefing. */
+  private tempFiles: string[] = []
   private providerSession: string | undefined
   private exited = false
   private exitWaiters: Array<() => void> = []
@@ -289,7 +310,10 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       encoding: 'utf8',
       mode: 0o600
     })
-    this.settingsFile = settingsFile
+    // What the session is told about Agent Office. No secret in it either.
+    const briefingFile = join(this.opts.sessionsDir, `${this.id}.briefing.md`)
+    writeFileSync(briefingFile, claudeBriefing({ title: this.ctx.start.title }), { encoding: 'utf8', mode: 0o600 })
+    this.tempFiles = [settingsFile, briefingFile]
 
     const env = scrubbedEnv(process.env)
     // A token of this session only: it reaches the hooks route and nothing else (ingest/auth.ts).
@@ -302,7 +326,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     try {
       await this.ctx.pty.spawn(
         this.id,
-        { file: exe, args: claudeArgs(this.ctx.start, settingsFile), cwd: this.ctx.start.cwd, env, cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
+        { file: exe, args: claudeArgs(this.ctx.start, settingsFile, briefingFile), cwd: this.ctx.start.cwd, env, cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
         { onExit: (code) => this.onExit(code), onTitle: (title) => this.machine?.title(titleHint(title)) }
       )
     } catch (err) {
@@ -417,7 +441,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     const confirmation = wasIdle ? this.nextPrompt(PROMPT_CONFIRM_MS) : null
 
     if (this.opts.inbox.has(this.id)) {
-      const r = await this.opts.inbox.deliver(this.id, text)
+      // Tagged, so the session can tell it from any other cross-session message (see the briefing).
+      const r = await this.opts.inbox.deliver(this.id, taggedOrder(text))
       if (!r.ok) return r
       // Mid-turn the message is queued and absorbed between tool calls; that can't be observed.
       if (!confirmation) return { ok: true, queued: true }
@@ -480,18 +505,17 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     this.ctx.events.onExit(exitCode)
   }
 
-  /** Token, inbox endpoint, pending cards and the temp settings file all die with the session. */
+  /** Token, inbox endpoint, pending cards and the temp files all die with the session. */
   private cleanup(): void {
     this.opts.ingest.tokens.revoke(this.id)
     this.opts.inbox.unregister(this.id)
     this.ctx.permissions.clearSession(this.id)
-    if (this.settingsFile) {
+    for (const file of this.tempFiles.splice(0)) {
       try {
-        rmSync(this.settingsFile, { force: true })
+        rmSync(file, { force: true })
       } catch {
         // swept on the next start
       }
-      this.settingsFile = null
     }
   }
 }

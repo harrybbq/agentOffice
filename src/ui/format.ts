@@ -276,6 +276,51 @@ export function retainExited(
   return kept.length > 0 ? [...next, ...kept] : [...next]
 }
 
+export interface WindowsPty {
+  backend: 'conpty'
+  buildNumber: number
+}
+
+/**
+ * xterm's `windowsPty` option from the real Windows build number (RendererSettings.windowsBuild).
+ * undefined when the app is not on Windows (build 0) or the main process doesn't report it.
+ */
+export function windowsPtyOption(build: unknown): WindowsPty | undefined {
+  return typeof build === 'number' && Number.isInteger(build) && build > 0 ? { backend: 'conpty', buildNumber: build } : undefined
+}
+
+/** Larger OSC 52 payloads are dropped (base64 chars). */
+export const OSC52_MAX_CHARS = 1024 * 1024
+
+/**
+ * The text of an OSC 52 "set clipboard" request ("<targets>;<base64 utf-8>"), or null when it is a
+ * query ("?"), empty, too large or not valid base64.
+ */
+export function osc52Text(data: string): string | null {
+  const sep = data.indexOf(';')
+  if (sep < 0) return null
+  const payload = data.slice(sep + 1)
+  if (payload.length === 0 || payload.length > OSC52_MAX_CHARS || !/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) return null
+  try {
+    const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+    return new TextDecoder().decode(bytes) || null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * World teams listed under "Observed": the ones the app only watches. A session the app hosted is
+ * never one of them, also not while its branch is still being cleared after it was removed.
+ */
+export function observedTeams<T extends { id: string }>(
+  teams: readonly T[],
+  sessions: readonly { id: string }[],
+  everHosted: ReadonlySet<string>
+): T[] {
+  return teams.filter((t) => !everHosted.has(t.id) && !sessions.some((s) => s.id === t.id))
+}
+
 /** A readable message without Electron's "Error invoking remote method" wrapper. */
 export function cleanError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)

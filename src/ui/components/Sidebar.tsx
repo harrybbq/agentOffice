@@ -2,7 +2,7 @@
 import { useMemo } from 'react'
 import type { SessionInfo, SessionState } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
-import { groupSessions, shortenPath, STATE_LABEL } from '../format'
+import { groupSessions, observedTeams, shortenPath, STATE_LABEL } from '../format'
 import { cx } from '../hooks'
 import { IconPlus } from '../icons'
 
@@ -21,9 +21,10 @@ export function Sidebar() {
   const teams = useAppState((s) => s.teams)
   const permissions = useAppState((s) => s.permissions)
   const selectedId = useAppState((s) => s.selectedId)
+  const everHosted = useAppState((s) => s.everHosted)
 
   const groups = useMemo(() => groupSessions(providers, sessions), [providers, sessions])
-  const observed = useMemo(() => teams.filter((t) => !sessions.some((s) => s.id === t.id)), [teams, sessions])
+  const observed = useMemo(() => observedTeams(teams, sessions, everHosted), [teams, sessions, everHosted])
   const canStart = providers.some((p) => p.available)
   let index = 0
 

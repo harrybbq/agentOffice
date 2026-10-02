@@ -8,7 +8,8 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import type { AgentOfficeBridge } from '../../shared/ipc'
 import { TERM_ACK_CHARS } from '../../shared/sessions'
-import { cleanError } from './format'
+import { cleanError, osc52Text, windowsPtyOption } from './format'
+import type { WindowsPty } from './format'
 import { appChord } from './keys'
 
 export type UiTheme = 'dark' | 'light'
@@ -71,33 +72,6 @@ export function terminalTheme(ui: UiTheme): ITheme {
 /** Larger writes are split so one big paste never exceeds the pty host's per-message limit. */
 const WRITE_CHUNK_CHARS = 256 * 1024
 
-interface WindowsPty {
-  backend: 'conpty'
-  buildNumber: number
-}
-
-/**
- * xterm needs to know it is talking to ConPTY to reflow correctly. The bridge doesn't expose the
- * Windows build, so it is derived from the platform version: 13+ means Windows 11 (build 22000+,
- * past the 21376 ConPTY reflow change), anything lower is a Windows 10 build.
- */
-async function detectWindowsPty(): Promise<WindowsPty | undefined> {
-  if (!/Windows/i.test(navigator.userAgent)) return undefined
-  let major = 0
-  try {
-    const uaData = (
-      navigator as Navigator & {
-        userAgentData?: { getHighEntropyValues(hints: string[]): Promise<{ platformVersion?: string }> }
-      }
-    ).userAgentData
-    const info = await uaData?.getHighEntropyValues(['platformVersion'])
-    major = Number.parseInt(info?.platformVersion ?? '0', 10) || 0
-  } catch {
-    major = 0
-  }
-  return { backend: 'conpty', buildNumber: major >= 13 ? 22000 : 19045 }
-}
-
 interface Entry {
   id: string
   term: Terminal
@@ -107,6 +81,10 @@ interface Entry {
   opened: boolean
   /** Snapshot written; streamed data may be rendered. */
   ready: boolean
+  /** Bumped by every attach / detach, so a late snapshot of an older attachment is dropped. */
+  gen: number
+  /** A snapshot was written at least once (a later one replaces the screen). */
+  shown: boolean
   queue: string[]
   unacked: number
   sent: { cols: number; rows: number } | null
@@ -123,17 +101,23 @@ export class TerminalManager {
   private focusWhenOpen = false
   private observer: ResizeObserver
   private windowsPty: WindowsPty | undefined
+  /** The window is hidden (tray, minimised): terminals are detached until it is back. */
+  private suspended = document.hidden
 
   constructor(private bridge: AgentOfficeBridge) {
     this.root = document.createElement('div')
     this.root.className = 'term-stack'
-    void detectWindowsPty().then((pty) => {
-      this.windowsPty = pty
-      if (pty) for (const e of this.entries.values()) e.term.options.windowsPty = pty
-    })
     bridge.terminal.onData((id, data) => this.onData(id, data))
     this.observer = new ResizeObserver(() => this.scheduleFit())
     this.observer.observe(this.root)
+    document.addEventListener('visibilitychange', () => this.onVisibility())
+  }
+
+  /** The real Windows build (RendererSettings.windowsBuild): xterm needs it to handle ConPTY output. */
+  setWindowsBuild(build: number): void {
+    const pty = windowsPtyOption(build)
+    this.windowsPty = pty
+    if (pty) for (const e of this.entries.values()) e.term.options.windowsPty = pty
   }
 
   has(id: string): boolean {
@@ -208,7 +192,7 @@ export class TerminalManager {
     term.loadAddon(fit)
     term.loadAddon(new Unicode11Addon())
     term.unicode.activeVersion = '11'
-    const e: Entry = { id, term, fit, el, webgl: null, opened: false, ready: false, queue: [], unacked: 0, sent: null }
+    const e: Entry = { id, term, fit, el, webgl: null, opened: false, ready: false, gen: 0, shown: false, queue: [], unacked: 0, sent: null }
     this.entries.set(id, e)
 
     // Everything xterm emits goes to the pty: keystrokes, pastes, mouse reports and the replies
@@ -218,26 +202,99 @@ export class TerminalManager {
     term.onResize(() => this.sendSize(e))
     term.attachCustomKeyEventHandler((ev) => this.keyFilter(e, ev))
 
+    // Right-click: copy the selection, or paste when there is none (Electron has no context menu).
+    el.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault()
+      if (term.hasSelection()) this.copySelection(e)
+      // A TUI that tracks the mouse gets the click itself. Claude Code's fullscreen UI pastes on
+      // right-click on its own, so pasting here as well would insert the text twice.
+      else if (term.modes.mouseTrackingMode === 'none') this.pasteClipboard(e)
+    })
+    // OSC 52: a fullscreen TUI that handles the mouse itself copies its own selection this way.
+    // Write only: a request to read the clipboard is never answered.
+    term.parser.registerOscHandler(52, (data) => {
+      const text = osc52Text(data)
+      if (text) void navigator.clipboard?.writeText(text).catch((err: unknown) => console.warn('[agent-office] copy failed', err))
+      return true
+    })
+
+    if (!this.suspended) this.attach(e)
+    return e
+  }
+
+  /**
+   * Asks for the screen (scrollback included) and for the output that follows it. On a re-attach
+   * the snapshot replaces what the terminal showed.
+   */
+  private attach(e: Entry): void {
+    const { id, term } = e
+    const gen = ++e.gen
+    e.ready = false
+    e.queue = []
+    e.unacked = 0
+    const current = (): boolean => this.entries.get(id) === e && e.gen === gen
     this.bridge.terminal
       .attach(id)
       .then((snap) => {
-        if (!this.entries.has(id)) return
+        if (!current()) return
+        if (e.shown) term.reset()
         if (snap.cols > 1 && snap.rows > 1 && (snap.cols !== term.cols || snap.rows !== term.rows)) {
           e.sent = { cols: snap.cols, rows: snap.rows }
           term.resize(snap.cols, snap.rows)
         }
         if (snap.data) term.write(snap.data)
+        e.shown = true
         e.ready = true
         for (const chunk of e.queue.splice(0)) this.write(e, chunk)
         if (this.active === id) this.scheduleFit(0)
       })
       .catch((err: unknown) => {
-        if (!this.entries.has(id)) return
+        if (!current()) return
         e.ready = true
         e.queue = []
-        term.write(`\x1b[2m[terminal unavailable: ${cleanError(err)}]\x1b[0m\r\n`)
+        // A terminal that was showing something keeps it (its session is gone from the app).
+        if (!e.shown) term.write(`\x1b[2m[terminal unavailable: ${cleanError(err)}]\x1b[0m\r\n`)
       })
-    return e
+  }
+
+  /**
+   * A hidden window (tray, minimised) gets its timers throttled, so xterm would render and ack
+   * output late and the pty host would pause the agent. Hidden terminals are detached instead: the
+   * pty host keeps the screen, and showing the window attaches again with a fresh snapshot.
+   */
+  private onVisibility(): void {
+    const hidden = document.hidden
+    if (hidden === this.suspended) return
+    this.suspended = hidden
+    for (const e of this.entries.values()) {
+      if (hidden) {
+        e.gen++
+        e.ready = false
+        e.queue = []
+        e.unacked = 0
+        this.bridge.terminal.detach(e.id)
+      } else {
+        this.attach(e)
+      }
+    }
+  }
+
+  private copySelection(e: Entry): void {
+    const text = e.term.getSelection()
+    if (!text) return
+    void navigator.clipboard?.writeText(text).catch((err: unknown) => console.warn('[agent-office] copy failed', err))
+    e.term.clearSelection()
+  }
+
+  private pasteClipboard(e: Entry): void {
+    void navigator.clipboard
+      ?.readText()
+      .then((text) => {
+        // xterm brackets the paste when the agent's TUI asked for it.
+        if (text && this.entries.get(e.id) === e) e.term.paste(text)
+        e.term.focus()
+      })
+      .catch((err: unknown) => console.warn('[agent-office] paste failed', err))
   }
 
   private send(id: string, data: string): void {
@@ -322,8 +379,7 @@ export class TerminalManager {
     const mod = (ev.ctrlKey || ev.metaKey) && !ev.altKey
     if (mod && ev.code === 'KeyC' && (ev.shiftKey || e.term.hasSelection())) {
       if (ev.type === 'keydown') {
-        void navigator.clipboard?.writeText(e.term.getSelection()).catch(() => undefined)
-        e.term.clearSelection()
+        this.copySelection(e)
         ev.preventDefault()
       }
       return false

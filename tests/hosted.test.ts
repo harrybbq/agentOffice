@@ -33,6 +33,7 @@ import {
   sweepSessionFiles,
   scrubbedEnv
 } from '../electron/drivers/claude.ts'
+import { CEO_ORDER_TAG, claudeBriefing, taggedOrder } from '../electron/drivers/claudeBriefing.ts'
 import {
   SessionStateMachine,
   START_ATTENTION_MS,
@@ -44,7 +45,10 @@ import type { PtyHandlers, PtyHost, ScreenSnapshot } from '../electron/drivers/t
 import { authenticate, authorise, SessionTokens } from '../electron/ingest/auth.ts'
 import { startIngestServer } from '../electron/ingest/server.ts'
 import { parsePermissionDecision, PermissionRegistry, PERMISSION_DETAIL_MAX } from '../electron/permissions.ts'
+import { windowsBuildNumber } from '../electron/ptyProtocol.ts'
 import type { PtySpawnOptions } from '../electron/ptyProtocol.ts'
+import { allowWebPermission } from '../electron/webPermissions.ts'
+import { ExtraModes } from '../electron/ptyModes.ts'
 import { SessionInbox } from '../electron/sessionInbox.ts'
 import { SessionManager } from '../electron/sessions.ts'
 
@@ -597,6 +601,11 @@ await t('claude driver: settings file, args, env scrub, typed-prompt fallback', 
     assert.equal(h.timeout, event === 'PermissionRequest' ? 3600 : 5)
     assert.equal(entries[0].matcher, ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'].includes(event) ? '*' : undefined)
   }
+  // A hosted session can't list or message the user's other Claude Code sessions.
+  assert.deepEqual(settings.permissions, { deny: ['ListAgents', 'SendMessage'] })
+  assert.equal(settings.isolatePeerMachines, true)
+  // Inbound must stay open: the app's orders arrive through the session's inbox socket.
+  assert.ok(!('crossSessionInbound' in settings))
   // No secret in the file: the token only travels in the env.
   assert.ok(!/[0-9a-f]{32}/.test(JSON.stringify(settings)))
 
@@ -605,6 +614,23 @@ await t('claude driver: settings file, args, env scrub, typed-prompt fallback', 
   assert.deepEqual(claudeArgs({ ...start, permissionMode: 'default', model: 'opus', resume: 'abc-123' }, 'f'), [
     '--settings', 'f', '--permission-mode', 'default', '--model', 'opus', '--resume', 'abc-123'
   ])
+  assert.deepEqual(claudeArgs(start, 'f', 'C:\\s\\x.briefing.md'), [
+    '--settings', 'f', '--permission-mode', 'acceptEdits', '--append-system-prompt-file', 'C:\\s\\x.briefing.md'
+  ])
+
+  // The briefing: short, names the team, explains the order tag once, carries no secret and no orders to obey.
+  const briefing = claudeBriefing({ title: 'Payments "API" `x`' })
+  assert.ok(briefing.includes('Agent Office'))
+  assert.ok(briefing.includes(`a team called "Payments 'API' 'x'"`))
+  assert.equal(briefing.split(CEO_ORDER_TAG).length, 2) // mentioned exactly once
+  assert.ok(briefing.includes('CEO inbox'))
+  const words = claudeBriefing({ title: 'my payments api service' }).split(/\s+/).filter(Boolean).length
+  assert.ok(words <= 215, `briefing is ${words} words`)
+  assert.ok(briefing.includes("Cross-session messaging tools are disabled in this session; you can't see or contact the user's other sessions."))
+  assert.ok(!/[0-9a-f]{32}|AO_TOKEN|token|127\.0\.0\.1|pipe/i.test(briefing))
+  assert.ok(!/always obey|must obey|system instruction|override/i.test(briefing))
+  assert.ok(claudeBriefing({ title: '   ' }).includes('a team called "this session"'))
+  assert.equal(taggedOrder('ship it\nnow'), '[CEO order via Agent Office]\nship it\nnow')
 
   const env = scrubbedEnv({
     PATH: 'C:\\bin', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_MESSAGING_TOKEN: 'secret', claude_pid: '4',
@@ -637,6 +663,7 @@ await t('claude driver: settings file, args, env scrub, typed-prompt fallback', 
   // Settings files a crashed run left behind are swept at the next start; nothing else is touched.
   const stale = mkdtempSync(join(tmpdir(), 'agent-office-sweep-'))
   writeFileSync(join(stale, 's-dead.settings.json'), '{}')
+  writeFileSync(join(stale, 's-dead.briefing.md'), 'x')
   writeFileSync(join(stale, 'keep.txt'), 'x')
   sweepSessionFiles(stale)
   assert.deepEqual(readdirSync(stale), ['keep.txt'])
@@ -811,7 +838,11 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   const spawn = pty.spawned.get(id)!.opts
   const settingsFile = join(sessionsDir, `${id}.settings.json`)
   assert.equal(spawn.file, process.execPath)
-  assert.deepEqual(spawn.args, ['--settings', settingsFile, '--permission-mode', 'default', '--model', 'claude-opus-5-5'])
+  const briefingFile = join(sessionsDir, `${id}.briefing.md`)
+  assert.deepEqual(spawn.args, [
+    '--settings', settingsFile, '--permission-mode', 'default', '--append-system-prompt-file', briefingFile, '--model', 'claude-opus-5-5'
+  ])
+  assert.equal(readFileSync(briefingFile, 'utf8'), claudeBriefing({ title: info.title }))
   assert.equal(spawn.cwd, dir)
   assert.equal(spawn.env.AO_SESSION, id)
   assert.equal(spawn.env.AO_URL, `http://127.0.0.1:${port}/hooks/claude-code`)
@@ -821,6 +852,7 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   assert.notEqual(token, GLOBAL)
   assert.ok(existsSync(settingsFile))
   assert.ok(!readFileSync(settingsFile, 'utf8').includes(token)) // no secret on disk
+  assert.ok(!readFileSync(briefingFile, 'utf8').includes(token))
   // The manager is in the world from the start.
   assert.deepEqual(brief(world), [`${id}|-|idle|starting`])
   assert.equal(world[0].provider, 'claude-code')
@@ -966,7 +998,11 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   await until(() => inboxGot.length === 1, 'inbox delivery')
   const lines = inboxGot[0].split('\n')
   assert.deepEqual(JSON.parse(lines[0]), { type: 'auth', token: 'inbox-secret-token' })
-  assert.deepEqual(JSON.parse(lines[1]), { type: 'user', message: { role: 'user', content: 'Ship the release\nnotes today' } })
+  // Tagged as a CEO order, as the session's briefing describes.
+  assert.deepEqual(JSON.parse(lines[1]), {
+    type: 'user',
+    message: { role: 'user', content: '[CEO order via Agent Office]\nShip the release\nnotes today' }
+  })
   // Idle delivery is confirmed by the session's own UserPromptSubmit.
   await hook('UserPromptSubmit', { prompt: 'Ship the release\nnotes today' }).result
   assert.deepEqual(await order, {
@@ -1013,6 +1049,7 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   assert.deepEqual(manager.listPermissions(), [])
   assert.deepEqual((await held5.result).body, {})
   assert.ok(!existsSync(settingsFile))
+  assert.ok(!existsSync(briefingFile))
   assert.ok(!inbox.has(id))
   assert.equal(tokens.size, 0)
   assert.equal((await hook('Stop').result).status, 401) // the dead session's token is worthless
@@ -1109,6 +1146,43 @@ await t('hook/claude-session-start.cjs: posts stdin + inbox endpoint, exits 0, p
   }
   assert.equal(got.length, 2)
   await new Promise<void>((res) => server.close(() => res()))
+})
+
+await t('the Windows build number comes from os.release()', () => {
+  assert.equal(windowsBuildNumber('win32', '10.0.26200'), 26200)
+  assert.equal(windowsBuildNumber('win32', '10.0.19045'), 19045)
+  assert.equal(windowsBuildNumber('win32', 'weird'), 0)
+  assert.equal(windowsBuildNumber('darwin', '24.1.0'), 0)
+  assert.equal(windowsBuildNumber('linux', '6.8.0-45-generic'), 0)
+})
+
+await t('a snapshot restores the mouse encoding and the hidden cursor', () => {
+  const m = new ExtraModes()
+  assert.equal(m.serialize(), '')
+  m.decPrivate([1003], true) // tracking itself is restored by the serialize addon
+  assert.equal(m.serialize(), '')
+  m.decPrivate([1006], true)
+  m.decPrivate([2004, 25], false) // several modes in one sequence: cursor hidden
+  assert.equal(m.serialize(), '\x1b[?1006h\x1b[?25l')
+  m.decPrivate([25], true)
+  assert.equal(m.serialize(), '\x1b[?1006h')
+  m.decPrivate([1016], true)
+  assert.equal(m.serialize(), '\x1b[?1016h')
+  m.decPrivate([1006], false) // resetting any encoding goes back to the default
+  assert.equal(m.serialize(), '')
+  m.decPrivate([[1006, 0]], true)
+  m.decPrivate([25], false)
+  m.reset()
+  assert.equal(m.serialize(), '')
+})
+
+await t('only the clipboard is allowed, and only for the app window', () => {
+  assert.equal(allowWebPermission('clipboard-sanitized-write', true), true)
+  assert.equal(allowWebPermission('clipboard-read', true), true)
+  assert.equal(allowWebPermission('clipboard-read', false), false)
+  for (const p of ['media', 'geolocation', 'notifications', 'openExternal', 'fullscreen', 'fileSystem', '']) {
+    assert.equal(allowWebPermission(p, true), false, p)
+  }
 })
 
 console.log(`\n${pass} hosted-session tests passed`)

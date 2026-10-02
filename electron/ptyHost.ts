@@ -12,6 +12,7 @@ import type { IPty } from 'node-pty'
 import type { Terminal as HeadlessTerminal } from '@xterm/headless'
 import type { SerializeAddon as SerializeAddonType } from '@xterm/addon-serialize'
 import { TERM_HIGH_WATERMARK_CHARS, TERM_LOW_WATERMARK_CHARS } from '../shared/sessions'
+import { ExtraModes } from './ptyModes'
 import {
   clampCols,
   clampRows,
@@ -19,6 +20,7 @@ import {
   PTY_BATCH_MS,
   PTY_MAX_WRITE_CHARS,
   PTY_SCROLLBACK,
+  windowsBuildNumber,
   type FromHost,
   type ToHost
 } from './ptyProtocol'
@@ -28,6 +30,7 @@ const require = createRequire(import.meta.url)
 const nodePty = require('node-pty') as typeof import('node-pty')
 const { Terminal } = require('@xterm/headless') as typeof import('@xterm/headless')
 const { SerializeAddon } = require('@xterm/addon-serialize') as typeof import('@xterm/addon-serialize')
+const { Unicode11Addon } = require('@xterm/addon-unicode11') as typeof import('@xterm/addon-unicode11')
 
 const port = process.parentPort
 const post = (m: FromHost): void => port.postMessage(m)
@@ -37,6 +40,8 @@ interface Term {
   pty: IPty
   mirror: HeadlessTerminal
   serializer: SerializeAddonType
+  /** Modes the serializer doesn't restore (mouse encoding, hidden cursor). */
+  modes: ExtraModes
   /** Output not sent yet. */
   batch: string
   timer: NodeJS.Timeout | null
@@ -53,7 +58,6 @@ interface Term {
 
 const terms = new Map<string, Term>()
 
-const windowsBuild = (): number => Number(release().split('.')[2]) || 0
 
 function spawn(m: Extract<ToHost, { t: 'spawn' }>): void {
   if (terms.has(m.id)) return post({ t: 'spawn-error', id: m.id, message: 'terminal id already in use' })
@@ -78,16 +82,34 @@ function spawn(m: Extract<ToHost, { t: 'spawn' }>): void {
     rows,
     scrollback: PTY_SCROLLBACK,
     allowProposedApi: true,
-    ...(process.platform === 'win32' ? { windowsPty: { backend: 'conpty' as const, buildNumber: windowsBuild() } } : {})
+    ...(process.platform === 'win32' ? { windowsPty: { backend: 'conpty' as const, buildNumber: windowsBuildNumber(process.platform, release()) } } : {})
   })
   const serializer = new SerializeAddon()
   // The addon is typed against @xterm/xterm; the headless terminal has the same addon API.
   mirror.loadAddon(serializer as unknown as Parameters<HeadlessTerminal['loadAddon']>[0])
+  // Same character widths as the renderer's xterm (ui/terminals.ts), or emoji and other wide
+  // characters would sit in different columns in a snapshot than on the live screen.
+  mirror.loadAddon(new Unicode11Addon() as unknown as Parameters<HeadlessTerminal['loadAddon']>[0])
+  mirror.unicode.activeVersion = '11'
+  const modes = new ExtraModes()
+  mirror.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (params) => {
+    modes.decPrivate(params, true)
+    return false // not handled: xterm applies the mode as usual
+  })
+  mirror.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (params) => {
+    modes.decPrivate(params, false)
+    return false
+  })
+  mirror.parser.registerEscHandler({ final: 'c' }, () => {
+    modes.reset()
+    return false
+  })
   const term: Term = {
     id: m.id,
     pty,
     mirror,
     serializer,
+    modes,
     batch: '',
     timer: null,
     viewer: false,
@@ -177,7 +199,7 @@ function snapshot(m: Extract<ToHost, { t: 'snapshot' }>): void {
   term.mirror.write('', () => {
     let data = ''
     try {
-      data = term.serializer.serialize({ scrollback: PTY_SCROLLBACK })
+      data = term.serializer.serialize({ scrollback: PTY_SCROLLBACK }) + term.modes.serialize()
     } catch (err) {
       console.error('[pty-host] serialize failed:', err instanceof Error ? err.message : err)
     }

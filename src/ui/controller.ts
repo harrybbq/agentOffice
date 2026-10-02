@@ -39,7 +39,7 @@ export const DEFAULT_LAYOUT: Layout = {
   panelOpen: true,
   dock: 'auto',
   sizeRight: 600,
-  sizeBottom: 340,
+  sizeBottom: 420,
   tab: 'terminal',
   inboxOpen: true,
   uiTheme: 'dark'
@@ -73,6 +73,8 @@ export interface AppState {
   eventCount: number
   lastEventAt: number | null
   selectedId: string | null
+  /** Every session id this window has seen hosted (never listed as an observed team). */
+  everHosted: ReadonlySet<string>
   officeWideEndsAt: number | null
   banner: { text: string; key: number } | null
   orderFeedback: OrderFeedback | null
@@ -115,6 +117,11 @@ function loadLayout(): Layout {
   return l
 }
 
+/** The same set when nothing is new, so subscribers don't re-render. */
+function withIds(set: ReadonlySet<string>, items: readonly { id: string }[]): ReadonlySet<string> {
+  return items.every((x) => set.has(x.id)) ? set : new Set([...set, ...items.map((x) => x.id)])
+}
+
 const GHOST_MS: Record<PermissionOutcome, number> = {
   allowed: 1600,
   denied: 1600,
@@ -133,6 +140,7 @@ export class AppController {
   /** Exited sessions the user removed from the list (the contract has no remove call). */
   private dismissed = new Set<string>()
   private decidedHere = new Set<string>()
+  private waitingKey = ''
   private bannerTimer = 0
   private feedbackTimer = 0
   /** Set by the order bar so shortcuts can focus it. */
@@ -160,6 +168,7 @@ export class AppController {
       eventCount: 0,
       lastEventAt: null,
       selectedId: null,
+      everHosted: new Set(),
       officeWideEndsAt: null,
       banner: null,
       orderFeedback: null,
@@ -211,7 +220,7 @@ export class AppController {
     const last = readJson<unknown>(SELECTED_KEY, null)
     const state = this.store.get()
     if (typeof last === 'string' && !state.selectedId && state.sessions.some((s) => s.id === last)) {
-      this.select(last, { reveal: false })
+      this.select(last, { reveal: false, focusWorld: false })
     }
   }
 
@@ -220,12 +229,19 @@ export class AppController {
   private applySettings(s: RendererSettings): void {
     this.store.set({ settings: s })
     document.body.classList.toggle('overlay', s.overlay)
+    this.terminals.setWindowsBuild(s.windowsBuild)
     this.world.applySettings(s, this.bridge)
   }
 
   private onEvent(e: AgentEvent): void {
     const teamId = this.world.agents.rootOf(e)
     this.world.handleEvent(e)
+    // The inbox must not show a stale "waiting" entry next to a permission list that already moved on.
+    const waitingKey = this.world.agents.waiting.map((w) => `${w.agentId}\n${w.detail}`).join('\n\n')
+    if (waitingKey !== this.waitingKey) {
+      this.waitingKey = waitingKey
+      this.store.set({ waiting: this.world.agents.waiting })
+    }
     this.pendingLog.push({ seq: ++this.seq, teamId, event: e })
     // A timer, not rAF: events keep arriving while the window is hidden in the tray.
     if (!this.logTimer) this.logTimer = window.setTimeout(() => this.flushLog(), 120)
@@ -251,7 +267,7 @@ export class AppController {
       (s) => !this.dismissed.has(s.id)
     )
     this.terminals.prune(new Set(sessions.map((s) => s.id)))
-    this.store.set({ sessions })
+    this.store.set((s) => ({ sessions, everHosted: withIds(s.everHosted, sessions) }))
   }
 
   private setPermissions(next: PermissionRequestInfo[]): void {
@@ -277,7 +293,7 @@ export class AppController {
   // ---- actions -----------------------------------------------------------------------------
 
   /** Selects a session or world team: focuses its branch and (for hosted sessions) its terminal. */
-  select(id: string | null, opts: { focusTerminal?: boolean; reveal?: boolean } = {}): void {
+  select(id: string | null, opts: { focusTerminal?: boolean; reveal?: boolean; focusWorld?: boolean } = {}): void {
     const s = this.store.get()
     const hosted = !!id && s.sessions.some((x) => x.id === id)
     const patch: Partial<AppState> = { selectedId: id }
@@ -285,7 +301,7 @@ export class AppController {
     this.store.set(patch)
     writeJson(SELECTED_KEY, id)
     if (patch.layout) this.saveLayout()
-    if (id) this.world.focusTeam(id)
+    if (id && (opts.focusWorld ?? true)) this.world.focusTeam(id)
     if (hosted && opts.focusTerminal) window.setTimeout(() => this.terminals.focus(), 80)
   }
 
@@ -320,9 +336,12 @@ export class AppController {
     this.store.set((s) => ({
       recentFolders,
       dialog: null,
+      everHosted: withIds(s.everHosted, [info]),
       sessions: s.sessions.some((x) => x.id === info.id) ? s.sessions : [...s.sessions, info]
     }))
-    this.select(info.id, { focusTerminal: true })
+    // The world keeps its whole-office view: the new branch is built next to the HQ, and its
+    // manager's walks to the CEO stay in sight.
+    this.select(info.id, { focusTerminal: true, focusWorld: false })
   }
 
   interrupt(id: string): void {

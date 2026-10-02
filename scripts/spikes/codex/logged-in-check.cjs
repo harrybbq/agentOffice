@@ -1,6 +1,6 @@
 // Phase B: everything the logged-out spikes could not verify. Needs a logged-in Codex (`codex login`,
 // or the Codex desktop app) in the DEFAULT home (~/.codex). It runs real model turns, so it spends a
-// little of the account's Codex allowance: six short turns at low reasoning effort (seven with --subagent).
+// little of the account's Codex allowance: seven short turns at low reasoning effort (eight with --subagent).
 // It stops at the first usage or rate limit error.
 //
 //   node scripts/spikes/codex/logged-in-check.cjs [--root <scratch dir>] [--model <id>] [--effort low]
@@ -14,6 +14,8 @@
 //   steer      a turn that runs a slow command; turn/steer is sent once the command item has started.
 //   interrupt  a turn that runs a slow command; turn/interrupt is sent once the command item has started.
 //   websearch  asks for one web search (also shows whether the thread still works after an interrupt).
+//   escalate   a command that writes a file, with a read-only sandbox and approvalPolicy "on-request": the
+//              sandbox blocks it, so the model has to ask to run it outside. Approvals are accepted.
 //   resume     no turn. A second app-server process: thread/list, thread/resume {excludeTurns:true}, thread/turns/list.
 //   subagent   (--subagent only) asks for one sub-agent; records which threadIds the notifications carry.
 //
@@ -251,6 +253,23 @@ async function main() {
       note('websearch items', itemSummary(t.items))
       const ws = t.items.find((i) => i.type === 'webSearch')
       if (ws) note('webSearch item', ws)
+    }
+
+    // ---- escalate (read-only sandbox + on-request: the command must ask to leave the sandbox) ----
+    // Last, because the sandboxPolicy override stays on the thread for later turns.
+    if (want('escalate')) {
+      const before = requests.length
+      const t = await runTurn(
+        c,
+        threadId,
+        `Run the command: node -e "require('fs').writeFileSync('ao-escalate.txt','ok')"
+If the sandbox blocks it, request approval to run it without the sandbox. Then say whether the file was written.`,
+        { approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly', networkAccess: false } }
+      )
+      note('escalate turn (read-only, on-request)', turnNote(t, requests, before))
+      note('escalate turn items', itemSummary(t.items))
+      for (const r of requests.slice(before)) note(`escalate turn request ${r.method}`, r)
+      note('escalate file on disk', fs.existsSync(path.join(workdir, 'ao-escalate.txt')))
     }
 
     // ---- subagent ----

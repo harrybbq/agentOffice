@@ -54,7 +54,8 @@ export function createStubBridge(): AgentOfficeBridge {
     theme: 'office',
     overlay: params.get('overlay') === '1',
     allowOrders: params.get('orders') !== 'off',
-    officeWideTimeoutMs: 10 * 60_000
+    officeWideTimeoutMs: 10 * 60_000,
+    windowsBuild: 0
   }
 
   const eventCbs = new Set<(e: AgentEvent) => void>()

@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { useApp, useAppState } from '../controller'
 import { ago } from '../format'
-import { useNow } from '../hooks'
+import { cx, useNow } from '../hooks'
 import { IconFit, IconMegaphone } from '../icons'
 import { Inbox } from './Inbox'
 
@@ -25,6 +25,7 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
   const wideEndsAt = useAppState((s) => s.officeWideEndsAt)
   const empty = useAppState((s) => s.sessions.length === 0 && s.teams.length === 0)
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
+  const inboxOpen = useAppState((s) => s.layout.inboxOpen)
 
   useEffect(() => {
     if (host.current) app.world.mount(host.current)
@@ -35,7 +36,7 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
     <div className="world">
       <div className="world-canvas" ref={host} />
 
-      <div className="world-top">
+      <div className={cx('world-top', floatingInbox && inboxOpen && !overlay && 'is-beside-inbox')}>
         {banner && (
           <div key={banner.key} className="pa-banner" role="status">
             <IconMegaphone />

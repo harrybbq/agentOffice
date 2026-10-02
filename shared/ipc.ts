@@ -75,6 +75,8 @@ export interface RendererSettings {
   allowOrders: boolean
   /** Office-wide mode ends after this long at the latest. */
   officeWideTimeoutMs: number
+  /** The Windows build number (e.g. 26200) for xterm's ConPTY handling; 0 on other platforms. */
+  windowsBuild: number
 }
 
 export interface AgentOfficeBridge {

@@ -50,5 +50,12 @@ export const PTY_BATCH_CHARS = 64 * 1024
 export const PTY_MAX_WRITE_CHARS = 1024 * 1024
 export const PTY_SCROLLBACK = 5000
 
+/** The Windows build number from `os.release()` ("10.0.26200" -> 26200); 0 elsewhere or when unknown. */
+export function windowsBuildNumber(platform: string, osRelease: string): number {
+  if (platform !== 'win32') return 0
+  const build = Number(osRelease.split('.')[2])
+  return Number.isInteger(build) && build > 0 ? build : 0
+}
+
 export const clampCols = (n: number): number => Math.min(500, Math.max(2, Math.floor(n)))
 export const clampRows = (n: number): number => Math.min(300, Math.max(1, Math.floor(n)))

@@ -562,9 +562,15 @@ body.resizing-y .side {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  max-width: min(680px, calc(100% - 24px));
+  /* Clear of the fit-view button in the corner. */
+  max-width: min(680px, calc(100% - 116px));
   pointer-events: none;
   z-index: 2;
+}
+/* The open inbox floats in the top right corner: centre in what is left of it. */
+.world-top.is-beside-inbox {
+  left: calc((100% - 350px) / 2);
+  max-width: max(220px, min(680px, calc(100% - 466px)));
 }
 .pa-banner {
   display: flex;

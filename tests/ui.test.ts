@@ -10,15 +10,18 @@ import {
   cleanError,
   filterLog,
   groupSessions,
+  observedTeams,
   orderSummary,
   orderTargets,
+  osc52Text,
   pushRecent,
   retainExited,
   sessionOrder,
   shortenPath,
   stripToolPrefix,
   terminalOnlyWaiting,
-  vanished
+  vanished,
+  windowsPtyOption
 } from '../src/ui/format.ts'
 import type { LogEntry, TeamLike } from '../src/ui/format.ts'
 import { appChord } from '../src/ui/keys.ts'
@@ -158,6 +161,30 @@ t('waiting agents without a permission card are listed as terminal-only', () => 
       ['ext:1', false]
     ]
   )
+})
+
+t('a session the app hosted is never listed as an observed team', () => {
+  const teams = [{ id: 's1' }, { id: 's-gone' }, { id: 'ext' }]
+  // s-gone was hosted and removed from the list: its branch is still being cleared in the world.
+  assert.deepEqual(observedTeams(teams, [session('s1')], new Set(['s1', 's-gone'])), [{ id: 'ext' }])
+  assert.deepEqual(observedTeams(teams, [], new Set()), teams)
+})
+
+t('OSC 52 sets the clipboard text and never answers a query', () => {
+  const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
+  assert.equal(osc52Text(`c;${b64('hello')}`), 'hello')
+  assert.equal(osc52Text(`;${b64('line one\nünï 日本')}`), 'line one\nünï 日本')
+  assert.equal(osc52Text('c;?'), null)
+  assert.equal(osc52Text('c;'), null)
+  assert.equal(osc52Text('c'), null)
+  assert.equal(osc52Text('c;not base64!'), null)
+})
+
+t('xterm gets the real Windows build, and nothing off Windows', () => {
+  assert.deepEqual(windowsPtyOption(26200), { backend: 'conpty', buildNumber: 26200 })
+  assert.equal(windowsPtyOption(0), undefined)
+  assert.equal(windowsPtyOption(undefined), undefined) // an older main process
+  assert.equal(windowsPtyOption(Number.NaN), undefined)
 })
 
 t('permission requests that vanish without a local decision were answered elsewhere', () => {

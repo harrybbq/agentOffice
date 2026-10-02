@@ -11,8 +11,12 @@ import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { WorldView } from './components/WorldView'
 
-/** Below this window width the "auto" dock puts the terminal under the world. */
-const AUTO_DOCK_RIGHT_MIN = 1500
+/**
+ * Below this window width the "auto" dock puts the terminal under the world. The default window
+ * (1440 wide) docks right: an agent TUI needs height more than width, and a terminal of a dozen
+ * rows makes it redraw into its own scrollback.
+ */
+const AUTO_DOCK_RIGHT_MIN = 1360
 
 export function App() {
   const app = useApp()

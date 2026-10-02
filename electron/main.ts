@@ -15,6 +15,7 @@ import {
   type IpcMainInvokeEvent,
   type MenuItemConstructorOptions
 } from 'electron'
+import { release } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type RendererSettings } from '../shared/ipc'
@@ -24,9 +25,11 @@ import { claudeProvider, sweepSessionFiles } from './drivers/claude'
 import { SessionTokens } from './ingest/auth'
 import { HOST, startIngestServer, type IngestServer } from './ingest/server'
 import { PtyHostClient } from './ptyClient'
+import { windowsBuildNumber } from './ptyProtocol'
 import { SessionInbox } from './sessionInbox'
 import { SessionManager } from './sessions'
 import { registerSessionIpc } from './sessionsIpc'
+import { allowWebPermission } from './webPermissions'
 import { isValidThemeName, listThemes, loadTheme, registerThemeProtocol, registerThemeScheme } from './themes'
 
 const HERE = dirname(fileURLToPath(import.meta.url)) // out/main
@@ -91,9 +94,10 @@ async function onReady(): Promise<void> {
   loadConfig()
   console.log(`[agent-office] config: ${configPath()}`)
 
-  // The renderer never needs camera/mic/notifications/etc.
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false))
-  session.defaultSession.setPermissionCheckHandler(() => false)
+  // The renderer never needs camera/mic/notifications/etc. Only our own window gets the clipboard.
+  const ourPage = (wc: Electron.WebContents | null): boolean => !!wc && !!win && !win.isDestroyed() && wc === win.webContents
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(allowWebPermission(perm, ourPage(wc))))
+  session.defaultSession.setPermissionCheckHandler((wc, perm) => allowWebPermission(perm, ourPage(wc)))
 
   registerThemeProtocol()
   createSessions()
@@ -134,7 +138,8 @@ function rendererSettings(): RendererSettings {
     theme: c.theme,
     overlay: c.overlay,
     allowOrders: c.allowOrders,
-    officeWideTimeoutMs: c.officeWideMinutes * 60_000
+    officeWideTimeoutMs: c.officeWideMinutes * 60_000,
+    windowsBuild: windowsBuildNumber(process.platform, release())
   }
 }
 
@@ -280,8 +285,12 @@ function showWindow(): void {
   if (!win || win.isDestroyed()) createWindow()
   else {
     if (win.isMinimized()) win.restore()
-    win.show()
-    win.focus()
+    // AGENT_OFFICE_SHOW_INACTIVE=1 (testing): come back without taking focus.
+    if (process.env.AGENT_OFFICE_SHOW_INACTIVE === '1') win.showInactive()
+    else {
+      win.show()
+      win.focus()
+    }
   }
 }
 
