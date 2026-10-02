@@ -1478,5 +1478,6 @@ await t('codex: history lists the folder\'s earlier conversations for "Resume pr
 
 console.log(`\n${pass} codex tests passed`)
 
+await import('./restore.test.ts')
 await import('./board.test.ts')
 await import('./ui.test.ts')

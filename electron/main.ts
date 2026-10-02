@@ -9,6 +9,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  screen,
   session,
   shell,
   Tray,
@@ -35,6 +36,8 @@ import { PtyHostClient } from './ptyClient'
 import { windowsBuildNumber } from './ptyProtocol'
 import { SessionInbox } from './sessionInbox'
 import { SessionManager } from './sessions'
+import { SessionStore } from './sessionStore'
+import { clampToDisplays, displayKey, rememberWindow, type SavedWindow } from './windowState'
 import { registerSessionIpc } from './sessionsIpc'
 import { allowWebPermission, isExternalWebUrl } from './webPermissions'
 import { isValidThemeName, listThemes, loadTheme, registerThemeProtocol, registerThemeScheme } from './themes'
@@ -74,6 +77,12 @@ const board = new Board({
 const BOARD_SWEEP_MS = 30_000
 let ptyHost: PtyHostClient | null = null
 let sessions: SessionManager | null = null
+/** The saved session records (`<userData>/sessions.json`): what comes back after a restart. */
+let sessionStore: SessionStore | null = null
+/** The normal (non-overlay) window's latest position, as it is saved in config.json. */
+let lastWindow: SavedWindow | null = null
+const WINDOW_MIN = { width: 1000, height: 650 }
+const WINDOW_SAVE_DEBOUNCE_MS = 400
 /** Owns the shared `codex app-server` child (started on the first Codex need). */
 let codex: CodexProvider | null = null
 let shutdownDone = false
@@ -93,6 +102,8 @@ if (!app.requestSingleInstanceLock()) {
     // Hosted agents must not outlive the app: kill their process trees before we go.
     if (shutdownDone || !ptyHost) return
     e.preventDefault()
+    // Freezes and writes the session records first: the sessions killed below stay "open" in the
+    // file and come back asleep on the next launch.
     sessions?.close()
     // The pty host takes the terminal sessions down; the manager stops the Codex app-server.
     void Promise.allSettled([ptyHost.shutdown(), sessions?.shutdown()]).finally(() => {
@@ -101,7 +112,10 @@ if (!app.requestSingleInstanceLock()) {
     })
   })
   // If the app dies without a clean quit, the app-server (and the commands it runs) must not stay behind.
-  process.on('exit', () => codex?.server.killSync())
+  process.on('exit', () => {
+    sessionStore?.flush()
+    codex?.server.killSync()
+  })
   // Keep running in the tray when windows go away (also covers overlay recreation).
   app.on('window-all-closed', () => {})
   app.on('will-quit', () => {
@@ -153,6 +167,9 @@ async function onReady(): Promise<void> {
   updateTrayTooltip()
   rebuildTrayMenu()
 
+  // Sessions can report back now: wake what the restore mode says (the others stay asleep).
+  void sessions?.restoreOnLaunch()
+
   if (!globalShortcut.register(OVERLAY_SHORTCUT, () => void setOverlay(!getConfig().overlay))) {
     console.warn(`[agent-office] could not register ${OVERLAY_SHORTCUT}`)
   }
@@ -197,7 +214,13 @@ function createSessions(): void {
       await shell.openExternal(url)
     }
   })
+  sessionStore = new SessionStore({ file: join(app.getPath('userData'), 'sessions.json') })
   sessions = new SessionManager({
+    restore: {
+      store: sessionStore,
+      settings: () => getConfig().restore,
+      saveSettings: (patch) => saveConfig({ restore: { ...getConfig().restore, ...patch } }).restore
+    },
     pty: host,
     sink: bus,
     providers: [
@@ -286,16 +309,60 @@ function isAllowedUrl(url: string): boolean {
   }
 }
 
+/** The window as it was saved for the displays that are connected now, moved onto one of them if need be. */
+function savedWindow(): SavedWindow | null {
+  const displays = screen.getAllDisplays()
+  const saved = getConfig().window[displayKey(displays)]
+  if (!saved) return null
+  const bounds = clampToDisplays(saved.bounds, displays.map((d) => d.workArea), WINDOW_MIN)
+  return bounds ? { bounds, maximized: saved.maximized } : null
+}
+
+/** Remembers where the normal window is (never the overlay: it is a different kind of window). */
+function saveWindowState(w: BrowserWindow): void {
+  if (w !== win || w.isDestroyed() || getConfig().overlay || w.isMinimized() || w.isFullScreen()) return
+  const next: SavedWindow = { bounds: w.getNormalBounds(), maximized: w.isMaximized() }
+  if (JSON.stringify(next) === JSON.stringify(lastWindow)) return
+  lastWindow = next
+  try {
+    saveConfig({ window: rememberWindow(getConfig().window, displayKey(screen.getAllDisplays()), next) })
+  } catch (err) {
+    console.warn('[agent-office] could not save the window position:', err instanceof Error ? err.message : err)
+  }
+}
+
+function trackWindowState(w: BrowserWindow): void {
+  let timer: NodeJS.Timeout | null = null
+  const later = (): void => {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      saveWindowState(w)
+    }, WINDOW_SAVE_DEBOUNCE_MS)
+  }
+  for (const event of ['resize', 'move', 'maximize', 'unmaximize'] as const) w.on(event as 'resize', later)
+  w.on('close', () => {
+    if (timer) clearTimeout(timer)
+    timer = null
+    saveWindowState(w)
+  })
+}
+
 function createWindow(): void {
   const cfg = getConfig()
   const overlay = cfg.overlay
-  const prev = win && !win.isDestroyed() ? win.getBounds() : null
+  // First window of this run: where it was last time. A replaced window (overlay toggled): where it is.
+  if (!win && !lastWindow) lastWindow = savedWindow()
+  const current = win && !win.isDestroyed() ? win.getBounds() : null
+  const maximize = !overlay && !!lastWindow?.maximized
+  // A window that will be maximised starts from its normal bounds, so "restore" has somewhere to go back to.
+  const prev = (maximize ? lastWindow?.bounds : null) ?? current ?? lastWindow?.bounds ?? null
 
   const w = new BrowserWindow({
     width: prev?.width ?? 1440,
     height: prev?.height ?? 900,
-    minWidth: 1000,
-    minHeight: 650,
+    minWidth: WINDOW_MIN.width,
+    minHeight: WINDOW_MIN.height,
     x: prev?.x,
     y: prev?.y,
     title: 'Agent Office',
@@ -344,10 +411,19 @@ function createWindow(): void {
       rebuildTrayMenu()
     }
   })
+  // Windows is shutting down or the user is logging off: the system is about to kill the agents.
+  // Freeze and write the session records first, so they come back asleep instead of counting as ended.
+  w.on('session-end', () => sessions?.close())
   w.on('show', rebuildTrayMenu)
   w.on('hide', rebuildTrayMenu)
   // AGENT_OFFICE_SHOW_INACTIVE=1 (testing): appear without taking focus.
-  w.once('ready-to-show', () => (process.env.AGENT_OFFICE_SHOW_INACTIVE === '1' ? w.showInactive() : w.show()))
+  w.once('ready-to-show', () => {
+    // maximize() also shows the window, without giving it focus.
+    if (maximize) w.maximize()
+    if (process.env.AGENT_OFFICE_SHOW_INACTIVE === '1') w.showInactive()
+    else w.show()
+  })
+  if (!overlay) trackWindowState(w)
 
   bus.attach(w.webContents)
   // A (re)loading or replaced renderer has lost its terminals and chats: stop streaming until it attaches again.

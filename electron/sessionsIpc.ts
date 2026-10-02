@@ -36,6 +36,16 @@ export function registerSessionIpc(opts: SessionIpcOptions): void {
   handle(IPC.stopSession, (id) => manager.stop(id))
   handle(IPC.interruptSession, (id) => manager.interrupt(id))
   handle(IPC.sessionHistory, (provider, cwd) => manager.history(provider, cwd))
+  // Restore (shared/restore.ts): sleeping rows, the recent list, what to wake on launch.
+  handle(IPC.wakeSession, (id) => manager.wake(id))
+  handle(IPC.recentSessions, () => manager.recent())
+  handle(IPC.reopenRecent, (id) => manager.reopen(id))
+  handle(IPC.forgetSession, (id) => manager.forget(id))
+  handle(IPC.dismissInterrupted, (id) => manager.dismissInterrupted(id))
+  handle(IPC.getRestoreSettings, () => manager.getRestoreSettings())
+  handle(IPC.setRestoreSettings, (patch) => manager.setRestoreSettings(patch))
+  handle(IPC.getSelectedSession, () => manager.getSelected())
+  on(IPC.setSelectedSession, (id) => manager.setSelected(id))
   handle(IPC.pickFolder, async () => {
     const win = getWindow()
     if (!win || win.isDestroyed()) return null

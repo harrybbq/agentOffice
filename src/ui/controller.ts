@@ -6,6 +6,7 @@ import type { BoardSettings, BoardSnapshot } from '../../shared/board'
 import type { AgentEvent } from '../../shared/events'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
 import type { OrderResult } from '../../shared/orders'
+import type { RestoreSettings } from '../../shared/restore'
 import type {
   PermissionDecision,
   PermissionOutcome,
@@ -24,6 +25,8 @@ import type { RemoveKind } from './board'
 import { ChatManager } from './chats'
 import { appendLog, cleanError, orderSummary, orderTargets, pushRecent, retainExited, sessionOrder, vanished } from './format'
 import type { LogEntry, OrderSummary } from './format'
+import { EMPTY_RECENT, recentReducer, restoreSelection, restoreSummary } from './restore'
+import type { RecentState, RestoreSummary } from './restore'
 import { Store, useStore } from './store'
 import { TerminalManager } from './terminals'
 import type { UiTheme } from './terminals'
@@ -39,6 +42,8 @@ export interface Layout {
   tab: PanelTab
   inboxOpen: boolean
   uiTheme: UiTheme
+  /** The sidebar's Recent section (collapsed by default). */
+  recentOpen: boolean
 }
 
 export const DEFAULT_LAYOUT: Layout = {
@@ -48,7 +53,8 @@ export const DEFAULT_LAYOUT: Layout = {
   sizeBottom: 420,
   tab: 'terminal',
   inboxOpen: true,
-  uiTheme: 'dark'
+  uiTheme: 'dark',
+  recentOpen: false
 }
 
 /** A request that just left the pending list, shown briefly with what happened to it. */
@@ -98,12 +104,31 @@ export interface AppState {
   boardRemoving: ReadonlySet<string>
   /** Files more than one team touched (the amber badge on the Board tab and in the status bar). */
   boardOverlaps: number
+
+  // ---- restore: sessions survive closing the app (shared/restore.ts) ----
+  /** Asleep rows being woken right now. */
+  waking: ReadonlySet<string>
+  /** Why the last wake of a row failed (shown on its wake screen). */
+  wakeErrors: Readonly<Record<string, string>>
+  /** Sessions that ended earlier and can be reopened. */
+  recent: RecentState
+  recentStatus: 'idle' | 'loading' | 'ready' | 'error'
+  recentError: string | null
+  /** Recent entries being reopened right now. */
+  reopening: ReadonlySet<string>
+  recentActionError: { id: string; text: string } | null
+  /** What happens to saved sessions when the app opens; null until read (or without restore). */
+  restoreSettings: RestoreSettings | null
+  /** The one-time "3 sessions restored · 2 were interrupted" notice of this launch. */
+  restoreNotice: RestoreSummary | null
 }
 
 const LAYOUT_KEY = 'agentOffice.layout'
 const RECENT_KEY = 'agentOffice.recentFolders'
 /** Survives a reload and the window swap of an overlay toggle, so the terminal comes back. */
 const SELECTED_KEY = 'agentOffice.selected'
+/** closedAt of the last restore summary shown: once per close, also across an overlay window swap. */
+const RESTORE_SEEN_KEY = 'agentOffice.restoreSeen'
 
 function readJson<T>(key: string, fallback: T): T {
   try {
@@ -128,6 +153,7 @@ function loadLayout(): Layout {
   if (!['auto', 'right', 'bottom'].includes(l.dock)) l.dock = 'auto'
   if (l.tab !== 'terminal' && l.tab !== 'events' && l.tab !== 'board') l.tab = 'terminal'
   if (l.uiTheme !== 'dark' && l.uiTheme !== 'light') l.uiTheme = 'dark'
+  l.recentOpen = l.recentOpen === true
   if (!Number.isFinite(l.sizeRight)) l.sizeRight = DEFAULT_LAYOUT.sizeRight
   if (!Number.isFinite(l.sizeBottom)) l.sizeBottom = DEFAULT_LAYOUT.sizeBottom
   return l
@@ -145,6 +171,9 @@ const GHOST_MS: Record<PermissionOutcome, number> = {
   'unknown-request': 5000
 }
 
+/** What "Tell it to continue" sends: a bare "continue" made Claude ask what to do next. */
+export const CONTINUE_TEXT = 'Continue with what you were doing before the app closed. Re-run anything that was interrupted.'
+
 export class AppController {
   readonly store: Store<AppState>
   readonly world: WorldController
@@ -156,6 +185,9 @@ export class AppController {
   private keySeq = 0
   /** Exited sessions the user removed from the list (the contract has no remove call). */
   private dismissed = new Set<string>()
+  /** "Was interrupted" notes the user dismissed that the main process has not confirmed yet. */
+  private notesDismissed = new Set<string>()
+  private recentGen = 0
   private decidedHere = new Set<string>()
   private waitingKey = ''
   private bannerTimer = 0
@@ -167,6 +199,8 @@ export class AppController {
   focusInbox: () => void = () => undefined
   /** Set by the chat composer. */
   focusChat: (draft?: string) => void = () => undefined
+  /** Set by the wake screen (an asleep row has no terminal or chat to focus). */
+  focusWake: () => void = () => undefined
 
   constructor(
     readonly bridge: AgentOfficeBridge,
@@ -202,7 +236,16 @@ export class AppController {
       board: null,
       boardSettings: null,
       boardRemoving: new Set(),
-      boardOverlaps: 0
+      boardOverlaps: 0,
+      waking: new Set(),
+      wakeErrors: {},
+      recent: EMPTY_RECENT,
+      recentStatus: 'idle',
+      recentError: null,
+      reopening: new Set(),
+      recentActionError: null,
+      restoreSettings: null,
+      restoreNotice: null
     })
     this.world = new WorldController({
       onTeams: (teams) => this.store.set({ teams }),
@@ -270,10 +313,41 @@ export class AppController {
         })
         .catch((err) => console.warn('[agent-office] could not read the office board', err))
     }
-    const last = readJson<unknown>(SELECTED_KEY, null)
+    await this.bootRestore()
+  }
+
+  /**
+   * Where the user left off: the saved settings, the Recent list, the selection of last time and
+   * the one-time summary of what was restored (and what was interrupted).
+   */
+  private async bootRestore(): Promise<void> {
+    const api = this.bridge.sessions
+    if (this.hasRestore) {
+      void api
+        .getRestoreSettings()
+        .then((rs) => {
+          if (rs && typeof rs.mode === 'string' && this.store.get().restoreSettings === null) this.store.set({ restoreSettings: rs })
+        })
+        .catch((err) => console.warn('[agent-office] could not read the restore settings', err))
+      void this.refreshRecent()
+    }
+    // The main process knows what was selected when the app closed; this window's own memory
+    // covers a reload and the window swap of an overlay toggle.
+    let saved: unknown = readJson<unknown>(SELECTED_KEY, null)
+    const known = (id: unknown) => typeof id === 'string' && this.store.get().sessions.some((s) => s.id === id)
+    if (!known(saved) && typeof api.getSelected === 'function') {
+      saved = await api.getSelected().catch(() => null)
+    }
     const state = this.store.get()
-    if (typeof last === 'string' && !state.selectedId && state.sessions.some((s) => s.id === last)) {
-      this.select(last, { reveal: false, focusWorld: false })
+    const ordered = sessionOrder(state.providers, state.sessions)
+    if (!state.selectedId) {
+      const pick = restoreSelection(saved, ordered)
+      if (pick) this.select(pick, { reveal: false, focusWorld: false })
+    }
+    const summary = restoreSummary(ordered)
+    if (summary && readJson<unknown>(RESTORE_SEEN_KEY, 0) !== summary.closedAt) {
+      writeJson(RESTORE_SEEN_KEY, summary.closedAt)
+      this.store.set({ restoreNotice: summary })
     }
   }
 
@@ -328,13 +402,22 @@ export class AppController {
   private setSessions(list: SessionInfo[]): void {
     const present = new Set(list.map((s) => s.id))
     for (const id of [...this.dismissed]) if (!present.has(id)) this.dismissed.delete(id)
-    const sessions = retainExited(this.store.get().sessions, list, (id) => this.terminals.has(id) || this.chats.has(id)).filter(
-      (s) => !this.dismissed.has(s.id)
-    )
-    const live = new Set(sessions.map((s) => s.id))
+    // A dismissed note is gone here at once; the main process's list confirms it a moment later.
+    for (const id of [...this.notesDismissed]) if (!list.some((s) => s.id === id && s.interruptedNote)) this.notesDismissed.delete(id)
+    const sessions = retainExited(this.store.get().sessions, list, (id) => this.terminals.has(id) || this.chats.has(id))
+      .filter((s) => !this.dismissed.has(s.id))
+      .map((s) => (s.interruptedNote && this.notesDismissed.has(s.id) ? { ...s, interruptedNote: undefined } : s))
+    // An asleep row has no process: nothing may stay attached to it (a failed wake goes back to
+    // asleep, and the next wake must attach from scratch).
+    const live = new Set(sessions.filter((s) => s.state !== 'asleep').map((s) => s.id))
     this.terminals.prune(live)
     this.chats.prune(live)
-    this.store.set((s) => ({ sessions, everHosted: withIds(s.everHosted, sessions) }))
+    this.store.set((s) => {
+      const gone = Object.keys(s.wakeErrors).filter((id) => !sessions.some((x) => x.id === id && x.state === 'asleep'))
+      const patch: Partial<AppState> = { sessions, everHosted: withIds(s.everHosted, sessions) }
+      if (gone.length > 0) patch.wakeErrors = Object.fromEntries(Object.entries(s.wakeErrors).filter(([id]) => !gone.includes(id)))
+      return patch
+    })
   }
 
   private setPermissions(next: PermissionRequestInfo[]): void {
@@ -393,10 +476,28 @@ export class AppController {
     if (id && (opts.reveal ?? true) && hosted) patch.layout = { ...s.layout, panelOpen: true, tab: 'terminal' }
     this.store.set(patch)
     writeJson(SELECTED_KEY, id)
+    // The main process remembers it for the next launch. Looking at a team the app only observes
+    // (or at nothing) does not forget which session was selected last.
+    if (hosted && s.selectedId !== id) this.tellSelected(id)
     if (patch.layout) this.saveLayout()
     if (id && (opts.focusWorld ?? true)) this.world.focusTeam(id)
     if (session && opts.focusTerminal) {
-      window.setTimeout(() => (session.surface === 'chat' ? this.focusChat() : this.terminals.focus()), 80)
+      window.setTimeout(() => {
+        // Read the state again: a row that was asleep a moment ago may be starting now.
+        const now = this.store.get().sessions.find((x) => x.id === id) ?? session
+        if (now.state === 'asleep') this.focusWake()
+        else if (now.surface === 'chat') this.focusChat()
+        else this.terminals.focus()
+      }, 80)
+    }
+  }
+
+  private tellSelected(id: string | null): void {
+    try {
+      // An older preload has no setSelected.
+      ;(this.bridge.sessions as Partial<AgentOfficeBridge['sessions']>).setSelected?.(id)
+    } catch (err) {
+      console.warn('[agent-office] could not save the selection', err)
     }
   }
 
@@ -536,17 +637,201 @@ export class AppController {
     void this.bridge.sessions.stop(id).catch((err) => console.warn('[agent-office] stop failed', err))
   }
 
-  /** Removes an exited session from the list and frees its terminal. */
+  /**
+   * Removes an exited or asleep session from the list and frees its terminal. The main process
+   * keeps its record: it moves to Recent, from where it can be reopened.
+   */
   removeSession(id: string): void {
     this.dismissed.add(id)
-    // For the main process, stopping an already exited session forgets it.
-    void this.bridge.sessions.stop(id).catch(() => undefined)
+    // For the main process, stopping a session without a process takes it out of the list.
+    void this.bridge.sessions
+      .stop(id)
+      .catch(() => undefined)
+      .then(() => this.refreshRecent())
     this.terminals.dispose(id)
     this.chats.dispose(id)
+    const wasSelected = this.store.get().selectedId === id
     this.store.set((s) => ({
       sessions: s.sessions.filter((x) => x.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId
     }))
+    if (wasSelected) {
+      writeJson(SELECTED_KEY, null)
+      this.tellSelected(null)
+    }
+  }
+
+  // ---- restore: sessions survive closing the app -----------------------------------------------
+
+  /** Does this main process save sessions? (An older preload has no wake.) */
+  get hasRestore(): boolean {
+    const api = this.bridge.sessions as Partial<AgentOfficeBridge['sessions']>
+    return typeof api.wake === 'function' && typeof api.recent === 'function'
+  }
+
+  /** Puts a SessionInfo the main process returned into the list (in place, or at the end). */
+  private mergeSession(info: SessionInfo): void {
+    if (!info || typeof info.id !== 'string') return
+    this.dismissed.delete(info.id)
+    this.store.set((s) => ({
+      everHosted: withIds(s.everHosted, [info]),
+      sessions: s.sessions.some((x) => x.id === info.id) ? s.sessions.map((x) => (x.id === info.id ? info : x)) : [...s.sessions, info]
+    }))
+  }
+
+  /**
+   * Wakes an asleep row: the provider conversation is resumed under the same id, so the row keeps
+   * its place and its terminal or chat appears as soon as the state leaves 'asleep'. A failure is
+   * kept in `wakeErrors` and shown on the wake screen.
+   */
+  async wake(id: string): Promise<boolean> {
+    const s0 = this.store.get()
+    const row = s0.sessions.find((x) => x.id === id)
+    if (!this.hasRestore || !row || row.state !== 'asleep' || row.wakeable === false || s0.waking.has(id)) return false
+    this.store.set((s) => ({
+      waking: new Set([...s.waking, id]),
+      wakeErrors: Object.fromEntries(Object.entries(s.wakeErrors).filter(([k]) => k !== id))
+    }))
+    const done = (patch: Partial<AppState> = {}) =>
+      this.store.set((s) => ({ ...patch, waking: new Set([...s.waking].filter((x) => x !== id)) }))
+    try {
+      const info = await this.bridge.sessions.wake(id)
+      // A pushed list may already be newer than this answer: only replace a row that is still asleep.
+      if (this.store.get().sessions.find((x) => x.id === id)?.state === 'asleep') this.mergeSession(info)
+      done()
+      if (this.store.get().selectedId === id) this.select(id, { focusTerminal: true, focusWorld: false })
+      return true
+    } catch (err) {
+      done({ wakeErrors: { ...this.store.get().wakeErrors, [id]: cleanError(err) } })
+      return false
+    }
+  }
+
+  /** Hides a session's "was interrupted" note: at once here, and for good in the main process. */
+  async dismissInterrupted(id: string): Promise<void> {
+    const note = this.store.get().sessions.find((x) => x.id === id)?.interruptedNote
+    if (!note) return
+    this.notesDismissed.add(id)
+    this.store.set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, interruptedNote: undefined } : x)) }))
+    try {
+      if (this.hasRestore) await this.bridge.sessions.dismissInterrupted(id)
+    } catch (err) {
+      console.warn('[agent-office] could not dismiss the note', err)
+      // Put it back: it would return with the next list anyway.
+      this.notesDismissed.delete(id)
+      this.store.set((s) => ({ sessions: s.sessions.map((x) => (x.id === id && !x.interruptedNote ? { ...x, interruptedNote: note } : x)) }))
+    }
+  }
+
+  /**
+   * "Tell it to continue": types `continue` + Enter into a terminal session, or sends it as a chat
+   * prompt. Like typing there yourself, so it is not gated by the orders switch. Resolves false
+   * (with nothing sent) when a draft is waiting in the chat box or the chat refused the prompt.
+   */
+  async tellContinue(id: string): Promise<boolean> {
+    const session = this.store.get().sessions.find((x) => x.id === id)
+    if (!session || session.state !== 'idle') return false
+    if (session.surface === 'chat') {
+      // The user's own half-typed prompt comes first: point at it instead of sending around it.
+      if (this.chats.ui(id).draft.trim()) {
+        this.focusChat()
+        return false
+      }
+      if (!(await this.chats.send(id, CONTINUE_TEXT))) return false
+    } else {
+      // Text first, Enter a moment later: an agent TUI takes one burst that ends in Enter for a paste.
+      this.bridge.terminal.write(id, CONTINUE_TEXT)
+      await new Promise((r) => window.setTimeout(r, 150))
+      this.bridge.terminal.write(id, '\r')
+      this.terminals.focus()
+    }
+    void this.dismissInterrupted(id)
+    return true
+  }
+
+  dismissRestoreNotice(): void {
+    this.store.set({ restoreNotice: null })
+  }
+
+  /** The launch summary was clicked: show the first interrupted session. */
+  openRestoreNotice(): void {
+    const s = this.store.get()
+    const notice = s.restoreNotice
+    if (!notice) return
+    const target = s.sessions.find((x) => x.id === notice.firstInterruptedId) ?? s.sessions.find((x) => x.interruptedNote)
+    this.store.set({ restoreNotice: null })
+    if (target) this.select(target.id, { focusTerminal: true, focusWorld: false })
+  }
+
+  /** Asks for the Recent list again (on open, and after anything that changes it). */
+  async refreshRecent(): Promise<void> {
+    if (!this.hasRestore) return
+    const gen = ++this.recentGen
+    if (this.store.get().recentStatus !== 'ready') this.store.set({ recentStatus: 'loading', recentError: null })
+    try {
+      const items = await this.bridge.sessions.recent()
+      if (gen !== this.recentGen) return
+      this.store.set((s) => ({
+        recent: recentReducer(s.recent, { type: 'loaded', items: Array.isArray(items) ? items : [] }),
+        recentStatus: 'ready',
+        recentError: null
+      }))
+    } catch (err) {
+      if (gen !== this.recentGen) return
+      this.store.set({ recentStatus: 'error', recentError: cleanError(err) })
+    }
+  }
+
+  /** Reopens a recent session: its conversation is resumed as a live session, which is selected. */
+  async reopenRecent(id: string): Promise<void> {
+    if (!this.hasRestore || this.store.get().reopening.has(id)) return
+    this.store.set((s) => ({ reopening: new Set([...s.reopening, id]), recentActionError: null }))
+    const done = (patch: Partial<AppState> = {}) =>
+      this.store.set((s) => ({ ...patch, reopening: new Set([...s.reopening].filter((x) => x !== id)) }))
+    try {
+      const info = await this.bridge.sessions.reopen(id)
+      const known = this.store.get().sessions.find((x) => x.id === info.id)
+      if (!known || known.state === 'asleep' || known.state === 'exited') this.mergeSession(info)
+      done({ recent: recentReducer(this.store.get().recent, { type: 'reopened', id }) })
+      this.select(info.id, { focusTerminal: true, focusWorld: false })
+      void this.refreshRecent()
+    } catch (err) {
+      done({ recentActionError: { id, text: cleanError(err) } })
+    }
+  }
+
+  /** Forgets a recent entry: gone at once, back if the main process refuses. */
+  async forgetRecent(id: string): Promise<void> {
+    if (!this.hasRestore || this.store.get().recent.forgetting.has(id)) return
+    this.store.set((s) => ({ recent: recentReducer(s.recent, { type: 'forget', id }), recentActionError: null }))
+    try {
+      await this.bridge.sessions.forget(id)
+      this.store.set((s) => ({ recent: recentReducer(s.recent, { type: 'forgotten', id }) }))
+    } catch (err) {
+      this.store.set((s) => ({
+        recent: recentReducer(s.recent, { type: 'rollback', id }),
+        recentActionError: { id, text: cleanError(err) }
+      }))
+    }
+  }
+
+  clearRecentError(): void {
+    this.store.set({ recentActionError: null })
+  }
+
+  /** What happens to saved sessions when the app opens. Shown at once, put back on a refusal. */
+  async setRestoreSettings(patch: Partial<RestoreSettings>): Promise<void> {
+    const prev = this.store.get().restoreSettings
+    if (!this.hasRestore || !prev) return
+    const optimistic = { ...prev, ...patch }
+    this.store.set({ restoreSettings: optimistic })
+    try {
+      const next = await this.bridge.sessions.setRestoreSettings(patch)
+      if (next && this.store.get().restoreSettings === optimistic) this.store.set({ restoreSettings: next })
+    } catch (err) {
+      console.warn('[agent-office] could not change the restore settings', err)
+      if (this.store.get().restoreSettings === optimistic) this.store.set({ restoreSettings: prev })
+    }
   }
 
   async decide(req: PermissionRequestInfo, decision: PermissionDecision): Promise<void> {

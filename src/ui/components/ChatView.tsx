@@ -15,6 +15,7 @@ import type { Store } from '../store'
 import { useStore } from '../store'
 import { Composer } from './chat/Composer'
 import { ItemView } from './chat/items'
+import { InterruptedNote } from './Restore'
 import { SessionHeader } from './SessionHeader'
 
 /** Closer to the bottom than this counts as "at the bottom" (the list follows new output). */
@@ -237,7 +238,8 @@ export function ChatView({ hidden }: { hidden: boolean }) {
   const providers = useAppState((s) => s.providers)
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
   const selected = sessions.find((s) => s.id === selectedId) ?? null
-  const session = selected && selected.surface === 'chat' ? selected : null
+  // An asleep row has no conversation attached: its wake screen is shown instead (see Panel).
+  const session = selected && selected.surface === 'chat' && selected.state !== 'asleep' ? selected : null
   const sessionId = session?.id ?? null
   const providerLabel = providers.find((p) => p.id === session?.provider)?.label ?? 'the agent'
 
@@ -270,12 +272,13 @@ export function ChatView({ hidden }: { hidden: boolean }) {
           )}
         </div>
       )}
+      <InterruptedNote session={session} />
       {session.state === 'exited' && (
         <div className="term-banner" role="status">
           <span>
             <strong>Session ended</strong>
-            {session.exitCode === null || session.exitCode === undefined ? '.' : ` with exit code ${session.exitCode}.`} The conversation below is
-            kept until you remove it.
+            {session.exitCode === null || session.exitCode === undefined ? '.' : ` with exit code ${session.exitCode}.`}{' '}
+            {session.notice?.trim() || 'The conversation below is kept until you remove it.'}
           </span>
           <button type="button" className="btn btn-sm" onClick={() => app.removeSession(session.id)}>
             Remove from list

@@ -99,7 +99,9 @@ export function age(ms: number): string {
 
 /** A session state as the board shows it. */
 export function boardStatus(state: SessionState): BoardStatus {
-  if (state === 'exited') return 'ended'
+  // A sleeping session (saved from an earlier run, no process) is not on the board at all; if one
+  // is ever asked about, it is not live.
+  if (state === 'exited' || state === 'asleep') return 'ended'
   if (state === 'busy') return 'busy'
   if (state === 'waiting-permission') return 'waiting'
   return 'idle'

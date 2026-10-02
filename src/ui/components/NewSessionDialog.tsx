@@ -114,6 +114,8 @@ export function NewSessionDialog() {
   const app = useApp()
   const providers = useAppState((s) => s.providers)
   const recent = useAppState((s) => s.recentFolders)
+  // Sessions that ended earlier are reopened from the sidebar, not started again here.
+  const reopenable = useAppState((s) => s.recent.items.length - s.recent.forgetting.size)
   // A provider that is ready to go comes first; one that still needs a sign-in is the fallback.
   const firstAvailable = (providers.find((p) => p.available && !loginHint(p)) ?? providers.find((p) => p.available))?.id ?? null
 
@@ -303,6 +305,19 @@ export function NewSessionDialog() {
           )}
 
           <footer className="modal-foot">
+            {reopenable > 0 && (
+              <button
+                type="button"
+                className="link modal-foot-aside"
+                onClick={() => {
+                  app.closeDialog()
+                  app.setLayout({ recentOpen: true })
+                }}
+                title="Sessions that ended earlier are listed under Recent in the sidebar"
+              >
+                Reopen a recent session…
+              </button>
+            )}
             <button type="button" className="btn btn-ghost" onClick={() => app.closeDialog()}>
               Cancel
             </button>

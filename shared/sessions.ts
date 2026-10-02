@@ -10,6 +10,8 @@
 import type { PermissionRisk } from './permissionText'
 
 export type { PermissionRisk } from './permissionText'
+import type { SavedPendingRequest } from './restore'
+
 export type ProviderId = 'claude-code' | 'codex' | 'antigravity'
 
 export interface ProviderInfo {
@@ -58,6 +60,7 @@ export type SessionState =
   | 'idle' //                waiting for a prompt
   | 'busy' //                working on a turn
   | 'waiting-permission' //  blocked on a permission request (see PermissionRequestInfo)
+  | 'asleep' //             saved from an earlier run; no process. Wake it to resume the conversation
   | 'exited'
 
 export interface SessionInfo {
@@ -78,6 +81,18 @@ export interface SessionInfo {
   /** Can orders be delivered right now? */
   canReceiveOrders: boolean
   exitCode?: number | null
+  /** Asleep rows only: can the provider conversation be resumed? (false = record without a conversation id) */
+  wakeable?: boolean
+  /** Set on a session that was working or waiting when the app last closed, until the user dismisses it. */
+  interruptedNote?: { closedAt: number; pending: SavedPendingRequest[] }
+  lastActiveAt?: number
+  /** One-line preview of the user's last prompt in this session (<= 120 chars), when one is saved. */
+  lastPrompt?: string
+  /** True while the session is being woken (sessions.wake, or the automatic wake at launch). */
+  waking?: boolean
+  /** A short plain sentence about why the session ended, when the app knows (e.g. its saved
+   *  conversation no longer exists, so it could not be resumed). */
+  notice?: string
 }
 
 /** Subagents appear in the world as `${sessionId}:${providerAgentId}`. */

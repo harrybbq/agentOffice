@@ -266,6 +266,76 @@ in a scratch folder, with four short turns: approval allowed, approval denied wi
 order in the middle of a turn, an interrupt, then a restart and resume. It also watches for console
 windows while Codex and its commands run.
 
+## Restoring sessions
+
+Closing Agent Office stops the agents it hosts, but not your work with them: the next launch shows
+the same sessions in the same places. This also holds when the app did not get to say goodbye (a
+crash, a forced shutdown, a power cut), because the file is kept current while you work.
+
+**What comes back.** Every session that was in the sidebar returns as a **sleeping** row: same
+team, colour, title, folder, permission mode and model, but no process and no memory use. **Waking**
+a row resumes the provider's own conversation (`claude --resume <id>`, Codex `thread/resume` with
+the session's approval policy and sandbox sent again), so the agent has everything that was said
+before. The session that was selected when the app closed is woken for you. A sleeping row takes no
+orders ("asleep — wake it first"), is not on the office board and has no characters in the world
+until it is woken.
+
+If a session was working, waiting for your answer, or had subagents running when the app closed, it
+carries a **"was interrupted" note** with the questions that were waiting, in plain words. The note
+stays until you dismiss it or send that session its next prompt.
+
+**Recent.** A session you stop (or that exits by itself) leaves the sidebar and goes to the Recent
+list: the last 30, newest first. Reopening one resumes its conversation as a live session under its
+old identity. Stopping a sleeping row does the same without starting anything. **Forget** removes a
+sleeping row or a recent entry from Agent Office for good; the conversation itself stays in Claude
+Code's or Codex's own history, which the app never deletes from.
+
+**What to wake on launch** (`restore.mode` in `config.json`; the app offers the same choice):
+
+| Mode | On launch |
+| --- | --- |
+| `last` (default) | wakes the session that was selected; the others sleep until you click them |
+| `all` | wakes every session, one at a time (each one waits for the one before to be ready, at most 20 s), which costs the memory of all of them |
+| `none` | everything sleeps |
+
+**Limits.**
+- A permission request **cannot** be restored as still waiting: it died with the process that
+  asked. The note tells you what was asked; the resumed agent sees its last step as interrupted
+  ("Interrupted · What should Claude do instead?") and you tell it whether to try again.
+- **Subagents that were running are gone** and are not restarted. Ask the session to run them again.
+- A command that was running is not continued either; only the conversation is.
+- At most 8 sessions run at once, as before. Sleeping rows don't count towards that, but the sidebar
+  holds 8 rows: when a ninth session is started, the sleeping row that was active longest ago moves
+  to Recent (with its note).
+- If the provider no longer has the conversation (you deleted it, or it was never written), the
+  session ends with "The saved conversation no longer exists, so this session could not be resumed"
+  and can't be woken again; forget it from Recent. A session that was closed before it ever reached
+  a conversation is not remembered at all.
+- After a hard kill, Claude Code may start its next session with the line "fullscreen renderer
+  didn't finish starting last time … using the classic renderer". That is Claude Code's own
+  recovery and goes away by itself.
+
+**What is saved, and where.** `sessions.json` next to `config.json` (see [Config & security](#config--security)),
+written atomically (temp file, then rename) about half a second after anything changes and once
+more on quit. Per session: the app's id for it, provider, folder, title, permission mode, model, the
+provider's conversation id, when it started and was last active, a one-line preview of your last
+prompt (120 characters at most), whether it was interrupted, and the pending questions (10 at most:
+the plain sentence, the tool name, the time). Plus which session was selected. The window's size,
+position and maximised state are remembered in `config.json`, per display layout, and moved back
+onto a screen that exists if the layout changed.
+
+**What is never saved.** No tokens (the ingest token, session tokens, board tokens), no inbox socket
+paths, no environment, no terminal contents, no chat transcript, no command output, no tool input
+beyond the plain question. The preview and the questions are cut to one line and anything that
+looks like a credential (API keys, bearer tokens, `password=…`, long random strings) is replaced
+with `[hidden]` before it is written. A `sessions.json` that can't be read, or comes from another
+version, is set aside as `sessions.json.bad` and the app starts with an empty list.
+
+`npx electron scripts/e2e-restore.cjs [--codex]` checks all of this against the real agents in a
+scratch folder: it starts a session, leaves a permission request pending, kills the whole process
+tree, and has a new process bring the session back, wake it and ask it what it was doing (two short
+Claude turns on Haiku; with `--codex` two short Codex turns as well).
+
 ## Office board
 
 Teams that work in the same repository tell each other what they are doing, so no work is done
@@ -357,7 +427,7 @@ Config file:
 - macOS: `~/Library/Application Support/agent-office/config.json`
 - Linux: `~/.config/agent-office/config.json`
 
-It holds `{ token, port, theme, alwaysOnTop, overlay, allowOrders, officeWideMinutes, board }` (`board`: see [Office board](#office-board)).
+It holds `{ token, port, theme, alwaysOnTop, overlay, allowOrders, officeWideMinutes, board, restore, window }` (`board`: see [Office board](#office-board); `restore` and `window`: see [Restoring sessions](#restoring-sessions)). The saved sessions are in `sessions.json` in the same folder.
 
 For testing, `AGENT_OFFICE_USER_DATA=<dir>` runs a second, isolated instance with its own config, and
 `AGENT_OFFICE_SHOW_INACTIVE=1` shows the window without taking focus. In dev builds,
@@ -463,13 +533,15 @@ See `themes/office/` (generated by `scripts/gen-office-map.cjs`) and `docs/art-d
 electron/   main process: window, tray, config, ingest server, adapters, theme protocol,
             hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process),
             the office board (board.ts = model, boardMcp.ts = its MCP tools, boardProject.ts = which repository)
+            session restore (sessionStore.ts = sessions.json, windowState.ts = the window position)
 hook/       the SessionStart command hook injected into hosted Claude Code sessions
 shared/     event format, theme format, IPC contract
 src/        renderer: the React shell (src/ui: sessions, terminal, CEO inbox, order bar) and the
             Phaser world (scene, characters, roster)
 themes/     bundled themes
 scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI),
-            e2e-board.cjs (office board check against real Claude Code and Codex sessions)
+            e2e-board.cjs (office board check against real Claude Code and Codex sessions),
+            e2e-restore.cjs (kill the app with a request pending, bring the session back)
 docs/       research notes (hooks, art direction)
 ```
 

@@ -68,6 +68,7 @@ export const STATE_LABEL: Record<SessionState, string> = {
   idle: 'Idle',
   busy: 'Working',
   'waiting-permission': 'Waiting for permission',
+  asleep: 'Asleep',
   exited: 'Exited'
 }
 
@@ -119,7 +120,8 @@ export function orderTargets(
 ): OrderTargetOption[] {
   const live: { id: string; name: string; provider: string }[] = []
   for (const s of sessionOrder(providers, sessions)) {
-    if (s.state !== 'exited') live.push({ id: s.id, name: s.title, provider: s.provider })
+    // An asleep row has no process: nothing to deliver an order to until it is woken.
+    if (s.state !== 'exited' && s.state !== 'asleep') live.push({ id: s.id, name: s.title, provider: s.provider })
   }
   for (const t of teams) {
     if (t.live && !sessions.some((s) => s.id === t.id)) live.push({ id: t.id, name: t.name, provider: t.provider })
@@ -473,6 +475,8 @@ export function composerState(state: SessionState, providerLabel: string): Compo
       return { enabled: false, steer: false, reason: `${providerLabel} is starting…` }
     case 'needs-attention':
       return { enabled: false, steer: false, reason: `${providerLabel} can't take a prompt right now. See the notice above.` }
+    case 'asleep':
+      return { enabled: false, steer: false, reason: 'This session is asleep. Wake it to continue.' }
     case 'exited':
       return { enabled: false, steer: false, reason: 'This session has ended. Start a new one to continue.' }
   }

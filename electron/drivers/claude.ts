@@ -23,7 +23,7 @@ import type { RequestContext } from '../adapters/types'
 import { BOARD_SERVER_CLAUDE, CLAUDE_BOARD_ALLOW } from '../boardMcp'
 import { DEFAULT_DENY_MESSAGE, describeToolInput } from '../permissions'
 import { plainPermission, type PlainPermission } from '../../shared/permissionText'
-import { claudeBriefing, taggedOrder } from './claudeBriefing'
+import { CEO_ORDER_TAG, claudeBriefing, taggedOrder } from './claudeBriefing'
 import type { SessionInbox } from '../sessionInbox'
 import { SessionStateMachine, titleHint, type Scheduler } from './sessionState'
 import {
@@ -334,6 +334,11 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     return (s === 'busy' || s === 'waiting-permission') && this.opts.inbox.has(this.id)
   }
 
+  /** Subagents running right now. */
+  get workers(): number {
+    return this.exited ? 0 : this.mapper.subagents().length
+  }
+
   async start(): Promise<void> {
     const exe = (this.opts.findExecutable ?? findClaudeExecutable)()
     if (!exe) throw new Error('Claude Code is not installed (no `claude` executable found)')
@@ -424,6 +429,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       case 'prompt':
         machine.activity()
         for (const w of this.promptWaiters.splice(0)) w(true)
+        if (typeof body.prompt === 'string') this.ctx.events.onPrompt?.(orderText(body.prompt))
         // A real prompt (typed, or an order) gets the office board's digest, when there is news.
         return this.promptDigest()
       case 'synthetic-prompt':
@@ -441,6 +447,11 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
         break
       case 'permission':
         return this.holdPermission(body, mapped.agentId, mapped.displayName, req)
+      case 'subagent-start':
+      case 'subagent-stop':
+        // `workers` changed: what is saved about the session follows (shared/restore.ts).
+        this.ctx.events.onChanged()
+        break
       case 'stop':
         // Leftover cards of the main thread; a background subagent may still be waiting.
         this.ctx.permissions.clearSession(this.id, this.id)
@@ -663,6 +674,15 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   }
 }
 
+/** A prompt as the user wrote it: an order arrives with the tag line in front. */
+function orderText(prompt: string): string {
+  const at = prompt.indexOf(CEO_ORDER_TAG)
+  return at >= 0 && prompt.slice(0, at).trim().length < 40 ? prompt.slice(at + CEO_ORDER_TAG.length) : prompt
+}
+
+/** What `claude --resume <id>` prints when it has no such conversation (it then exits). */
+export const CLAUDE_NO_CONVERSATION = /no conversation found/i
+
 /** The file an edit tool's hook payload is about, or '' (another tool, or no path). */
 export function editedPath(body: Record<string, unknown>): string {
   if (typeof body.tool_name !== 'string' || !EDIT_TOOLS.includes(body.tool_name) || !isRecord(body.tool_input)) return ''
@@ -709,6 +729,7 @@ export function claudeProvider(opts: ClaudeProviderOptions): ProviderDefinition 
       cached = { at: Date.now(), info }
       return info
     },
-    createDriver: (ctx) => new ClaudeDriver(ctx, opts)
+    createDriver: (ctx) => new ClaudeDriver(ctx, opts),
+    conversationGone: ({ screen }) => !!screen && CLAUDE_NO_CONVERSATION.test(screen)
   }
 }

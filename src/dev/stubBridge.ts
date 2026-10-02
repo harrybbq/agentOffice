@@ -8,8 +8,12 @@
 // board) · ?orders=off · ?overlay=1 · ?board=none (no office board, as an older main process)
 // · ?codex=loggedout (Codex needs a sign-in; "Log in" succeeds after a few seconds)
 // · ?play=0 (the Codex session does not start its scripted turn by itself) · ?speed=0.5 (script speed)
+// · ?restore=none (nothing saved from an earlier run: no asleep rows, no Recent list) · ?restore=demo
+//   with ?stub=empty (only the restored rows, as right after a restart) · ?restore=old (a bridge
+//   without restore, as an older main process)
 // Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id),
-// codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout(), board.note(text) ...).
+// codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout(), board.note(text),
+// restore.failNextWake() / failNextForget() / failNextReopen() / selected() / settings() ...).
 // The Codex side (chat sessions, the scripted turn) lives in ./stubCodex.ts, the office board in
 // ./stubBoard.ts.
 import { permissionAction, plainPermission } from '../../shared/permissionText'
@@ -18,6 +22,7 @@ import type { Activity, AgentEvent } from '../../shared/events'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
 import { PROVIDER_TARGET_PREFIX, REASON_DISABLED, REASON_NO_SESSIONS } from '../../shared/orders'
 import type { OrderResult } from '../../shared/orders'
+import type { RestoreSettings, SavedSession } from '../../shared/restore'
 import type {
   PermissionOutcome,
   PermissionRequestInfo,
@@ -96,7 +101,8 @@ export function createStubBridge(): AgentOfficeBridge {
   const sessions = new Map<string, FakeSession>()
   let pending: PermissionRequestInfo[] = []
   let counter = 0
-  const board = createBoardStub(() => [...sessions.values()].map((s) => s.info))
+  // An asleep row has no team: it is not on the office board.
+  const board = createBoardStub(() => [...sessions.values()].map((s) => s.info).filter((i) => i.state !== 'asleep'))
 
   const emit = (input: Partial<AgentEvent> & { agentId: string; activity: Activity }) => {
     const e = parseAgentEvent({ provider: 'claude-code', ts: Date.now(), ...input })
@@ -112,7 +118,7 @@ export function createStubBridge(): AgentOfficeBridge {
     permCbs.forEach((cb) => cb(list))
   }
   const setState = (s: FakeSession, state: SessionState) => {
-    if (s.info.state === 'exited') return
+    if (s.info.state === 'exited' || !sessions.has(s.info.id)) return
     s.info.state = state
     s.info.canReceiveOrders = state === 'idle' || state === 'busy'
     pushSessions()
@@ -331,6 +337,235 @@ export function createStubBridge(): AgentOfficeBridge {
     pushSessions()
   }
 
+  // ---- restore: what an earlier run left behind ---------------------------------------------
+  const HOUR = 3_600_000
+  const restoreParam = params.get('restore') ?? (mode === 'demo' ? 'demo' : 'none')
+  const restoreSettings: RestoreSettings = { mode: 'last' }
+  let recent: SavedSession[] = []
+  let selectedSaved: string | null = null
+  let failWake: string | null = null
+  let failForget: string | null = null
+  let failReopen: string | null = null
+  /** The prompt preview of each restored row (SavedSession.lastPrompt). */
+  const lastPrompts = new Map<string, string>()
+
+  const saved = (o: Partial<SavedSession> & Pick<SavedSession, 'id' | 'provider' | 'cwd' | 'title' | 'lastActiveAt'>): SavedSession => ({
+    titleIsCustom: false,
+    permissionMode: 'default',
+    providerSessionId: `conv-${o.id}`,
+    startedAt: o.lastActiveAt - HOUR,
+    interrupted: false,
+    pendingAtClose: [],
+    status: 'recent',
+    ...o
+  })
+
+  /** A row saved by the last run: no process, no team in the world, no events. */
+  const sleeper = (o: Partial<SessionInfo> & Pick<SessionInfo, 'id' | 'provider' | 'cwd' | 'title'>, lastPrompt?: string): FakeSession => {
+    const s: FakeSession = {
+      info: {
+        state: 'asleep',
+        startedAt: Date.now() - 26 * HOUR,
+        permissionMode: 'default',
+        surface: o.provider === 'codex' ? 'chat' : 'terminal',
+        canReceiveOrders: false,
+        wakeable: true,
+        ...o
+      },
+      buffer: '',
+      attached: false,
+      line: '',
+      workers: [],
+      timers: []
+    }
+    if (lastPrompt) {
+      lastPrompts.set(o.id, lastPrompt)
+      // Not in SessionInfo (yet): the wake screen shows it when the main process sends it along.
+      ;(s.info as SessionInfo & { lastPrompt?: string }).lastPrompt = lastPrompt
+    }
+    sessions.set(o.id, s)
+    return s
+  }
+
+  /** A row leaves the sidebar for the Recent list (it was stopped while asleep, or removed after it exited). */
+  const toRecent = (s: FakeSession) => {
+    const i = s.info
+    recent = [
+      saved({
+        id: i.id,
+        provider: i.provider,
+        cwd: i.cwd,
+        title: i.title,
+        permissionMode: i.permissionMode,
+        model: i.model,
+        providerSessionId: i.wakeable === false ? undefined : `conv-${i.id}`,
+        startedAt: i.startedAt,
+        lastActiveAt: i.lastActiveAt ?? Date.now(),
+        lastPrompt: lastPrompts.get(i.id)
+      }),
+      ...recent.filter((r) => r.id !== i.id)
+    ]
+  }
+
+  /** The screen a resumed Claude Code session comes back with. */
+  const resumed = (s: FakeSession) => {
+    const prompt = lastPrompts.get(s.info.id)
+    out(
+      s,
+      [
+        '',
+        ` ${fg(208, '✻')} ${bold('Claude Code')} ${dim('(stub terminal) · conversation resumed')}`,
+        `   ${dim('cwd:')} ${s.info.cwd}`,
+        '',
+        ...(prompt ? [`${PROMPT}${prompt}`, '', `${fg(42, '●')} I'll start with the schema, then move the callers over.`, `${fg(42, '●')} ${bold('Update')}(db/schema.sql)`, `  ${dim('⎿')}  Updated with ${fg(42, '14 additions')}`, `  ${dim('⎿')}  ${fg(203, 'Interrupted')} ${dim('· the session was closed')}`, ''] : []),
+        ''
+      ].join('\r\n') + PROMPT
+    )
+  }
+
+  /** asleep / recent -> starting -> idle, with the terminal or chat the session had. */
+  const bringBack = (s: FakeSession) => {
+    const id = s.info.id
+    s.info.state = 'starting'
+    delete s.info.wakeable
+    s.info.lastActiveAt = Date.now()
+    sessions.set(id, s)
+    emit({ agentId: id, parentId: null, provider: s.info.provider, displayName: s.info.title, activity: 'idle', detail: '' })
+    if (s.info.surface === 'chat') codex.add(id, { history: true, autoplay: false })
+    pushSessions()
+    later(s, 1100, () => {
+      if (s.info.surface !== 'chat') resumed(s)
+      setState(s, 'idle')
+    })
+  }
+
+  if (restoreParam !== 'none' && restoreParam !== 'old') {
+    const now = Date.now()
+    sleeper(
+      {
+        id: 'saved-claude-1',
+        provider: 'claude-code',
+        cwd: 'C:\\Users\\Harry\\source\\repos\\storefront',
+        title: 'checkout-migration',
+        model: 'opus',
+        startedAt: now - 27 * HOUR,
+        lastActiveAt: now - 2 * HOUR - 8 * 60_000,
+        interruptedNote: {
+          closedAt: now - 2 * HOUR,
+          pending: [
+            { question: 'checkout-migration wants to run the database migration (`npm run db:migrate`).', toolName: 'Bash', askedAt: now - 2 * HOUR - 4 * 60_000 },
+            { question: 'checkout-migration wants to edit `src/checkout/payment.ts`.', toolName: 'Edit', askedAt: now - 2 * HOUR - 60_000 }
+          ]
+        }
+      },
+      'Move the checkout tables to the new schema and update every caller; run the migration when the tests pass.'
+    )
+    sleeper(
+      { id: 'saved-claude-2', provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\scratch', title: 'scratch', startedAt: now - 26 * HOUR, lastActiveAt: now - 5 * HOUR, wakeable: false }
+    )
+    sleeper(
+      { id: 'saved-codex-1', provider: 'codex', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'gpt-6-luna', model: 'gpt-6-luna', startedAt: now - 25 * HOUR, lastActiveAt: now - 3 * HOUR },
+      'What does the sidebar show, in one paragraph?'
+    )
+    selectedSaved = 'saved-claude-1'
+    recent = [
+      saved({ id: 'recent-1', provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'theme-loader', model: 'sonnet', lastActiveAt: now - 3 * HOUR, lastPrompt: 'Make the theme loader report a missing tileset instead of failing silently' }),
+      saved({ id: 'recent-2', provider: 'codex', cwd: 'C:\\Users\\Harry\\source\\repos\\storefront', title: 'gpt-6-luna', model: 'gpt-6-luna', lastActiveAt: now - 20 * HOUR, lastPrompt: 'Review my uncommitted changes and list anything risky before I push' }),
+      saved({ id: 'recent-3', provider: 'claude-code', cwd: 'D:\\work\\api-server', title: 'rate-limits', permissionMode: 'plan', lastActiveAt: now - 3 * 24 * HOUR, lastPrompt: 'Plan how to add per-key rate limits to the public API without breaking existing clients, and say which tables change' }),
+      saved({ id: 'recent-4', provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\notes', title: 'notes', providerSessionId: undefined, lastActiveAt: now - 12 * 24 * HOUR })
+    ]
+  }
+
+  const restoreApi: Pick<
+    AgentOfficeBridge['sessions'],
+    'wake' | 'recent' | 'reopen' | 'forget' | 'dismissInterrupted' | 'getRestoreSettings' | 'setRestoreSettings' | 'setSelected' | 'getSelected'
+  > = {
+    wake: async (id) => {
+      const s = sessions.get(id)
+      if (!s) throw new Error('This session is no longer in the list')
+      if (s.info.state !== 'asleep') return { ...s.info }
+      await new Promise((r) => setTimeout(r, 1400))
+      if (s.info.wakeable === false) throw new Error('No saved conversation to resume')
+      if (failWake) {
+        const msg = failWake
+        failWake = null
+        // The wrapper Electron puts around a rejected invoke: the shell strips it.
+        throw new Error(`Error invoking remote method 'agent-office:sessions:wake': Error: ${msg}`)
+      }
+      if (!sessions.has(id)) throw new Error('This session is no longer in the list')
+      bringBack(s)
+      return { ...s.info }
+    },
+    recent: async () => {
+      await new Promise((r) => setTimeout(r, 120))
+      return [...recent].sort((a, b) => b.lastActiveAt - a.lastActiveAt).map((r) => ({ ...r }))
+    },
+    reopen: async (id) => {
+      await new Promise((r) => setTimeout(r, 700))
+      const r = recent.find((x) => x.id === id)
+      if (!r) throw new Error('This session is no longer in the Recent list')
+      if (!r.providerSessionId) throw new Error('No saved conversation to resume')
+      if (failReopen) {
+        const msg = failReopen
+        failReopen = null
+        throw new Error(msg)
+      }
+      recent = recent.filter((x) => x.id !== id)
+      if (r.lastPrompt) lastPrompts.set(id, r.lastPrompt)
+      const s: FakeSession = {
+        info: {
+          id,
+          provider: r.provider,
+          cwd: r.cwd,
+          title: r.title,
+          state: 'starting',
+          startedAt: Date.now() + ++counter,
+          permissionMode: r.permissionMode,
+          model: r.model,
+          surface: r.provider === 'codex' ? 'chat' : 'terminal',
+          canReceiveOrders: false
+        },
+        buffer: '',
+        attached: false,
+        line: '',
+        workers: [],
+        timers: []
+      }
+      bringBack(s)
+      return { ...s.info }
+    },
+    forget: async (id) => {
+      await new Promise((r) => setTimeout(r, 250))
+      if (failForget) {
+        const msg = failForget
+        failForget = null
+        throw new Error(msg)
+      }
+      recent = recent.filter((x) => x.id !== id)
+      const s = sessions.get(id)
+      if (s && (s.info.state === 'asleep' || s.info.state === 'exited')) {
+        sessions.delete(id)
+        pushSessions()
+      }
+    },
+    dismissInterrupted: async (id) => {
+      const s = sessions.get(id)
+      if (!s?.info.interruptedNote) return
+      delete s.info.interruptedNote
+      pushSessions()
+    },
+    getRestoreSettings: async () => ({ ...restoreSettings }),
+    setRestoreSettings: async (patch) => {
+      if (patch.mode !== undefined && !['last', 'all', 'none'].includes(patch.mode)) throw new Error('invalid mode')
+      Object.assign(restoreSettings, patch)
+      return { ...restoreSettings }
+    },
+    setSelected: (id) => {
+      selectedSaved = id
+    },
+    getSelected: async () => (selectedSaved && sessions.has(selectedSaved) ? selectedSaved : null)
+  }
+
   // ---- demo scenario -----------------------------------------------------------------------
   if (mode === 'demo') {
     window.setTimeout(() => {
@@ -439,7 +674,21 @@ export function createStubBridge(): AgentOfficeBridge {
     codex,
     codexId: () => [...sessions.values()].find((s) => s.info.surface === 'chat' && s.info.state !== 'exited')?.info.id ?? null,
     board: board.handle,
-    logout: () => setCodexAccount(false)
+    logout: () => setCodexAccount(false),
+    restore: {
+      failNextWake: (message = 'The conversation could not be resumed: its saved session file no longer exists') => {
+        failWake = message
+      },
+      failNextForget: (message = 'The saved sessions file could not be written') => {
+        failForget = message
+      },
+      failNextReopen: (message = 'Codex is not signed in. Log in and try again.') => {
+        failReopen = message
+      },
+      selected: () => selectedSaved,
+      settings: () => ({ ...restoreSettings }),
+      recent: () => recent
+    }
   }
   ;(window as unknown as Record<string, unknown>).__stub = stubHandle
   // Kept from the old dev bridge: __agentOfficeEmit({ agentId: 'a', activity: 'read', ... })
@@ -486,9 +735,9 @@ export function createStubBridge(): AgentOfficeBridge {
       const all = [...sessions.values()]
       const targets =
         req.target === 'all'
-          ? all.filter((s) => s.info.state !== 'exited')
+          ? all.filter((s) => s.info.state !== 'exited' && s.info.state !== 'asleep')
           : req.target.startsWith(PROVIDER_TARGET_PREFIX)
-            ? all.filter((s) => s.info.provider === req.target.slice(PROVIDER_TARGET_PREFIX.length) && s.info.state !== 'exited')
+            ? all.filter((s) => s.info.provider === req.target.slice(PROVIDER_TARGET_PREFIX.length) && s.info.state !== 'exited' && s.info.state !== 'asleep')
             : all.filter((s) => s.info.id === req.target)
       const res: OrderResult = { delivered: [], failed: [] }
       for (const s of targets) {
@@ -548,11 +797,20 @@ export function createStubBridge(): AgentOfficeBridge {
         return { ...s.info }
       },
       stop: async (id) => {
+        const s = sessions.get(id)
+        // No process behind it: the row leaves the list and its record moves to Recent.
+        if (s && (s.info.state === 'asleep' || s.info.state === 'exited')) {
+          await new Promise((r) => setTimeout(r, 150))
+          sessions.delete(id)
+          if (restoreParam !== 'old') toRecent(s)
+          pushSessions()
+          return
+        }
         window.setTimeout(() => exit(id, 0), 400)
       },
       interrupt: async (id) => {
         const s = sessions.get(id)
-        if (!s || s.info.state === 'exited') return
+        if (!s || s.info.state === 'exited' || s.info.state === 'asleep') return
         if (s.info.surface === 'chat') return codex.interrupt(id)
         s.timers.forEach((t) => window.clearTimeout(t))
         s.timers = []
@@ -576,13 +834,16 @@ export function createStubBridge(): AgentOfficeBridge {
           { id: 'thr-oldest', preview: '', updatedAt: now - 40 * 86_400_000 }
         ]
       },
-      onChanged: (cb) => (sessionCbs.add(cb), () => sessionCbs.delete(cb))
+      onChanged: (cb) => (sessionCbs.add(cb), () => sessionCbs.delete(cb)),
+      // ?restore=old: a main process from before sessions were saved.
+      ...(restoreParam === 'old' ? ({} as typeof restoreApi) : restoreApi)
     },
 
     terminal: {
       attach: async (id) => {
         const s = sessions.get(id)
         if (!s) throw new Error('unknown session')
+        if (s.info.state === 'asleep') throw new Error('this session is asleep: it has no terminal until it is woken')
         if (s.info.surface === 'chat') throw new Error('this session has no terminal')
         s.attached = true
         return { data: s.buffer, cols: 80, rows: 24 }
@@ -593,7 +854,7 @@ export function createStubBridge(): AgentOfficeBridge {
       },
       write: (id, data) => {
         const s = sessions.get(id)
-        if (s) input(s, data)
+        if (s && s.info.state !== 'asleep') input(s, data)
       },
       resize: () => undefined,
       ack: () => undefined,

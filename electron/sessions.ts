@@ -11,7 +11,8 @@ import { randomBytes } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { basename, isAbsolute, resolve } from 'node:path'
 import { CHAT_MAX_PROMPT_CHARS, type ChatEvent, type ChatItem } from '../shared/chat'
-import { planOrder, REASON_NOT_CONNECTED, type OrderResult } from '../shared/orders'
+import { planOrder, REASON_ASLEEP, REASON_NOT_CONNECTED, type OrderResult } from '../shared/orders'
+import { canWake, MAX_SAVED_PENDING, type RestoreMode, type RestoreSettings, type SavedPendingRequest, type SavedSession } from '../shared/restore'
 import type {
   PermissionMode,
   PermissionOutcome,
@@ -31,10 +32,18 @@ import type { AgentDriver, ProviderDefinition, PtyHost, ValidatedStart } from '.
 import { parsePermissionDecision, PermissionRegistry } from './permissions'
 import { PTY_MAX_WRITE_CHARS } from './ptyProtocol'
 import { assignTitles } from './sessionTitles'
+import { promptPreview, type SessionStore } from './sessionStore'
 
 export const MAX_LIVE_SESSIONS = 8
 /** An exited session stays in the list this long, so its last screen and exit code can be seen. */
 export const EXITED_RETENTION_MS = 60_000
+/** Restore mode 'all': the next session is woken when this one is ready, or after this long. */
+export const WAKE_ALL_WAIT_MS = 20_000
+export const NO_SAVED_CONVERSATION = 'This session has no saved conversation to resume'
+export const CONVERSATION_GONE = 'The saved conversation no longer exists, so this session could not be resumed'
+export const STOP_BEFORE_FORGET = 'Stop the session before forgetting it'
+const ASLEEP_FIRST = 'this session is asleep — wake it first'
+const RESTORE_MODES: readonly RestoreMode[] = ['last', 'all', 'none']
 const PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan']
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   'claude-code': 'Claude Code',
@@ -66,6 +75,29 @@ export interface SessionManagerOptions {
   onProvidersChanged?(providers: ProviderInfo[]): void
   /** The office board. Absent = sessions run without one (no digest, no board tools, no warnings). */
   board?: SessionBoardOptions
+  /** "Remember where I left off" (shared/restore.ts). Absent = nothing is saved or restored. */
+  restore?: SessionRestoreOptions
+}
+
+export interface SessionRestoreOptions {
+  /** The saved records (`<userData>/sessions.json`). The manager loads it. */
+  store: SessionStore
+  /** What to wake on launch. Default: 'last'. */
+  settings?: () => RestoreSettings
+  /** Stores a settings change (config.json) and returns what now applies. */
+  saveSettings?: (patch: Partial<RestoreSettings>) => RestoreSettings
+  /** Restore mode 'all': how long to wait for one session before waking the next. */
+  wakeWaitMs?: number
+}
+
+type InterruptedNote = NonNullable<SessionInfo['interruptedNote']>
+
+/** A saved session without a process: a sleeping row, or (briefly) one whose conversation turned out to be gone. */
+interface Sleeper {
+  rec: SavedSession
+  note?: InterruptedNote
+  /** Shown as `exited` with this notice for a while, then dropped: it could not be resumed. */
+  ended?: { notice: string; timer?: NodeJS.Timeout }
 }
 
 export interface SessionBoardOptions {
@@ -89,6 +121,17 @@ interface Session {
   driver: AgentDriver
   exitCode?: number | null
   removeTimer?: NodeJS.Timeout
+  lastActiveAt: number
+  /** Preview of the user's last prompt (shared/restore.ts). */
+  lastPrompt?: string
+  /** It was working or waiting when the app last closed; shown until dismissed or the next prompt. */
+  note?: InterruptedNote
+  /** Started by resuming a saved record (wake / reopen). */
+  restored?: boolean
+  /** Got past its start-up at least once. */
+  ready?: boolean
+  /** Why it ended, when the app knows. */
+  notice?: string
 }
 
 const cleanText = (s: string): string => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()
@@ -96,6 +139,15 @@ const cleanText = (s: string): string => s.replace(/[\u0000-\u001f\u007f-\u009f]
 export class SessionManager implements HostedSessions {
   readonly permissions: PermissionRegistry
   private sessions = new Map<string, Session>()
+  /** Saved sessions without a process (state `asleep`), by app id. */
+  private asleep = new Map<string, Sleeper>()
+  /** Wakes in flight, so a second click gets the same answer. */
+  private waking = new Map<string, Promise<SessionInfo>>()
+  private readonly store: SessionStore | undefined
+  private stateWaiters: Array<() => void> = []
+  private restoring = false
+  /** The selection the store held at launch (the renderer may report a new one before it is used). */
+  private launchSelected: string | null | undefined
   private providerTable = new Map<ProviderId, ProviderDefinition>()
   /** Terminals whose output is streamed to the renderer. */
   private attached = new Set<string>()
@@ -110,7 +162,13 @@ export class SessionManager implements HostedSessions {
       this.providerTable.set(p.id, p)
       p.onChanged?.(() => this.providersChanged())
     }
-    this.permissions = new PermissionRegistry((pending) => opts.onPermissionsChanged(pending))
+    this.permissions = new PermissionRegistry((pending) => {
+      opts.onPermissionsChanged(pending)
+      // The pending questions are part of what is saved about a session.
+      for (const s of this.sessions.values()) this.save(s)
+    })
+    this.store = opts.restore?.store
+    this.loadSaved()
   }
 
   // ---- providers ----
@@ -156,8 +214,12 @@ export class SessionManager implements HostedSessions {
 
   // ---- sessions ----
 
+  /** Live, exited and sleeping sessions, in the order they were first started. */
   list(): SessionInfo[] {
-    return [...this.sessions.values()].map((s) => this.info(s))
+    const rows = [...this.sessions.values()].map((s) => this.info(s))
+    for (const row of this.asleep.values()) rows.push(this.sleeperInfo(row))
+    // Stable: sessions started in the same millisecond keep their order.
+    return rows.sort((a, b) => a.startedAt - b.startedAt)
   }
 
   private info(s: Session): SessionInfo {
@@ -176,6 +238,40 @@ export class SessionManager implements HostedSessions {
     if (model) info.model = model
     if (s.driver.providerSessionId) info.providerSessionId = s.driver.providerSessionId
     if (s.driver.state === 'exited') info.exitCode = s.exitCode ?? null
+    if (this.store) info.lastActiveAt = s.lastActiveAt
+    if (s.lastPrompt) info.lastPrompt = s.lastPrompt
+    if (this.waking.has(s.id)) info.waking = true
+    if (s.note) info.interruptedNote = { closedAt: s.note.closedAt, pending: s.note.pending.map((p) => ({ ...p })) }
+    if (s.notice) info.notice = s.notice
+    return info
+  }
+
+  /** A sleeping row: the saved record, no process. */
+  private sleeperInfo(row: Sleeper): SessionInfo {
+    const { rec } = row
+    const info: SessionInfo = {
+      id: rec.id,
+      provider: rec.provider,
+      cwd: rec.cwd,
+      title: rec.title,
+      state: row.ended ? 'exited' : 'asleep',
+      startedAt: rec.startedAt,
+      permissionMode: rec.permissionMode,
+      surface: rec.provider === 'claude-code' ? 'terminal' : 'chat',
+      canReceiveOrders: false,
+      lastActiveAt: rec.lastActiveAt
+    }
+    if (rec.model) info.model = rec.model
+    if (rec.providerSessionId) info.providerSessionId = rec.providerSessionId
+    if (rec.lastPrompt) info.lastPrompt = rec.lastPrompt
+    if (this.waking.has(rec.id)) info.waking = true
+    if (row.ended) {
+      info.exitCode = null
+      info.notice = row.ended.notice
+    } else {
+      info.wakeable = canWake(rec)
+      if (row.note) info.interruptedNote = { closedAt: row.note.closedAt, pending: row.note.pending.map((p) => ({ ...p })) }
+    }
     return info
   }
 
@@ -210,6 +306,8 @@ export class SessionManager implements HostedSessions {
       const id = s.driver.state === 'exited' ? undefined : (s.driver.providerSessionId ?? s.start.resume)
       if (id) open.add(id)
     }
+    // A sleeping row already stands for its conversation: wake it instead of opening it twice.
+    for (const row of this.asleep.values()) if (!row.ended && row.rec.providerSessionId) open.add(row.rec.providerSessionId)
     return (await def.history(folder)).filter((h) => !open.has(h.id))
   }
 
@@ -250,13 +348,42 @@ export class SessionManager implements HostedSessions {
     // Which repository the folder belongs to (asks git once, with a short timeout): the project
     // that scopes the office board. Nothing may be awaited between the count below and the
     // session being listed, or two starts could both pass it.
-    const boardOpts = this.opts.board
-    const project = boardOpts ? await (boardOpts.resolveProject ?? resolveBoardProject)(start.cwd) : null
+    const project = await this.project(start.cwd)
     if (this.closing) throw new Error('the app is shutting down')
-    const live = [...this.sessions.values()].filter((s) => s.driver.state !== 'exited').length
-    if (live >= MAX_LIVE_SESSIONS) throw new Error(`too many sessions (at most ${MAX_LIVE_SESSIONS} at a time)`)
-
+    this.checkLiveLimit()
     const id = `s-${randomBytes(6).toString('hex')}`
+    this.makeRoom()
+    return this.launch(id, start, def, project, {})
+  }
+
+  private async project(cwd: string): Promise<BoardProject | null> {
+    const boardOpts = this.opts.board
+    return boardOpts ? (boardOpts.resolveProject ?? resolveBoardProject)(cwd) : null
+  }
+
+  private liveCount(): number {
+    let n = 0
+    for (const s of this.sessions.values()) if (s.driver.state !== 'exited') n++
+    return n
+  }
+
+  /** Sleeping rows don't count: they have no process. */
+  private checkLiveLimit(): void {
+    if (this.liveCount() >= MAX_LIVE_SESSIONS) throw new Error(`too many sessions (at most ${MAX_LIVE_SESSIONS} at a time)`)
+  }
+
+  /**
+   * Creates the driver and starts the agent under the app id `id`: a new session, or a saved one
+   * that is woken (then `start.resume` is its conversation and `saved` what is carried over).
+   * Synchronous up to the point where the session is listed.
+   */
+  private async launch(
+    id: string,
+    start: ValidatedStart,
+    def: ProviderDefinition,
+    project: BoardProject | null,
+    saved: { startedAt?: number; model?: string; lastPrompt?: string; note?: InterruptedNote; restored?: boolean }
+  ): Promise<SessionInfo> {
     // The session's row on the board before the agent starts: its driver may ask for the board's
     // endpoint right away.
     const board = project ? this.joinBoard(id, start, project) : undefined
@@ -268,20 +395,23 @@ export class SessionManager implements HostedSessions {
       permissions: this.permissions,
       board,
       events: {
-        onState: (state) => {
-          this.opts.board?.model.setStatus(id, boardStatus(state))
-          this.changed()
-        },
-        onProviderSession: () => this.changed(),
+        onState: (state) => this.onState(id, state),
+        onProviderSession: () => this.touched(id),
         onModel: (model) => this.onModel(id, model),
-        onChanged: () => this.changed(),
+        onChanged: () => this.touched(id),
         onExit: (code) => this.onExit(id, code),
         onChat: (e) => {
           if (this.chatAttached.has(id)) this.opts.onChatEvent?.(e)
-        }
+        },
+        onPrompt: (text) => this.onPrompt(id, text)
       }
     })
-    const session: Session = { id, start, startedAt: Date.now(), title: start.title, driver }
+    const now = Date.now()
+    const session: Session = { id, start, startedAt: saved.startedAt ?? now, title: start.title, driver, lastActiveAt: now }
+    if (saved.model) session.model = saved.model
+    if (saved.lastPrompt) session.lastPrompt = saved.lastPrompt
+    if (saved.note) session.note = saved.note
+    if (saved.restored) session.restored = true
     this.sessions.set(id, session)
     this.retitle() // another live session may already go by this name
     try {
@@ -290,11 +420,46 @@ export class SessionManager implements HostedSessions {
       this.sessions.delete(id)
       this.leaveBoard(id, board, true)
       this.retitle()
+      // Whatever was saved while it was starting (a woken session's record is put back by wake()).
+      if (!saved.restored && !this.closing) this.store?.remove(id)
       throw err instanceof Error ? err : new Error('could not start the session')
     }
     this.opts.board?.model.setStatus(id, boardStatus(driver.state))
+    this.save(session)
     this.changed()
     return this.info(session)
+  }
+
+  private onState(id: string, state: SessionInfo['state']): void {
+    this.opts.board?.model.setStatus(id, boardStatus(state))
+    const s = this.sessions.get(id)
+    if (s) {
+      if (state === 'idle' || state === 'busy' || state === 'waiting-permission') s.ready = true
+      s.lastActiveAt = Date.now()
+      this.save(s)
+    }
+    for (const w of this.stateWaiters.splice(0)) w()
+    this.changed()
+  }
+
+  /** Something the record holds may have changed (provider session id, workers, inbox). */
+  private touched(id: string): void {
+    const s = this.sessions.get(id)
+    if (s) this.save(s)
+    this.changed()
+  }
+
+  /** The user sent a prompt (typed, or an order). */
+  private onPrompt(id: string, text: string): void {
+    const s = this.sessions.get(id)
+    if (!s) return
+    const preview = promptPreview(text)
+    if (preview) s.lastPrompt = preview
+    s.lastActiveAt = Date.now()
+    // They are working with the session again: the "was interrupted" note has done its job.
+    delete s.note
+    this.save(s)
+    this.changed()
   }
 
   // ---- office board ----
@@ -343,6 +508,7 @@ export class SessionManager implements HostedSessions {
     if (!s || s.model === model) return
     s.model = model
     this.retitle()
+    this.save(s)
     this.changed()
   }
 
@@ -368,6 +534,7 @@ export class SessionManager implements HostedSessions {
       s.driver.setTitle(title)
       // Its team goes by the new name on the board too.
       this.opts.board?.model.rename(s.id, title)
+      this.save(s)
     }
   }
 
@@ -378,6 +545,35 @@ export class SessionManager implements HostedSessions {
     this.leaveBoard(id, undefined)
     s.removeTimer = setTimeout(() => this.remove(id), EXITED_RETENTION_MS)
     s.removeTimer.unref?.()
+    delete s.note
+    this.ended(s)
+    for (const w of this.stateWaiters.splice(0)) w()
+    this.changed()
+  }
+
+  /**
+   * The session ended while the app keeps running (the user stopped it, or it exited by itself):
+   * its record moves to Recent. When the app itself is closing, the record stays as it is: `open`.
+   */
+  private ended(s: Session): void {
+    const store = this.store
+    if (!store || this.closing) return
+    const rec = store.get(s.id)
+    if (!rec) return
+    // It never had a conversation (stopped before it was ready): nothing to come back to.
+    if (!canWake(rec)) return void store.remove(s.id)
+    store.update(s.id, { status: 'recent', interrupted: false, pendingAtClose: [], interruptedAt: undefined, lastActiveAt: Date.now() })
+    if (s.restored && !s.ready) void this.checkGone(s)
+  }
+
+  /** A resumed terminal session that exited before it was ready: does its screen say the conversation is gone? */
+  private async checkGone(s: Session): Promise<void> {
+    const gone = this.providerTable.get(s.start.provider)?.conversationGone
+    if (!gone || s.driver.surface !== 'terminal') return
+    const snap = await this.opts.pty.snapshot(s.id, false).catch(() => null)
+    if (this.closing || !snap || !gone({ screen: snap.text })) return
+    s.notice = CONVERSATION_GONE
+    this.store?.update(s.id, { providerSessionId: undefined })
     this.changed()
   }
 
@@ -394,12 +590,22 @@ export class SessionManager implements HostedSessions {
 
   private get(id: unknown): Session {
     const s = typeof id === 'string' && id.length <= 64 ? this.sessions.get(id) : undefined
-    if (!s) throw new Error('unknown session')
+    if (!s) {
+      const row = typeof id === 'string' ? this.asleep.get(id) : undefined
+      // An ended row without a process has no terminal and no chat: say why it ended.
+      if (row) throw new Error(row.ended ? row.ended.notice : ASLEEP_FIRST)
+      throw new Error('unknown session')
+    }
     return s
   }
 
-  /** Asks the agent to exit and kills its process tree if it doesn't. An exited session is removed. */
+  /**
+   * Asks the agent to exit and kills its process tree if it doesn't. An exited session is removed.
+   * A sleeping row leaves the sidebar and stays in Recent.
+   */
   async stop(id: unknown): Promise<void> {
+    const row = typeof id === 'string' ? this.asleep.get(id) : undefined
+    if (row) return this.dropSleeper(row, 'recent')
     const s = this.get(id)
     if (s.driver.state === 'exited') return this.remove(s.id)
     await s.driver.stop()
@@ -407,6 +613,339 @@ export class SessionManager implements HostedSessions {
 
   interrupt(id: unknown): void {
     this.get(id).driver.interrupt()
+  }
+
+  // ---- restore: sessions survive closing the app (shared/restore.ts, sessionStore.ts) ----
+
+  /** Launch: every record that was open comes back as a sleeping row. Nothing is started here. */
+  private loadSaved(): void {
+    const store = this.store
+    if (!store) return
+    store.load()
+    this.launchSelected = store.selectedId
+    for (const rec of store.open()) {
+      const row: Sleeper = { rec }
+      const note = noteOf(rec)
+      if (note) {
+        row.note = note
+        // Pinned, so the note still says when it happened after another restart.
+        row.rec = store.update(rec.id, { interrupted: true, interruptedAt: note.closedAt }) ?? rec
+      }
+      this.asleep.set(rec.id, row)
+    }
+  }
+
+  /**
+   * Writes what would be lost if the app died now: the session's identity, its conversation id, a
+   * preview of the last prompt, whether it is working, and the questions it is waiting on.
+   */
+  private save(s: Session): void {
+    const store = this.store
+    if (!store || this.closing) return
+    const state = s.driver.state
+    if (state === 'exited') return // ended() decides what becomes of the record
+    const pending: SavedPendingRequest[] = this.permissions
+      .list()
+      .filter((p) => p.sessionId === s.id)
+      .map((p) => ({ question: p.question, toolName: p.toolName, askedAt: p.createdAt }))
+    const working = state === 'busy' || state === 'waiting-permission' || (s.driver.workers ?? 0) > 0
+    const rec: SavedSession = {
+      id: s.id,
+      provider: s.start.provider,
+      cwd: s.start.cwd,
+      title: s.title,
+      titleIsCustom: !!s.start.userTitle,
+      permissionMode: s.start.permissionMode,
+      model: s.model ?? s.start.model,
+      providerSessionId: s.driver.providerSessionId ?? s.start.resume,
+      startedAt: s.startedAt,
+      lastActiveAt: s.lastActiveAt,
+      lastPrompt: s.lastPrompt,
+      // A note that was not dismissed yet is kept as it was, with anything new added.
+      interrupted: working || !!s.note,
+      pendingAtClose: (s.note ? mergePending(s.note.pending, pending) : pending).slice(0, MAX_SAVED_PENDING),
+      interruptedAt: s.note?.closedAt,
+      status: 'open'
+    }
+    store.put(rec)
+  }
+
+  /**
+   * The sidebar holds at most MAX_LIVE_SESSIONS rows: before one is added, the sleeping row that
+   * was active longest ago moves to Recent (it keeps its "was interrupted" note for a reopen).
+   */
+  private makeRoom(): void {
+    for (;;) {
+      const sleepers = [...this.asleep.values()].filter((r) => !r.ended)
+      if (sleepers.length === 0 || this.liveCount() + sleepers.length < MAX_LIVE_SESSIONS) return
+      this.dropSleeper(sleepers.reduce((a, b) => (b.rec.lastActiveAt < a.rec.lastActiveAt ? b : a)), 'recent', true)
+    }
+  }
+
+  /** Takes a sleeping row out of the sidebar: its record moves to Recent, or is forgotten. */
+  private dropSleeper(row: Sleeper, to: 'recent' | 'forget', keepNote = false): void {
+    const id = row.rec.id
+    if (row.ended?.timer) clearTimeout(row.ended.timer)
+    if (this.asleep.get(id) === row) this.asleep.delete(id)
+    const store = this.store
+    if (store && !this.closing) {
+      if (to === 'forget') store.remove(id)
+      else if (row.ended) void 0 // already in Recent, as a record that can't be resumed
+      else if (!canWake(row.rec)) store.remove(id) // never had a conversation: nothing to come back to
+      else if (keepNote) store.update(id, { status: 'recent' })
+      else store.update(id, { status: 'recent', interrupted: false, pendingAtClose: [], interruptedAt: undefined })
+    }
+    this.changed()
+  }
+
+  /**
+   * Wakes a sleeping session: resumes its provider conversation under the same app id. A second
+   * call while the first is in flight gets the same answer; waking a session that is already
+   * running resolves with it.
+   */
+  wake(id: unknown): Promise<SessionInfo> {
+    if (typeof id !== 'string' || id.length > 64) return Promise.reject(new Error('unknown session'))
+    const inFlight = this.waking.get(id)
+    if (inFlight) return inFlight
+    const run = (async (): Promise<SessionInfo> => {
+      try {
+        // The answer describes the session as it is once the wake is over.
+        const { waking: _inFlight, ...info } = await this.doWake(id)
+        return info
+      } finally {
+        this.waking.delete(id)
+        this.changed()
+      }
+    })()
+    this.waking.set(id, run)
+    // The row says `waking` from now until the agent is started (or could not be).
+    this.changed()
+    return run
+  }
+
+  private async doWake(id: string): Promise<SessionInfo> {
+    if (this.closing) throw new Error('the app is shutting down')
+    const live = this.sessions.get(id)
+    if (live && live.driver.state !== 'exited') return this.info(live)
+    const row = this.asleep.get(id)
+    if (!row || row.ended) throw new Error('unknown session')
+    const { rec } = row
+    if (!canWake(rec)) throw new Error(NO_SAVED_CONVERSATION)
+    const label = PROVIDER_LABELS[rec.provider]
+    const def = this.providerTable.get(rec.provider)
+    if (!def?.createDriver) throw new Error(`${label}: ${COMING[rec.provider] ?? 'no driver'}`)
+    const cwd = this.folder(rec.cwd)
+    const probe = await def.probe()
+    if (!probe.available) throw new Error(`${def.label} is not available: ${probe.reason ?? 'not installed'}`)
+    const project = await this.project(cwd)
+    if (this.closing) throw new Error('the app is shutting down')
+    // Forgotten, stopped or moved to Recent while we were asking.
+    if (this.asleep.get(id) !== row) throw new Error('unknown session')
+    // Nothing is awaited between this count and the session being listed.
+    this.checkLiveLimit()
+    const start: ValidatedStart = {
+      provider: rec.provider,
+      cwd,
+      permissionMode: rec.permissionMode,
+      model: rec.model,
+      resume: rec.providerSessionId,
+      title: rec.title,
+      userTitle: rec.titleIsCustom ? rec.title : undefined
+    }
+    this.asleep.delete(id)
+    try {
+      return await this.launch(id, start, def, project, {
+        startedAt: rec.startedAt,
+        model: rec.model,
+        lastPrompt: rec.lastPrompt,
+        note: row.note,
+        restored: true
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'could not start the session'
+      if (this.closing) throw new Error(message)
+      if (def.conversationGone?.({ error: message })) {
+        this.conversationGone(rec)
+        throw new Error(CONVERSATION_GONE)
+      }
+      // Still asleep, exactly as it was.
+      this.store?.put(rec)
+      this.asleep.set(id, row)
+      this.changed()
+      throw new Error(message)
+    }
+  }
+
+  /**
+   * The provider no longer has the conversation: the row is shown as ended, with the reason, for
+   * a while; its record can't be woken or reopened any more.
+   */
+  private conversationGone(rec: SavedSession): void {
+    const { providerSessionId: _gone, interruptedAt: _at, ...rest } = rec
+    const record: SavedSession = { ...rest, status: 'recent', interrupted: false, pendingAtClose: [] }
+    this.store?.put(record)
+    const row: Sleeper = { rec: record, ended: { notice: CONVERSATION_GONE } }
+    row.ended!.timer = setTimeout(() => {
+      if (this.asleep.get(rec.id) !== row) return
+      this.asleep.delete(rec.id)
+      this.changed()
+    }, EXITED_RETENTION_MS)
+    row.ended!.timer.unref?.()
+    this.asleep.set(rec.id, row)
+    this.changed()
+  }
+
+  /** Sessions that ended earlier and can be reopened, newest first. */
+  recent(): SavedSession[] {
+    return this.store?.recent() ?? []
+  }
+
+  /** Reopens a recent session: it is back in the sidebar and its conversation is resumed. */
+  async reopen(id: unknown): Promise<SessionInfo> {
+    if (this.closing) throw new Error('the app is shutting down')
+    if (typeof id !== 'string' || id.length > 64) throw new Error('unknown session')
+    // Already back (a second click), or never gone.
+    const live = this.sessions.get(id)
+    if (this.waking.has(id) || (live && live.driver.state !== 'exited') || (this.asleep.has(id) && !this.asleep.get(id)!.ended)) return this.wake(id)
+    const store = this.store
+    const rec = store?.get(id)
+    if (!store || !rec || rec.status !== 'recent') throw new Error('That session is no longer in the recent list')
+    if (!canWake(rec)) throw new Error(NO_SAVED_CONVERSATION)
+    this.checkLiveLimit()
+    // Its ended row may still be on show.
+    if (live) this.remove(id)
+    this.makeRoom()
+    const row: Sleeper = { rec: store.update(id, { status: 'open' }) ?? { ...rec, status: 'open' } }
+    const note = noteOf(row.rec)
+    if (note) row.note = note
+    this.asleep.set(id, row)
+    try {
+      return await this.wake(id)
+    } catch (err) {
+      // Not resumed: back to the recent list (unless its conversation turned out to be gone).
+      if (this.asleep.get(id) === row) {
+        this.asleep.delete(id)
+        if (!this.closing) store.update(id, { status: 'recent' })
+        this.changed()
+      }
+      throw err
+    }
+  }
+
+  /**
+   * Removes a saved session for good: a sleeping row, an ended row or a recent entry. The
+   * provider's own history is never touched. A running session must be stopped first.
+   */
+  forget(id: unknown): void {
+    if (typeof id !== 'string' || id.length > 64) throw new Error('unknown session')
+    const live = this.sessions.get(id)
+    if (this.waking.has(id) || (live && live.driver.state !== 'exited')) throw new Error(STOP_BEFORE_FORGET)
+    if (live) this.remove(id)
+    const row = this.asleep.get(id)
+    if (row) this.dropSleeper(row, 'forget')
+    else if (!this.closing) this.store?.remove(id)
+    this.changed()
+  }
+
+  /** Hides the "was interrupted" note of a session (sleeping or awake). */
+  dismissInterrupted(id: unknown): void {
+    if (typeof id !== 'string') return
+    const live = this.sessions.get(id)
+    if (live?.note) {
+      delete live.note
+      this.save(live)
+      return this.changed()
+    }
+    const row = this.asleep.get(id)
+    if (!row?.note) return
+    delete row.note
+    if (!this.closing) row.rec = this.store?.update(id, { interrupted: false, pendingAtClose: [], interruptedAt: undefined }) ?? row.rec
+    this.changed()
+  }
+
+  /** The renderer's selection (null = none): remembered, so the next launch wakes that session. */
+  setSelected(id: unknown): void {
+    if (!this.store || this.closing) return
+    if (id === null) this.store.setSelected(null)
+    else if (typeof id === 'string' && (this.sessions.has(id) || this.asleep.has(id))) this.store.setSelected(id)
+  }
+
+  /** The session that was selected when the app last closed, if it is still listed. */
+  getSelected(): string | null {
+    const id = this.launchSelected
+    return typeof id === 'string' && (this.sessions.has(id) || this.asleep.has(id)) ? id : null
+  }
+
+  getRestoreSettings(): RestoreSettings {
+    const mode = this.opts.restore?.settings?.().mode
+    return { mode: RESTORE_MODES.includes(mode as RestoreMode) ? (mode as RestoreMode) : 'last' }
+  }
+
+  /** Throws on anything that is not a valid patch. */
+  setRestoreSettings(input: unknown): RestoreSettings {
+    const patch = parseRestoreSettingsPatch(input)
+    if (!patch) throw new Error('invalid restore settings')
+    const save = this.opts.restore?.saveSettings
+    if (!save) throw new Error('session restore is not available')
+    return save(patch)
+  }
+
+  /**
+   * Launch, once the sessions can report back (the ingest server is up): wakes what the restore
+   * mode says. 'last' = the session that was selected (the most recently active one if the
+   * selection was never reported); 'all' = every open session, one at a time; 'none' = nothing.
+   * Never throws: a session that can't be woken simply stays asleep.
+   */
+  async restoreOnLaunch(): Promise<void> {
+    if (this.restoring || this.closing || !this.store) return
+    this.restoring = true
+    const { mode } = this.getRestoreSettings()
+    const rows = [...this.asleep.values()].filter((r) => !r.ended && canWake(r.rec)).sort((a, b) => a.rec.startedAt - b.rec.startedAt)
+    const wake = async (id: string): Promise<boolean> => {
+      try {
+        await this.wake(id)
+        return true
+      } catch (err) {
+        console.warn(`[agent-office] could not wake a saved session: ${err instanceof Error ? err.message : 'error'}`)
+        return false
+      }
+    }
+    if (mode === 'none' || rows.length === 0) return
+    if (mode === 'last') {
+      const selected = this.launchSelected
+      const target =
+        selected === undefined ? rows.reduce((a, b) => (b.rec.lastActiveAt > a.rec.lastActiveAt ? b : a)) : rows.find((r) => r.rec.id === selected)
+      if (target) await wake(target.rec.id)
+      return
+    }
+    // One at a time, so several agents don't start (and take their memory) at the same moment.
+    for (const row of rows) {
+      if (this.closing) return
+      if (this.asleep.get(row.rec.id) !== row) continue // woken, stopped or forgotten meanwhile
+      if (await wake(row.rec.id)) await this.settled(row.rec.id, this.opts.restore?.wakeWaitMs ?? WAKE_ALL_WAIT_MS)
+    }
+  }
+
+  /** Resolves when the session takes input (or asks for attention, or is gone), or after `ms`. */
+  private settled(id: string, ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      let finished = false
+      const done = (): void => {
+        if (finished) return
+        finished = true
+        clearTimeout(timer)
+        resolve()
+      }
+      const check = (): void => {
+        if (finished) return
+        const state = this.sessions.get(id)?.driver.state
+        if (this.closing || state === undefined || state === 'idle' || state === 'needs-attention' || state === 'exited') return done()
+        this.stateWaiters.push(check)
+      }
+      const timer = setTimeout(done, ms)
+      timer.unref?.()
+      check()
+    })
   }
 
   // ---- hooks (HostedSessions, used by the /hooks/claude-code adapter) ----
@@ -544,7 +1083,9 @@ export class SessionManager implements HostedSessions {
     const hosted = [...this.sessions.values()]
       .filter((s) => s.driver.state !== 'exited')
       .map((s) => ({ id: s.id, provider: s.start.provider as string }))
-    const hostedIds = new Set(this.sessions.keys())
+    // Sleeping rows can be named (and are part of "all"), but nothing is delivered to them.
+    for (const row of this.asleep.values()) if (!row.ended) hosted.push({ id: row.rec.id, provider: row.rec.provider })
+    const hostedIds = new Set([...this.sessions.keys(), ...this.asleep.keys()])
     // Sessions the app didn't start are valid targets by name, but nothing can be delivered to them.
     const external = this.opts.worldTopLevel().filter((k) => !hostedIds.has(k.id))
     const plan = planOrder(input, { allowOrders: this.opts.allowOrders(), known: [...hosted, ...external] })
@@ -553,6 +1094,7 @@ export class SessionManager implements HostedSessions {
     await Promise.all(
       plan.targets.map(async (id) => {
         const s = this.sessions.get(id)
+        if (!s && this.asleep.has(id)) return void result.failed.push({ agentId: id, reason: REASON_ASLEEP })
         if (!s) return void result.failed.push({ agentId: id, reason: REASON_NOT_CONNECTED })
         try {
           const r = await s.driver.sendPrompt(plan.text, 'order')
@@ -572,6 +1114,10 @@ export class SessionManager implements HostedSessions {
   close(): void {
     this.closing = true
     for (const s of this.sessions.values()) if (s.removeTimer) clearTimeout(s.removeTimer)
+    for (const row of this.asleep.values()) if (row.ended?.timer) clearTimeout(row.ended.timer)
+    // From here on the records are frozen: the sessions that are about to be killed stay `open`,
+    // with what they were doing, and come back asleep on the next launch.
+    this.store?.flush()
   }
 
   /**
@@ -597,4 +1143,26 @@ export class SessionManager implements HostedSessions {
       this.opts.onSessionsChanged(this.list())
     })
   }
+}
+
+/** The "was interrupted" note a saved record calls for, if any. */
+function noteOf(rec: SavedSession): InterruptedNote | undefined {
+  if (!rec.interrupted && rec.pendingAtClose.length === 0) return undefined
+  return { closedAt: rec.interruptedAt ?? rec.lastActiveAt, pending: rec.pendingAtClose.map((p) => ({ ...p })) }
+}
+
+/** The questions of an earlier note, then the ones waiting now. */
+function mergePending(earlier: readonly SavedPendingRequest[], now: readonly SavedPendingRequest[]): SavedPendingRequest[] {
+  const out = earlier.map((p) => ({ ...p }))
+  for (const p of now) if (!out.some((o) => o.question === p.question && o.askedAt === p.askedAt)) out.push(p)
+  return out
+}
+
+/** Validates a restore settings patch from the renderer. Returns null if it isn't one (unknown keys included). */
+export function parseRestoreSettingsPatch(input: unknown): Partial<RestoreSettings> | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+  const o = input as Record<string, unknown>
+  for (const key of Object.keys(o)) if (key !== 'mode') return null
+  if (o.mode === undefined) return {}
+  return RESTORE_MODES.includes(o.mode as RestoreMode) ? { mode: o.mode as RestoreMode } : null
 }

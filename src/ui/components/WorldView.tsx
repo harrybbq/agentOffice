@@ -6,6 +6,7 @@ import { ago } from '../format'
 import { cx, useNow } from '../hooks'
 import { IconFit, IconMegaphone } from '../icons'
 import { Inbox } from './Inbox'
+import { RestoreNotice } from './Restore'
 
 function OfficeWidePill({ endsAt }: { endsAt: number }) {
   const app = useApp()
@@ -24,6 +25,8 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
   const banner = useAppState((s) => s.banner)
   const wideEndsAt = useAppState((s) => s.officeWideEndsAt)
   const empty = useAppState((s) => s.sessions.length === 0 && s.teams.length === 0)
+  // Restored rows have no team in the world until they are woken (they sent no events).
+  const allAsleep = useAppState((s) => s.sessions.length > 0 && s.teams.length === 0 && s.sessions.every((x) => x.state === 'asleep'))
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
   const inboxOpen = useAppState((s) => s.layout.inboxOpen)
 
@@ -37,6 +40,7 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
       <div className="world-canvas" ref={host} />
 
       <div className={cx('world-top', floatingInbox && inboxOpen && !overlay && 'is-beside-inbox')}>
+        {!overlay && <RestoreNotice />}
         {banner && (
           <div key={banner.key} className="pa-banner" role="status">
             <IconMegaphone />
@@ -63,6 +67,13 @@ export function WorldView({ floatingInbox }: { floatingInbox: boolean }) {
               New session
             </button>
           </p>
+        </div>
+      )}
+
+      {allAsleep && !overlay && !error && (
+        <div className="world-empty">
+          <p className="world-empty-title">Everyone is asleep</p>
+          <p>Your sessions from last time are on the left. Wake one and its team moves back in.</p>
         </div>
       )}
 

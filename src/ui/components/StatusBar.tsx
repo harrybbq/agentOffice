@@ -5,6 +5,8 @@ import { overlapBadge } from '../board'
 import { ago } from '../format'
 import { cx, useNow } from '../hooks'
 import { IconInbox, IconMegaphone, IconMoon, IconOverlap, IconPower, IconSun, IconTerminal } from '../icons'
+import { isLive } from '../restore'
+import { RestoreSetting } from './Restore'
 
 const CONNECTION: Record<AppState['connection'], { label: string; tone: string; title: string }> = {
   connecting: { label: 'Connecting', tone: 'warn', title: 'Waiting for the app' },
@@ -27,7 +29,8 @@ export function StatusBar() {
   const hasSettings = useAppState((s) => s.settings !== null)
   const now = useNow(1000)
   const c = CONNECTION[connection]
-  const running = sessions.filter((s) => s.state !== 'exited').length
+  const running = sessions.filter(isLive).length
+  const asleep = sessions.filter((s) => s.state === 'asleep').length
   const [confirmQuit, setConfirmQuit] = useState(false)
 
   // The question goes away by itself, and with Esc.
@@ -49,7 +52,7 @@ export function StatusBar() {
         {c.label}
       </span>
       <span className="status-item">
-        {running} {running === 1 ? 'session' : 'sessions'} running
+        {running} {running === 1 ? 'session' : 'sessions'} running{asleep > 0 ? ` · ${asleep} asleep` : ''}
       </span>
       <button type="button" className={cx('status-item status-btn', pending > 0 && 'is-attn')} onClick={() => app.focusInbox()} title="Open the CEO inbox">
         <IconInbox size={14} />
@@ -91,8 +94,9 @@ export function StatusBar() {
           Orders: {allowOrders ? 'on' : 'off'}
         </button>
       )}
+      <RestoreSetting />
       {themeName && (
-        <span className="status-item" title="World theme (tray menu → Theme)">
+        <span className="status-item status-theme" title="World theme (tray menu → Theme)">
           {themeName} theme
         </span>
       )}

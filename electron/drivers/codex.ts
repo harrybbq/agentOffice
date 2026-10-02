@@ -911,6 +911,8 @@ export class CodexDriver implements AgentDriver {
       // `turn/started` normally comes right after; a turn that already ended must not be revived.
       if (turnId && this.activeTurnId === null && !this.endedTurns.has(turnId)) this.activeTurnId = turnId
       this.emitChat(this.chat.userSent(clientId, at, turnId || undefined))
+      // A prompt of the user's (typed, or an order): the preview that is saved with the session.
+      if (origin === 'human' || origin === 'order') this.ctx.events.onPrompt?.(text)
       this.refresh()
       return { ok: true, queued: false }
     } catch (err) {
@@ -997,6 +999,9 @@ export interface CodexProvider extends ProviderDefinition {
   shutdown(): Promise<void>
 }
 
+/** What the app-server answers when a thread to resume does not exist (any more). */
+export const CODEX_NO_THREAD = /no rollout found|thread not found|unknown thread|no such thread/i
+
 export function codexProvider(opts: CodexProviderOptions): CodexProvider {
   // One app-server for all Codex sessions, started on the first need (provider list, session start).
   const server = new CodexServer(opts.server)
@@ -1057,6 +1062,8 @@ export function codexProvider(opts: CodexProviderOptions): CodexProvider {
       }
     },
     onChanged: (cb) => void account.onChanged(cb),
+    // `thread/resume` of a thread whose rollout file is gone: "no rollout found for thread id …".
+    conversationGone: ({ error }) => !!error && CODEX_NO_THREAD.test(error),
     async shutdown(): Promise<void> {
       await account.cancelLogin().catch(() => {})
       await server.stop()

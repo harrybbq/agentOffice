@@ -240,3 +240,21 @@ export const IconArrowRight = (p: P) => (
     <path d="M3 8h10M9 4l4 4-4 4" />
   </Svg>
 )
+/** A sleeping session: a crescent with a small "z" (the plain moon is the dark-theme switch). */
+export const IconAsleep = (p: P) => (
+  <Svg {...p}>
+    <path d="M11.6 10.2A4.9 4.9 0 015.8 4.4a4.9 4.9 0 105.8 5.8z" />
+    <path d="M10 2.5h3l-3 3.25h3" />
+  </Svg>
+)
+export const IconClock = (p: P) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M8 4.75V8l2.25 1.5" />
+  </Svg>
+)
+export const IconPlay = (p: P) => (
+  <Svg {...p}>
+    <path d="M5.25 3.5v9l7.25-4.5z" />
+  </Svg>
+)

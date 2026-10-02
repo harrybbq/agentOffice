@@ -287,3 +287,4 @@ console.log(`\n${pass} ui tests passed`)
 
 await import('./chat.test.ts')
 await import('./boardui.test.ts')
+await import('./restoreui.test.ts')

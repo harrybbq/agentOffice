@@ -4,6 +4,7 @@ import type { ThemeManifest } from './theme'
 import type { OrderRequest, OrderResult } from './orders'
 import type { BoardSettings, BoardSnapshot } from './board'
 import type { ChatEvent, ChatItem } from './chat'
+import type { RestoreSettings, SavedSession } from './restore'
 import type {
   PermissionDecision,
   PermissionOutcome,
@@ -44,6 +45,19 @@ export const IPC = {
   pickFolder: 'agent-office:pick-folder',
   /** invoke: earlier conversations of a provider in a folder (for "Resume previous…") */
   sessionHistory: 'agent-office:sessions:history',
+  // ---- restore (shared/restore.ts) ----
+  /** invoke */
+  wakeSession: 'agent-office:sessions:wake',
+  recentSessions: 'agent-office:sessions:recent',
+  reopenRecent: 'agent-office:sessions:reopen',
+  forgetSession: 'agent-office:sessions:forget',
+  dismissInterrupted: 'agent-office:sessions:dismiss-note',
+  getRestoreSettings: 'agent-office:restore:get',
+  setRestoreSettings: 'agent-office:restore:set',
+  /** send (no reply): which session the user has selected (null = none). Remembered for the next launch. */
+  setSelectedSession: 'agent-office:sessions:selected',
+  /** invoke: the session that was selected when the app last closed (null = none / unknown). */
+  getSelectedSession: 'agent-office:sessions:selected:get',
   /** main -> renderer: full SessionInfo[] whenever anything changes */
   sessionsChanged: 'agent-office:sessions:changed',
 
@@ -154,6 +168,25 @@ export interface AgentOfficeBridge {
      *  logged in, or the folder has none. Rejects with a readable message if it could not be read. */
     history(provider: ProviderId, cwd: string): Promise<SessionHistoryEntry[]>
     onChanged(cb: (sessions: SessionInfo[]) => void): () => void
+
+    // ---- restore: sessions survive closing the app (shared/restore.ts) ----
+    /** Wake an asleep session: resumes the provider conversation under the same app id. */
+    wake(id: string): Promise<SessionInfo>
+    /** Sessions that ended earlier and can be reopened, newest first. */
+    recent(): Promise<SavedSession[]>
+    /** Reopen a recent session (resumes its conversation) as a live session. */
+    reopen(id: string): Promise<SessionInfo>
+    /** Remove a saved record (asleep row or recent entry). The provider's own history is untouched. */
+    forget(id: string): Promise<void>
+    /** Hide the "was interrupted" note of a session. */
+    dismissInterrupted(id: string): Promise<void>
+    getRestoreSettings(): Promise<RestoreSettings>
+    setRestoreSettings(patch: Partial<RestoreSettings>): Promise<RestoreSettings>
+    /** Tell the main process which session is selected (null = none). No reply. It is remembered, so
+     *  the next launch wakes that session (RestoreSettings.mode 'last'). Call it on every change. */
+    setSelected(id: string | null): void
+    /** The session that was selected when the app last closed, if it is still in the list. */
+    getSelected?(): Promise<string | null>
   }
 
   terminal: {

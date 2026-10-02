@@ -556,27 +556,29 @@ body.resizing-y .side {
 .world-top {
   position: absolute;
   top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  /* Clear of the fit-view button in the corner. A full-width strip (not a centred box), so what
+     floats in it can be as wide as the world allows before it wraps. */
+  left: 58px;
+  right: 58px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  /* Clear of the fit-view button in the corner. */
-  max-width: min(680px, calc(100% - 116px));
   pointer-events: none;
   z-index: 2;
 }
+.world-top > * {
+  max-width: min(680px, 100%);
+}
 /* The open inbox floats in the top right corner: centre in what is left of it. */
 .world-top.is-beside-inbox {
-  left: calc((100% - 350px) / 2);
-  max-width: max(220px, min(680px, calc(100% - 466px)));
+  right: 408px;
 }
 .pa-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 100%;
+  max-width: min(680px, 100%);
   padding: 7px 14px;
   border-radius: 18px;
   background: #f6e05e;
@@ -1822,6 +1824,10 @@ body.resizing-y .side {
   gap: 8px;
   margin-top: 2px;
 }
+.modal-foot-aside {
+  margin-right: auto;
+  padding-left: 0;
+}
 
 /* ---- overlay mode: only the world and a badge -------------------------------------------- */
 .app.is-overlay .sidebar,
@@ -1905,5 +1911,631 @@ body.resizing-y .side {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---- restore: asleep rows, the wake screen, "where you left off", Recent ------------------ */
+.sleep-glyph {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -4px;
+  color: var(--text-3);
+}
+.session-row.is-asleep {
+  align-items: flex-start;
+}
+.session-row.is-asleep .swatch,
+.session-row.is-asleep .sleep-glyph,
+.session-row.is-asleep > .spinner {
+  margin-top: 4px;
+}
+.session-row.is-asleep .session-title {
+  color: var(--text-2);
+  font-weight: 500;
+}
+.session-row.is-asleep .session-path {
+  opacity: 0.8;
+}
+.session-row.is-asleep.is-selected .session-title {
+  color: var(--text);
+}
+.session-sleep {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-interrupted {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-interrupted .icon {
+  flex: none;
+}
+
+.provider-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 15px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font: 700 9px/1 var(--font);
+  letter-spacing: 0.02em;
+}
+.provider-claude-code {
+  background: color-mix(in srgb, #d97757 24%, transparent);
+  color: #e89a7f;
+}
+.provider-codex {
+  background: color-mix(in srgb, #10a37f 24%, transparent);
+  color: #4cc9a6;
+}
+.provider-antigravity {
+  background: color-mix(in srgb, #5b8def 24%, transparent);
+  color: #8fb0f5;
+}
+:root[data-ui-theme='light'] .provider-claude-code {
+  color: #b4532f;
+}
+:root[data-ui-theme='light'] .provider-codex {
+  color: #0b7d61;
+}
+:root[data-ui-theme='light'] .provider-antigravity {
+  color: #2f5fc4;
+}
+
+/* "Where you left off": above the terminal or chat, and on the wake screen. */
+.left-off {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px 10px;
+  padding: 9px 8px 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 30%, var(--border));
+  background: var(--warn-weak);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.left-off > .icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warn);
+}
+.left-off-body {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.left-off-body p {
+  margin: 0;
+}
+.left-off-head {
+  color: var(--text);
+  font-weight: 600;
+}
+.left-off-list {
+  margin: 4px 0 0;
+  padding: 0 0 0 16px;
+  max-height: 132px;
+  overflow-y: auto;
+  color: var(--text);
+  user-select: text;
+}
+.left-off-list li + li {
+  margin-top: 2px;
+}
+.left-off-list li.is-more {
+  list-style: none;
+  margin-left: -16px;
+  color: var(--text-3);
+}
+.left-off-list code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  font: 11.5px/1.4 var(--mono);
+}
+.left-off-body .left-off-hint {
+  margin-top: 4px;
+  color: var(--warn);
+}
+/* Wraps under the text in a narrow panel instead of squeezing it. */
+.left-off-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* The panel of an asleep row. */
+.wakeview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.wakeview[hidden] {
+  display: none;
+}
+.wake-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  padding: 16px 20px 20px;
+  container: wake / size;
+}
+.wake-card {
+  margin: auto;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.wake-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 4px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.wake-title {
+  margin: 0;
+  max-width: 100%;
+  font-size: 17px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wake-sub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0;
+  color: var(--text-2);
+}
+.wake-cwd {
+  max-width: 100%;
+  margin: 0;
+  color: var(--text-3);
+  font: 11.5px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.wake-chips {
+  display: flex;
+  gap: 5px;
+  margin: 2px 0 0;
+}
+.wake-prompt {
+  align-self: stretch;
+  margin-top: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+}
+.wake-prompt-label {
+  color: var(--text-3);
+  font: 600 10.5px/1.4 var(--font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.wake-prompt p {
+  margin: 2px 0 0;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  user-select: text;
+}
+.wake-btn {
+  align-self: stretch;
+  height: auto;
+  min-height: 52px;
+  margin-top: 14px;
+  padding: 8px 16px;
+  gap: 12px;
+  justify-content: center;
+  border-radius: var(--radius);
+}
+.wake-btn .icon {
+  width: 18px;
+  height: 18px;
+}
+.wake-btn-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.3;
+}
+.wake-btn-text strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+.wake-btn-text span {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+.wake-btn:disabled {
+  opacity: 1;
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.wake-progress {
+  align-self: stretch;
+  height: 3px;
+  margin-top: 2px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+  position: relative;
+}
+.wake-progress::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: wake-slide 1.3s ease-in-out infinite;
+}
+@keyframes wake-slide {
+  from {
+    left: -36%;
+  }
+  to {
+    left: 100%;
+  }
+}
+.wake-none {
+  align-self: stretch;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-2);
+}
+.wake-none p {
+  margin: 0;
+}
+.wake-none .wake-none-title {
+  margin-bottom: 2px;
+  color: var(--text);
+  font-weight: 600;
+}
+.wake-card .form-error {
+  align-self: stretch;
+  margin-top: 4px;
+  text-align: left;
+}
+.wake-card > .btn-sm {
+  margin-top: 8px;
+}
+.wake-foot {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* A short panel (docked under the world): the Wake button must be in sight without scrolling,
+   so the decoration goes and the prompt preview moves under the button. */
+@container wake (max-height: 400px) {
+  .wake-icon {
+    display: none;
+  }
+  .wake-card {
+    gap: 4px;
+  }
+  .wake-btn {
+    margin-top: 8px;
+  }
+  .wake-prompt {
+    order: 1;
+    margin-top: 8px;
+  }
+  .wake-card > .btn-sm,
+  .wake-foot {
+    order: 2;
+  }
+}
+/* The launch summary, over the world. */
+.restore-notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: min(640px, 100%);
+  padding: 3px 5px 3px 3px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border-strong));
+  border-radius: 10px;
+  background: var(--float);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(8px);
+  animation: drop-in 0.3s var(--ease);
+}
+.restore-notice-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px 5px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: left;
+}
+.restore-notice-main:hover {
+  background: var(--surface-hover);
+}
+.restore-notice-main > .icon {
+  flex: none;
+  color: var(--warn);
+}
+.restore-notice-main strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.restore-notice-go {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 9px;
+  background: var(--warn-weak);
+  color: var(--warn);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* Recent: the sidebar footer. */
+.sidebar-recent {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 52%;
+  border-top: 1px solid var(--border);
+}
+.recent-toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font: 600 11px/1 var(--font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: left;
+}
+.recent-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text-2);
+}
+.recent-toggle .icon {
+  transition: transform 0.15s var(--ease);
+}
+.sidebar-recent.is-open .recent-toggle .icon {
+  transform: rotate(90deg);
+}
+.recent-toggle-hint {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 11.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-3);
+}
+.recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 8px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.recent-item {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+.recent-item.is-busy {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.recent-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.recent-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-when {
+  flex: none;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.recent-prompt {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.recent-prompt.is-blank {
+  color: var(--text-3);
+}
+.recent-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+}
+.recent-actions .btn-sm {
+  height: 24px;
+}
+.recent-forget {
+  margin-left: auto;
+  color: var(--text-3);
+}
+.recent-forget:hover:not(:disabled) {
+  color: var(--danger);
+}
+.recent-confirm {
+  margin-right: auto;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.recent-confirm.is-muted {
+  color: var(--text-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recent-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 5px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+  user-select: text;
+}
+.recent-error > span {
+  flex: 1;
+  min-width: 0;
+}
+.recent-error .icon {
+  flex: none;
+  margin-top: 2px;
+}
+.sidebar-recent > .recent-error {
+  margin: 0;
+  padding: 0 12px 8px;
+}
+
+/* Status bar: "On open: wake last" and its popover. */
+.restore-pop {
+  position: fixed;
+  z-index: 40;
+  width: 300px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  box-shadow: var(--shadow-float);
+  backdrop-filter: blur(10px);
+  white-space: normal;
+}
+.restore-pop-title {
+  margin: 0 0 6px;
+  padding: 0 4px;
+  color: var(--text-3);
+  font: 600 11px/1.4 var(--font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.restore-pop-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.restore-mode {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: left;
+}
+.restore-mode:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.restore-mode.is-selected {
+  color: var(--text);
+  font-weight: 550;
+}
+.restore-radio {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+}
+.restore-mode.is-selected .restore-radio {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 3.5px, transparent 4px);
+}
+.restore-pop-help {
+  margin: 8px 4px 2px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+@media (max-width: 1100px) {
+  .status-theme {
+    display: none;
   }
 }

@@ -35,7 +35,16 @@ const bridge: AgentOfficeBridge = {
     interrupt: (id) => ipcRenderer.invoke(IPC.interruptSession, id),
     pickFolder: () => ipcRenderer.invoke(IPC.pickFolder),
     history: (provider, cwd) => ipcRenderer.invoke(IPC.sessionHistory, provider, cwd),
-    onChanged: (cb) => subscribe<SessionInfo[]>(IPC.sessionsChanged, cb)
+    onChanged: (cb) => subscribe<SessionInfo[]>(IPC.sessionsChanged, cb),
+    wake: (id) => ipcRenderer.invoke(IPC.wakeSession, id),
+    recent: () => ipcRenderer.invoke(IPC.recentSessions),
+    reopen: (id) => ipcRenderer.invoke(IPC.reopenRecent, id),
+    forget: (id) => ipcRenderer.invoke(IPC.forgetSession, id),
+    dismissInterrupted: (id) => ipcRenderer.invoke(IPC.dismissInterrupted, id),
+    getRestoreSettings: () => ipcRenderer.invoke(IPC.getRestoreSettings),
+    setRestoreSettings: (patch) => ipcRenderer.invoke(IPC.setRestoreSettings, patch),
+    setSelected: (id) => ipcRenderer.send(IPC.setSelectedSession, id),
+    getSelected: () => ipcRenderer.invoke(IPC.getSelectedSession)
   },
 
   terminal: {

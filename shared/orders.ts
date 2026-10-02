@@ -27,6 +27,8 @@ export interface OrderResult {
 export const REASON_DISABLED = 'CEO orders are off (turn them on in the status bar, or tray → Allow CEO orders)'
 export const REASON_NOT_CONNECTED = 'not hosted by Agent Office (start the session from the app to send it orders)'
 export const REASON_NO_SESSIONS = 'no active sessions'
+/** A session saved from an earlier run that has not been woken (shared/restore.ts). */
+export const REASON_ASLEEP = 'asleep — wake it first'
 
 /**
  * The value of an untrusted "allow CEO orders" request from the renderer: a real boolean, or null

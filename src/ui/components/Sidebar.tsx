@@ -1,13 +1,24 @@
-// Left sidebar: hosted sessions grouped by provider, then teams the app only observes.
+// Left sidebar: hosted sessions grouped by provider (asleep rows from the last run keep their
+// place), then teams the app only observes, and the Recent list at the bottom.
 import { useMemo } from 'react'
 import type { SessionInfo, SessionState } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
 import { groupSessions, loginHint, observedTeams, shortenPath, STATE_LABEL } from '../format'
-import { cx } from '../hooks'
-import { IconPlus } from '../icons'
+import { cx, useNow } from '../hooks'
+import { IconAlert, IconAsleep, IconPlus } from '../icons'
+import { canWakeRow, interruptedTag, lastActiveLabel } from '../restore'
 import { LoginPrompt, UsageMeter } from './ProviderAccount'
+import { RecentSection } from './Restore'
 
 export function StateDot({ state }: { state: SessionState }) {
+  // Asleep is not a colour of the dot: there is no process to have a state.
+  if (state === 'asleep') {
+    return (
+      <span className="sleep-glyph" role="img" aria-label={STATE_LABEL.asleep} title={STATE_LABEL.asleep}>
+        <IconAsleep size={14} />
+      </span>
+    )
+  }
   return <span className={cx('state-dot', `state-${state}`)} role="img" aria-label={STATE_LABEL[state]} title={STATE_LABEL[state]} />
 }
 
@@ -23,6 +34,8 @@ export function Sidebar() {
   const permissions = useAppState((s) => s.permissions)
   const selectedId = useAppState((s) => s.selectedId)
   const everHosted = useAppState((s) => s.everHosted)
+  const waking = useAppState((s) => s.waking)
+  const now = useNow(30_000)
 
   const groups = useMemo(() => groupSessions(providers, sessions), [providers, sessions])
   const observed = useMemo(() => observedTeams(teams, sessions, everHosted), [teams, sessions, everHosted])
@@ -34,13 +47,37 @@ export function Sidebar() {
     const team = teams.find((t) => t.id === s.id)
     const asks = permissions.filter((p) => p.sessionId === s.id).length
     const n = ++index
+    const asleep = s.state === 'asleep'
+    const isWaking = asleep && waking.has(s.id)
+    const canWake = canWakeRow(s)
+    const active = asleep ? lastActiveLabel(s.lastActiveAt, now) : ''
+    const tip = [
+      s.title,
+      s.cwd,
+      asleep ? `Asleep${active ? ` · ${active}` : ''}` : STATE_LABEL[s.state],
+      s.interruptedNote ? 'Agent Office closed while it was working' : '',
+      asleep && canWake ? 'Double-click or Enter to wake' : '',
+      n <= 9 ? `Ctrl+${n}` : ''
+    ]
     return (
       <li key={s.id}>
         <button
           type="button"
-          className={cx('session-row', selectedId === s.id && 'is-selected', s.state === 'exited' && 'is-exited')}
+          className={cx('session-row', selectedId === s.id && 'is-selected', s.state === 'exited' && 'is-exited', asleep && 'is-asleep')}
           onClick={() => app.select(s.id, { focusTerminal: true })}
-          title={`${s.title}\n${s.cwd}\n${STATE_LABEL[s.state]}${n <= 9 ? `\nCtrl+${n}` : ''}`}
+          // An asleep row: double-click or Enter resumes its conversation (a click only shows it).
+          onDoubleClick={asleep && canWake ? () => void app.wake(s.id) : undefined}
+          onKeyDown={
+            asleep && canWake
+              ? (ev) => {
+                  if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey) return
+                  ev.preventDefault()
+                  app.select(s.id, { focusTerminal: true })
+                  void app.wake(s.id)
+                }
+              : undefined
+          }
+          title={tip.filter(Boolean).join('\n')}
           aria-current={selectedId === s.id ? 'true' : undefined}
         >
           <Swatch color={team?.color} />
@@ -50,9 +87,16 @@ export function Sidebar() {
               {team && team.workers > 0 && <span className="session-workers">+{team.workers}</span>}
             </span>
             <span className="session-path">{shortenPath(s.cwd)}</span>
+            {asleep && <span className="session-sleep">{isWaking ? 'Waking…' : `Asleep${active ? ` · ${active}` : ''}`}</span>}
+            {s.interruptedNote && (
+              <span className="session-interrupted">
+                <IconAlert size={12} />
+                {interruptedTag(s.interruptedNote)}
+              </span>
+            )}
           </span>
           {asks > 0 && <span className="count-badge">{asks}</span>}
-          <StateDot state={s.state} />
+          {isWaking ? <span className="spinner" role="img" aria-label="Waking" /> : <StateDot state={s.state} />}
         </button>
       </li>
     )
@@ -131,6 +175,7 @@ export function Sidebar() {
           </section>
         )}
       </div>
+      <RecentSection />
     </aside>
   )
 }

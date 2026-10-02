@@ -81,6 +81,8 @@ export interface DriverEvents {
   onExit(exitCode: number | null): void
   /** Chat-based drivers: the session's chat list changed. */
   onChat(e: ChatEvent): void
+  /** The user sent a prompt (typed, or an order): never a synthetic one. For the saved preview (shared/restore.ts). */
+  onPrompt?(text: string): void
 }
 
 export interface DriverContext {
@@ -109,6 +111,8 @@ export interface AgentDriver {
   readonly providerSessionId: string | undefined
   /** Can a prompt be delivered right now? */
   readonly canReceiveOrders: boolean
+  /** Workers (subagents) running right now, if the driver knows. They die with the session's process. */
+  readonly workers?: number
   /** Launches the agent. Rejects with a readable message if it can't. */
   start(): Promise<void>
   /** Delivers a prompt / order into the session. Never throws. `origin` defaults to 'order'. */
@@ -141,6 +145,12 @@ export interface ProviderDefinition {
   onChanged?(cb: () => void): void
   /** App quit: stops whatever the provider keeps running besides its sessions. */
   shutdown?(): Promise<void>
+  /**
+   * A session that was started with `resume` failed: does the evidence say the conversation no
+   * longer exists? `error` = why start() rejected; `screen` = the terminal's text when the process
+   * exited before it was ready.
+   */
+  conversationGone?(evidence: { error?: string; screen?: string }): boolean
 }
 
 /** Shared by the manager and drivers that host a TUI. */

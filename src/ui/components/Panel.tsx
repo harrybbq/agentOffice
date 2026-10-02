@@ -7,9 +7,11 @@ import { clampSplit } from '../format'
 import { cx } from '../hooks'
 import { overlapBadge } from '../board'
 import { IconBoard, IconChat, IconClose, IconDockBottom, IconDockRight, IconList, IconTerminal } from '../icons'
+import { panelContent } from '../restore'
 import { BoardView } from './BoardView'
 import { ChatView } from './ChatView'
 import { EventLog } from './EventLog'
+import { WakeView } from './Restore'
 import { TerminalView } from './TerminalView'
 
 export const PANEL_MIN = { right: 360, bottom: 160 }
@@ -78,7 +80,10 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   const layout = useAppState((s) => s.layout)
   const eventCount = useAppState((s) => s.eventCount)
   // The first tab keeps its stored id ('terminal'); only its label and content follow the session.
-  const chat = useAppState((s) => s.sessions.find((x) => x.id === s.selectedId)?.surface === 'chat')
+  const selected = useAppState((s) => s.sessions.find((x) => x.id === s.selectedId) ?? null)
+  const chat = selected?.surface === 'chat'
+  // An asleep row has no terminal or chat to show: its wake screen takes the first tab.
+  const content = panelContent(selected)
   const overlaps = useAppState((s) => s.boardOverlaps)
   // A stored 'board' tab with a main process that has no board falls back to the first tab.
   const current: PanelTab = layout.tab === 'board' && !app.hasBoard ? 'terminal' : layout.tab
@@ -132,8 +137,9 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
         </div>
       </header>
       <div className="panel-body">
-        <TerminalView hidden={current !== 'terminal' || chat} />
-        <ChatView hidden={current !== 'terminal' || !chat || !layout.panelOpen} />
+        <TerminalView hidden={current !== 'terminal' || content === 'chat' || content === 'wake'} />
+        <ChatView hidden={current !== 'terminal' || content !== 'chat' || !layout.panelOpen} />
+        {content === 'wake' && selected && <WakeView key={selected.id} session={selected} hidden={current !== 'terminal' || !layout.panelOpen} />}
         <EventLog hidden={current !== 'events' || !layout.panelOpen} />
         {app.hasBoard && <BoardView hidden={current !== 'board' || !layout.panelOpen} />}
       </div>

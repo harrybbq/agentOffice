@@ -28,7 +28,8 @@ function watchOnly(real: Partial<AgentOfficeBridge>): AgentOfficeBridge {
       interrupt: async () => undefined,
       pickFolder: async () => null,
       history: async () => [],
-      onChanged: none
+      onChanged: none,
+      ...RESTORE_UNSUPPORTED
     },
     terminal: {
       attach: async () => Promise.reject(new Error(UNSUPPORTED)),
@@ -41,6 +42,21 @@ function watchOnly(real: Partial<AgentOfficeBridge>): AgentOfficeBridge {
     chat: CHAT_UNSUPPORTED,
     permissions: { list: async () => [], decide: async () => 'unknown-request', onChanged: none }
   }
+}
+
+/** The restore calls of a main process that saves no sessions (the shell checks `wake` before using them). */
+const RESTORE_UNSUPPORTED: Pick<
+  AgentOfficeBridge['sessions'],
+  'wake' | 'recent' | 'reopen' | 'forget' | 'dismissInterrupted' | 'getRestoreSettings' | 'setRestoreSettings' | 'setSelected'
+> = {
+  wake: async () => Promise.reject(new Error(UNSUPPORTED)),
+  recent: async () => [],
+  reopen: async () => Promise.reject(new Error(UNSUPPORTED)),
+  forget: async () => undefined,
+  dismissInterrupted: async () => undefined,
+  getRestoreSettings: async () => ({ mode: 'last' }),
+  setRestoreSettings: async () => Promise.reject(new Error(UNSUPPORTED)),
+  setSelected: () => undefined
 }
 
 const CHAT_UNSUPPORTED: AgentOfficeBridge['chat'] = {

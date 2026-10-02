@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react'
 import { useApp, useAppState } from '../controller'
 import { cx } from '../hooks'
 import { IconAlert, IconPlus, IconTerminal } from '../icons'
+import { InterruptedNote } from './Restore'
 import { SessionHeader } from './SessionHeader'
 
 export function TerminalView({ hidden }: { hidden: boolean }) {
@@ -17,8 +18,9 @@ export function TerminalView({ hidden }: { hidden: boolean }) {
   const mount = useRef<HTMLDivElement>(null)
 
   const selected = sessions.find((s) => s.id === selectedId) ?? null
-  // A chat session has no pty: never attach a terminal to it.
-  const session = selected && selected.surface !== 'chat' ? selected : null
+  // A chat session has no pty: never attach a terminal to it. Neither has an asleep row: attaching
+  // would fail, and the terminal must attach fresh once the session is woken.
+  const session = selected && selected.surface !== 'chat' && selected.state !== 'asleep' ? selected : null
   const team = teams.find((t) => t.id === selectedId) ?? null
   const sessionId = session?.id ?? null
 
@@ -52,12 +54,14 @@ export function TerminalView({ hidden }: { hidden: boolean }) {
           </button>
         </div>
       )}
+      {session && <InterruptedNote session={session} />}
       {session?.state === 'exited' && (
         <div className="term-banner" role="status">
           <span>
             <strong>Session ended</strong>
-            {session.exitCode === null || session.exitCode === undefined ? '.' : ` with exit code ${session.exitCode}.`} The output below is kept
-            until you remove it.
+            {session.exitCode === null || session.exitCode === undefined ? '.' : ` with exit code ${session.exitCode}.`}{' '}
+            {/* The main process says why, when it knows (e.g. the saved conversation is gone). */}
+            {session.notice?.trim() || 'The output below is kept until you remove it.'}
           </span>
           <button type="button" className="btn btn-sm" onClick={() => app.removeSession(session.id)}>
             Remove from list

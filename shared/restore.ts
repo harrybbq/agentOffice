@@ -42,6 +42,8 @@ export interface SavedSession {
   interrupted: boolean
   /** Requests that were waiting on the user when the app closed. */
   pendingAtClose: SavedPendingRequest[]
+  /** When it was interrupted (the app closing). Kept while the "was interrupted" note is not dismissed. */
+  interruptedAt?: number
   /** 'open' = was in the sidebar at close (comes back as a sleeping row); 'recent' = ended earlier. */
   status: 'open' | 'recent'
 }

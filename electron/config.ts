@@ -5,7 +5,9 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { BoardSettings } from '../shared/board'
+import type { RestoreMode, RestoreSettings } from '../shared/restore'
 import { DEFAULT_BOARD_SETTINGS, normaliseBoardSettings } from './board'
+import { parseWindowStates, type WindowStates } from './windowState'
 
 // Must run before app 'ready' and before anything reads userData. main.ts imports this module first.
 // AGENT_OFFICE_USER_DATA (testing): run a second, isolated instance with its own config/token/port.
@@ -23,7 +25,13 @@ export interface AppConfig {
   officeWideMinutes: number
   /** The office board: the master switch and what happens on a conflicting edit (shared/board.ts). */
   board: BoardSettings
+  /** What to wake on launch: the saved sessions themselves are in sessions.json (shared/restore.ts). */
+  restore: RestoreSettings
+  /** Where the window was, per display layout (windowState.ts). */
+  window: WindowStates
 }
+
+const RESTORE_MODES: readonly RestoreMode[] = ['last', 'all', 'none']
 
 export const DEFAULT_PORT = 47821
 
@@ -44,7 +52,9 @@ function defaults(): AppConfig {
     overlay: false,
     allowOrders: true,
     officeWideMinutes: 10,
-    board: { ...DEFAULT_BOARD_SETTINGS }
+    board: { ...DEFAULT_BOARD_SETTINGS },
+    restore: { mode: 'last' },
+    window: {}
   }
 }
 
@@ -72,10 +82,14 @@ function normalise(raw: unknown): { cfg: AppConfig; changed: boolean } {
       o.officeWideMinutes,
       d.officeWideMinutes
     ),
-    board: normaliseBoardSettings(o.board)
+    board: normaliseBoardSettings(o.board),
+    restore: {
+      mode: o.restore && typeof o.restore === 'object' && RESTORE_MODES.includes((o.restore as RestoreSettings).mode) ? (o.restore as RestoreSettings).mode : d.restore.mode
+    },
+    window: parseWindowStates(o.window)
   }
-  // A missing or half-valid board section is written back in full.
-  if (JSON.stringify(cfg.board) !== JSON.stringify(o.board)) changed = true
+  // A missing or half-valid section is written back in full.
+  for (const key of ['board', 'restore', 'window'] as const) if (JSON.stringify(cfg[key]) !== JSON.stringify(o[key])) changed = true
   return { cfg, changed }
 }
 

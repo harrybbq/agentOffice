@@ -16,6 +16,7 @@ const STATUS: Record<SessionState, BoardStatus> = {
   busy: 'busy',
   'waiting-permission': 'waiting',
   'needs-attention': 'waiting',
+  asleep: 'ended',
   exited: 'ended'
 }
 
