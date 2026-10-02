@@ -310,6 +310,49 @@ async function ask(exe, env, hooks) {
   }
 }
 
+/**
+ * The gate test: agy's own permission checks are lifted (--dangerously-skip-permissions), so the PreToolUse
+ * hook is the ONLY gate. Verifies in one turn: allow runs, deny blocks, a crashing hook blocks (fail closed),
+ * and what a hook answer without a decision does.
+ */
+async function gate(exe, env, hooks) {
+  const seen = []
+  hooks.decide = async (event, p) => {
+    if (event === 'PreToolUse') {
+      const cmd = JSON.stringify(p.toolCall ?? p)
+      let out = { decision: 'allow' }
+      if (cmd.includes('ao-deny')) out = { decision: 'deny', reason: 'Denied from the Agent Office CEO desk.' }
+      else if (cmd.includes('ao-crash')) out = { __exit: 1 }
+      else if (cmd.includes('ao-empty')) out = {}
+      seen.push({ tool: p.toolCall?.name, marker: (cmd.match(/ao-[a-z]+/) || [''])[0], out })
+      return out
+    }
+    return event === 'Stop' ? { decision: 'stop' } : {}
+  }
+  const s = new AgySession(exe, sessionArgs(['--dangerously-skip-permissions']), { cwd: project, env, log })
+  try {
+    await s.waitFor((e) => e.event === 'init', 30_000)
+    guardTurn('gate')
+    s.prompt(
+      [
+        'Run these four shell commands in order, one tool call each. If one is refused or fails, do not retry it; go on to the next.',
+        `1. node -e "console.log('ao-allow')"`,
+        `2. node -e "console.log('ao-deny')"`,
+        `3. node -e "console.log('ao-crash')"`,
+        `4. node -e "console.log('ao-empty')"`,
+        'Then answer in one line: for each of the four, the exact output or REFUSED.'
+      ].join('\n')
+    )
+    const result = await s.waitFor((e) => e.event === 'result', 240_000)
+    log.note({ gate: { seen, result: result?.result ?? null } })
+    console.log('\n### gate decisions: ' + JSON.stringify(seen))
+    console.log('### gate result: ' + JSON.stringify(result?.result ?? null))
+  } finally {
+    s.closeStdin()
+    if (!(await Promise.race([s.done, sleep(15_000).then(() => null)]))) s.kill()
+  }
+}
+
 // ---- main ---------------------------------------------------------------------------------------
 
 async function main() {
@@ -345,6 +388,7 @@ async function main() {
   await step('terminate', () => terminate(exe, env, hooks))
   await step('steer', () => steer(exe, env, hooks))
   await step('ask', () => ask(exe, env, hooks))
+  await step('gate', () => gate(exe, env, hooks))
   hooks.server.close()
   hooks.server.closeAllConnections?.()
   console.log(`\nreal turns sent: ${turnsSent} (limit ${maxTurns})`)

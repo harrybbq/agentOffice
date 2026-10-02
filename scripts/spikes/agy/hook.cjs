@@ -35,6 +35,8 @@ function endpoint() {
 }
 
 function finish(obj) {
+  // Spike only: lets the test server make this hook crash (non-zero exit, no output).
+  if (obj && obj.__exit) process.exit(obj.__exit)
   process.stdout.write(JSON.stringify(obj))
   process.exit(0)
 }

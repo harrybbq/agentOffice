@@ -762,3 +762,44 @@ Item id: `step_index` of the conversation (stable, unique per conversation).
 - The scratch root (`…\scratchpad\agy-spike`, outside the repo) holds the project and session folders, two scratch
   homes with their own `.gemini`, and agy log files. `ao-note.txt` was never written.
 - 4.5 % of the week's Gemini quota.
+
+## Approval hook in headless mode — VERIFIED 2026-10-02 (1 turn)
+
+`node scripts/spikes/agy/check.cjs --only approvals --max-turns 1`
+
+- **FAIL: a PreToolUse hook `allow` does NOT lift the headless soft-deny.** The hook fired, was held 15 s, returned
+  `{"decision":"allow"}`, and agy still ended the step with `state: "ERROR"`,
+  `permission check failed … user denied permission to run command`, `denied_actions: [RunCommand]`. agy's stderr:
+  "a tool required the "command" permission that headless mode cannot prompt for, so it was auto-denied. Add an
+  allow-rule under permissions.allow in settings.json (e.g. command(<target>)). Alternatively, re-run with
+  --dangerously-skip-permissions".
+- **PASS: holding the hook 15 s works** (agy waited; step duration 15.1 s).
+- **PASS: `PreInvocation` → `{"injectSteps":[{"ephemeralMessage": …}]}` reaches the model** — usable for the briefing
+  and for the board digest, cheaper than an AGENTS.md in the session folder.
+
+Consequence: the app must BE agy's permission system. agy's own permission checks are lifted (per-session
+`permissions.allow`, if `--add-dir` honours a `.agents/settings.json`; otherwise `--dangerously-skip-permissions`) and
+the PreToolUse hook is the only gate, failing closed. Must verify with permissions lifted: hook `deny` blocks, an
+unreachable/failing hook blocks, hook `allow` runs. Fallback: agy's TUI in a PTY (approvals in the terminal).
+
+## The gate with agy's checks lifted — VERIFIED 2026-10-02 (1 turn): PASS
+
+- `--add-dir <session>/.agents/settings.json` (or `config.json`, or `<cwd>/.agents/settings.json`) with
+  `permissions.allow` / `toolPermission` is **not honoured** (`/config` and `/permissions` unchanged;
+  `scripts/spikes/agy/probe-settings.cjs`, zero quota). So the only per-session way to lift agy's own checks is the
+  `--dangerously-skip-permissions` flag.
+- With that flag, the PreToolUse hook is the only gate, and it **fails closed in every case tested**
+  (`check.cjs --only gate`, four commands in one turn):
+
+| Hook answer | Result |
+|---|---|
+| `{"decision":"allow"}` | command ran, output `ao-allow` |
+| `{"decision":"deny","reason":…}` | step `ERROR`: "tool call denied by pre-tool hook: <reason>" |
+| hook process exits 1 with no output | step `ERROR` ("JSON hook …"), command did not run |
+| `{}` (no decision) | step `ERROR`: "tool call denied by pre-tool hook" |
+
+  The model reported `1: ao-allow, 2: REFUSED, 3: REFUSED, 4: REFUSED` and did not retry.
+- Design consequence: the agy driver starts sessions with the flag AND refuses to start unless `/hooks` (free) lists
+  the app's PreToolUse hook for that session folder; the hook script denies when the app can't be reached; the
+  session folder is guarded against writes by the agent (deny in the hook + hash check before each turn).
+- Cost note: that single turn used 67.6k input tokens.

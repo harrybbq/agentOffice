@@ -40,7 +40,7 @@ function isInside(file: string, cwd?: string): boolean {
 }
 
 const SENSITIVE = /(^|[\\/])(\.env(\.[\w.-]+)?|\.ssh|\.aws|\.gnupg|id_(rsa|ed25519)[\w.]*|credentials(\.\w+)?|\.npmrc|\.netrc|auth\.json|secrets?(\.\w+)?)($|[\\/])/i
-const AGENT_CONFIG = /(^|[\\/])\.(claude|codex|gemini)([\\/]|$)/i
+const AGENT_CONFIG = /(^|[\\/])\.(claude|codex|gemini|agents)([\\/]|$)/i
 
 function fileRisk(file: string, cwd: string | undefined, writing: boolean): Pick<PlainPermission, 'risk' | 'riskNote'> {
   if (SENSITIVE.test(file)) return { risk: 'danger', riskNote: writing ? 'Changes a secrets file' : 'Reads a secrets file' }
