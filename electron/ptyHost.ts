@@ -12,6 +12,7 @@ import type { IPty } from 'node-pty'
 import type { Terminal as HeadlessTerminal } from '@xterm/headless'
 import type { SerializeAddon as SerializeAddonType } from '@xterm/addon-serialize'
 import { TERM_HIGH_WATERMARK_CHARS, TERM_LOW_WATERMARK_CHARS } from '../shared/sessions'
+import { StreamScanner } from './preview/detect'
 import { ExtraModes } from './ptyModes'
 import {
   clampCols,
@@ -57,6 +58,33 @@ interface Term {
 }
 
 const terms = new Map<string, Term>()
+
+// The preview pane offers the addresses of local web servers a terminal printed. They are looked
+// for here, because the output itself only leaves this process while a viewer is attached. Nothing
+// of the output is kept besides the scanner's short tail.
+const scanners = new Map<string, { scanner: StreamScanner; idle: NodeJS.Timeout | null }>()
+const ADDRESS_IDLE_MS = 400
+
+function scanAddresses(id: string, data: string): void {
+  let s = scanners.get(id)
+  if (!s) scanners.set(id, (s = { scanner: new StreamScanner(), idle: null }))
+  const state = s
+  const urls = state.scanner.push(data)
+  if (urls.length > 0) post({ t: 'addresses', id, urls })
+  // An address at the very end of the output counts once the output pauses.
+  if (state.idle) clearTimeout(state.idle)
+  state.idle = setTimeout(() => {
+    state.idle = null
+    const late = state.scanner.flush()
+    if (late.length > 0) post({ t: 'addresses', id, urls: late })
+  }, ADDRESS_IDLE_MS)
+}
+
+function forgetAddresses(id: string): void {
+  const s = scanners.get(id)
+  if (s?.idle) clearTimeout(s.idle)
+  scanners.delete(id)
+}
 
 
 function spawn(m: Extract<ToHost, { t: 'spawn' }>): void {
@@ -132,6 +160,7 @@ function spawn(m: Extract<ToHost, { t: 'spawn' }>): void {
   })
   pty.onData((data) => {
     mirror.write(data)
+    scanAddresses(term.id, data)
     if (!term.viewer) return
     term.batch += data
     if (term.batch.length >= PTY_BATCH_CHARS) flush(term)
@@ -308,6 +337,7 @@ port.on('message', (e: { data: unknown }) => {
       if (term.timer) clearTimeout(term.timer)
       term.mirror.dispose()
       terms.delete(m.id)
+      forgetAddresses(m.id)
       break
   }
 })

@@ -46,6 +46,7 @@ import type {
 } from '../../shared/sessions'
 import { subagentId } from '../../shared/sessions'
 import { createBoardStub } from './stubBoard'
+import { createPreviewStub } from './stubPreview'
 import { createCodexStub } from './stubCodex'
 import { createProgressStub, DEMO_PLAN, demoSteps } from './stubProgress'
 
@@ -1250,6 +1251,11 @@ export function createStubBridge(): AgentOfficeBridge {
         return settle(id, decision.behavior === 'allow' ? 'allowed' : 'denied', decision.behavior === 'deny' ? decision.message : undefined)
       },
       onChanged: (cb) => (permCbs.add(cb), () => permCbs.delete(cb))
-    }
+    },
+
+    // The preview pane with a built-in demo page (./stubPreview.ts). ?preview=none: a main process without it.
+    ...(params.get('preview') === 'none'
+      ? {}
+      : { preview: createPreviewStub(() => [...sessions.values()].filter((s) => s.info.state !== 'exited' && s.info.state !== 'asleep').map((s) => s.info.id)) })
   }
 }

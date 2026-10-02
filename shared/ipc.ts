@@ -7,6 +7,7 @@ import type { ChatEvent, ChatItem } from './chat'
 import type { AgentDetails } from './inspector'
 import type { ProgressSnapshot } from './progress'
 import type { RestoreSettings, SavedSession } from './restore'
+import type { PreviewBridge } from './preview'
 import type {
   PermissionDecision,
   PermissionOutcome,
@@ -260,6 +261,8 @@ export interface AgentOfficeBridge {
     /** Closes an order's bar. Resolves false if it was already gone. */
     dismissOrder(id: string): Promise<boolean>
   }
+  /** The live preview pane (shared/preview.ts). Absent with a main process from before it existed. */
+  preview?: PreviewBridge
 }
 
 declare global {

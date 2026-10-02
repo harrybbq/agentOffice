@@ -74,6 +74,8 @@ export interface SessionManagerOptions {
   onTerminalData(id: string, data: string): void
   /** A chat event of a session the renderer is attached to. */
   onChatEvent?(e: ChatEvent): void
+  /** Every chat event of every chat session, attached or not (the preview looks for server addresses in it). */
+  onChatTap?(e: ChatEvent): void
   /** A provider's login state or usage changed: the full list again. */
   onProvidersChanged?(providers: ProviderInfo[]): void
   /** The office board. Absent = sessions run without one (no digest, no board tools, no warnings). */
@@ -415,6 +417,7 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
         onChanged: () => this.touched(id),
         onExit: (code) => this.onExit(id, code),
         onChat: (e) => {
+          this.opts.onChatTap?.(e)
           if (this.chatAttached.has(id)) this.opts.onChatEvent?.(e)
         },
         onPrompt: (text, o) => this.onPrompt(id, text, o?.midTurn === true),

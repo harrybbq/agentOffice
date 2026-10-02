@@ -36,6 +36,8 @@ export type FromHost =
   | { t: 'data'; id: string; data: string }
   /** The terminal title (OSC 0/2) changed. */
   | { t: 'title'; id: string; title: string }
+  /** Addresses of local web servers the terminal printed (electron/preview/detect.ts), each once. Sent with or without a viewer. */
+  | { t: 'addresses'; id: string; urls: string[] }
   | { t: 'exit'; id: string; exitCode: number | null }
   | {
       t: 'snapshot'

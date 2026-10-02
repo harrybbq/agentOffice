@@ -602,6 +602,46 @@ for a moment and then fades (the main process keeps it 30 s, and at most 5 order
 
 The payload shapes of Claude Code's task tools as they were seen, and the limits, are in
 `docs/progress-notes.md`.
+## Live preview
+
+A pane to the left of the office shows the web app a session's team is building, updating as they
+work. It is collapsed to a narrow rail until you open it, follows the selected session (the pin
+keeps it on one), and is hidden in overlay mode. An empty pane offers what applies to the session:
+
+- **Found localhost:5173 — Open**: an address a server printed in the session's terminal or command
+  output. It is only offered while something answers there.
+- **Serve this folder**: the folder has an `index.html` (also `public/`, `dist/`, `build/`, `docs/`,
+  `www/`, `site/`). The app serves the session's folder itself and reloads the page whenever a file
+  in it changes.
+- **Run a script**: the `dev` / `start` / `serve` / `preview` / `storybook`… scripts of the folder's
+  `package.json`. The app runs `npm run <name>` as its own background process, shows the address it
+  prints, keeps its output under "Preview log", and kills it when the preview stops, the session
+  ends or the app quits.
+- **Or type an address.**
+
+The toolbar has the address, Reload, the widths Fit / Desktop 1280 / Tablet 768 / Phone 390 (a width
+wider than the pane is scaled down to fit), "Open in my browser" and Stop. The dot is amber while
+starting, green when live (it pulses when the page changed), red when nothing answers.
+
+What keeps this safe (`electron/preview/`, contract in `shared/preview.ts`):
+
+- Only pages **on this computer** are ever shown: `http(s)://localhost | 127.0.0.1 | [::1]` with a
+  port, no credentials, and never the app's own ports. The main process checks every address; the
+  page's content security policy (`frame-src`) allows nothing else either.
+- The page runs in a sandboxed frame of another origin: it cannot reach the app, its bridge or the
+  clipboard, and gets no camera, notification or other permission. A link to a web site is stopped
+  and opened in the system browser instead (one every few seconds at most); the frame goes back to
+  its page.
+- The app's own server binds 127.0.0.1 on a random port, answers GET/HEAD only, checks the `Host`
+  header, serves no dotfiles (`.env`, `.git`), no folder listings and nothing outside the session's
+  folder once links and junctions are resolved, and refuses requests other web pages make in the
+  background.
+- The renderer never supplies a command: `Run a script` passes a script **name**, which must be in
+  that folder's `package.json` and consist of plain characters.
+
+Not covered: a page that forbids framing (`X-Frame-Options`) or an `https://localhost` server with
+a self-signed certificate cannot be shown in the pane ("Open in my browser" is offered); frames a
+previewed page embeds from other sites stay empty; the app's own server has no range requests.
 
 ## Setup
 
@@ -774,6 +814,7 @@ electron/   main process: window, tray, config, ingest server, adapters, theme p
             the inspector (agentStats.ts = per-agent stats + the watch, transcriptUsage.ts = Claude token
             usage from transcripts, adapters/claudeInspect.ts = what the hooks say about workers and files)
             the progress bars (progress.ts = the tracker, adapters/claudePlan.ts = Claude's to-do list from its hooks)
+            the live preview (preview/: manager.ts, staticServer.ts, detect.ts, runner.ts, guard.ts)
 hook/       the SessionStart command hook injected into hosted Claude Code sessions; the approval
             hook and the board bridge copied into each hosted Antigravity session's folder
 shared/     event format, theme format, IPC contract

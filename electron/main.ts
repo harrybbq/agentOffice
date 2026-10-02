@@ -37,6 +37,10 @@ import { codexEnv } from './drivers/codexServer'
 import { SessionTokens } from './ingest/auth'
 import { HOST, startIngestServer, type IngestServer } from './ingest/server'
 import { ProgressTracker } from './progress'
+import { guardPreviewFrames, openInBrowser, registerPreviewIpc } from './preview/ipc'
+import { subFrameNavigation } from './preview/guard'
+import { PreviewManager } from './preview/manager'
+import { PREVIEW_IPC } from '../shared/preview'
 import { PtyHostClient } from './ptyClient'
 import { windowsBuildNumber } from './ptyProtocol'
 import { SessionInbox } from './sessionInbox'
@@ -86,7 +90,10 @@ const agyTokens = new SessionTokens()
 /** The office board (electron/board.ts): in memory, fed by the sessions, shown in the board panel. */
 const board = new Board({
   settings: () => getConfig().board,
-  onChanged: (snapshot) => toRenderer(IPC.boardChanged, snapshot)
+  onChanged: (snapshot) => {
+    toRenderer(IPC.boardChanged, snapshot)
+    preview?.boardChanged(snapshot) // a session that touched a file: its preview gets a reload hint
+  }
 })
 /** The inspector's watches (one per window); set once the IPC is registered. */
 let inspectorWatch: InspectorWatch<number> | null = null
@@ -119,6 +126,14 @@ let codex: CodexProvider | null = null
 /** Owns the `agy` processes of hosted Antigravity sessions. */
 let agy: AgyProvider | null = null
 let shutdownDone = false
+/** The live preview pane (electron/preview/): per session, the address shown and what the app runs for it. */
+let preview: PreviewManager | null = null
+/** Loopback ports that are the app itself: never shown in the preview frame. */
+function selfPorts(): number[] {
+  const ports = server ? [server.port] : [getConfig().port]
+  const dev = DEV_URL ? Number(new URL(DEV_URL).port) : 0
+  return dev ? [...ports, dev] : ports
+}
 
 // ---------- pre-ready ----------
 
@@ -139,7 +154,7 @@ if (!app.requestSingleInstanceLock()) {
     // file and come back asleep on the next launch.
     sessions?.close()
     // The pty host takes the terminal sessions down; the manager stops the Codex app-server.
-    void Promise.allSettled([ptyHost.shutdown(), sessions?.shutdown()]).finally(() => {
+    void Promise.allSettled([ptyHost.shutdown(), sessions?.shutdown(), preview?.shutdown()]).finally(() => {
       shutdownDone = true
       app.quit()
     })
@@ -147,6 +162,7 @@ if (!app.requestSingleInstanceLock()) {
   // If the app dies without a clean quit, the app-server (and the commands it runs) must not stay behind.
   process.on('exit', () => {
     sessionStore?.flush()
+    preview?.killSync()
     codex?.server.killSync()
     agy?.cli.killSync()
   })
@@ -170,8 +186,9 @@ async function onReady(): Promise<void> {
 
   // The renderer never needs camera/mic/notifications/etc. Only our own window gets the clipboard.
   const ourPage = (wc: Electron.WebContents | null): boolean => !!wc && !!win && !win.isDestroyed() && wc === win.webContents
-  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(allowWebPermission(perm, ourPage(wc))))
-  session.defaultSession.setPermissionCheckHandler((wc, perm) => allowWebPermission(perm, ourPage(wc)))
+  // "Our own window" means its own page: a frame inside it (the preview pane) gets nothing.
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb, details) => cb(allowWebPermission(perm, ourPage(wc), details.isMainFrame)))
+  session.defaultSession.setPermissionCheckHandler((wc, perm, _origin, details) => allowWebPermission(perm, ourPage(wc), details.isMainFrame))
 
   registerThemeProtocol()
   createSessions()
@@ -236,7 +253,11 @@ function toRenderer(channel: string, payload: unknown): void {
 function createSessions(): void {
   const sessionsDir = join(app.getPath('userData'), 'sessions')
   sweepSessionFiles(sessionsDir) // leftovers of a crash; the single-instance lock means nobody uses them
-  const host = new PtyHostClient(PTY_HOST, (id, data) => sessions?.terminalData(id, data))
+  const host = new PtyHostClient(
+    PTY_HOST,
+    (id, data) => sessions?.terminalData(id, data),
+    (id, urls) => preview?.observeAddresses(id, urls, 'terminal')
+  )
   ptyHost = host
   // Development only: AGENT_OFFICE_CODEX_SPAWN=<script> runs that script with `node` in place of
   // `codex app-server` (tests/fixtures/fake-codex-server.cjs), to drive the real UI without a model.
@@ -294,7 +315,12 @@ function createSessions(): void {
     ],
     allowOrders: () => getConfig().allowOrders,
     worldTopLevel: () => bus.topLevel(),
-    onSessionsChanged: (list) => toRenderer(IPC.sessionsChanged, list),
+    onSessionsChanged: (list) => {
+      toRenderer(IPC.sessionsChanged, list)
+      // A preview ends with its session.
+      preview?.sessionsChanged(new Set(list.filter((s) => s.state !== 'asleep' && s.state !== 'exited').map((s) => s.id)))
+    },
+    onChatTap: (e) => preview?.observeChat(e),
     onPermissionsChanged: (pending) => toRenderer(IPC.permissionsChanged, pending),
     onTerminalData: (id, data) => toRenderer(IPC.termData, { id, data }),
     onChatEvent: (e) => toRenderer(IPC.chatEvent, e),
@@ -306,6 +332,17 @@ function createSessions(): void {
       endpoint: { url: () => (server ? `http://${HOST}:${server.port}${BOARD_MCP_ROUTE}` : null), tokens: boardTokens },
       saveSettings: (patch) => setBoardSettings(patch)
     }
+  })
+  const manager = sessions
+  preview = new PreviewManager({
+    session: (id) => {
+      const s = manager.list().find((x) => x.id === id)
+      return s && s.state !== 'asleep' && s.state !== 'exited' ? { id: s.id, cwd: s.cwd } : undefined
+    },
+    onChanged: (info) => toRenderer(PREVIEW_IPC.changed, info),
+    onReload: (id) => toRenderer(PREVIEW_IPC.reload, id),
+    onDetected: (id) => toRenderer(PREVIEW_IPC.detected, id),
+    selfPorts
   })
 }
 
@@ -351,6 +388,7 @@ function registerIpc(): void {
     })
   )
   inspectorWatch = registerSessionIpc({ manager: sessions!, getWindow: () => win }).inspector
+  registerPreviewIpc({ manager: preview!, getWindow: () => win })
 }
 
 function pushSettings(): void {
@@ -455,15 +493,18 @@ function createWindow(): void {
   // Never open app windows. Links in chat answers go through IPC.openExternal; a stray
   // window.open of a plain web address still ends up in the system browser, never in a window.
   w.webContents.setWindowOpenHandler(({ url }) => {
-    if (isExternalWebUrl(url)) void shell.openExternal(url)
+    // (At most one every few seconds: the page in the preview frame can call window.open as well.)
+    if (isExternalWebUrl(url)) openInBrowser(url, 'window.open')
     return { action: 'deny' }
   })
   w.webContents.on('will-navigate', (e, url) => {
     if (!isAllowedUrl(url)) e.preventDefault()
   })
   w.webContents.on('will-redirect', (e, url) => {
-    if (!isAllowedUrl(url)) e.preventDefault()
+    // The window's own page stays where it is; a frame inside it (the preview) only goes to loopback pages.
+    if (e.isMainFrame ? !isAllowedUrl(url) : subFrameNavigation(url, selfPorts()) !== 'allow') e.preventDefault()
   })
+  guardPreviewFrames(w.webContents, { manager: () => preview, selfPorts, onBlocked: (b) => toRenderer(PREVIEW_IPC.blocked, b) })
   w.webContents.on('will-attach-webview', (e) => e.preventDefault())
 
   w.on('close', (e) => {
@@ -491,8 +532,9 @@ function createWindow(): void {
   // A (re)loading or replaced renderer has lost its terminals, chats and inspector: stop streaming until it attaches again.
   sessions?.detachAll()
   inspectorWatch?.clear()
-  w.webContents.on('did-start-loading', () => {
-    if (win === w) {
+  // (Only the window's own page: the preview frame loading a page is not a reload of the renderer.)
+  w.webContents.on('did-start-navigation', (e) => {
+    if (win === w && e.isMainFrame && !e.isSameDocument) {
       sessions?.detachAll()
       inspectorWatch?.clear()
     }
