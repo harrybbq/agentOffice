@@ -1,6 +1,7 @@
 // What the session manager needs from a provider. One AgentDriver instance runs one hosted session.
 // A driver is terminal-based (Claude Code: the official TUI in a pty, structured events from hooks)
-// or chat-based (Codex: `codex app-server`, no TUI, a ChatItem list instead), see `surface`.
+// or chat-based (Codex: `codex app-server`; Antigravity: `agy` stream-json; no TUI, a ChatItem list
+// instead), see `surface`.
 // Nothing here is specific to hooks, TUIs or PTYs.
 //
 // No Electron imports: drivers get everything they need through DriverContext, and tests build one
@@ -113,6 +114,8 @@ export interface AgentDriver {
   readonly canReceiveOrders: boolean
   /** Workers (subagents) running right now, if the driver knows. They die with the session's process. */
   readonly workers?: number
+  /** A short plain sentence about why the session ended, when the driver knows (SessionInfo.notice). */
+  readonly endNotice?: string
   /** Launches the agent. Rejects with a readable message if it can't. */
   start(): Promise<void>
   /** Delivers a prompt / order into the session. Never throws. `origin` defaults to 'order'. */

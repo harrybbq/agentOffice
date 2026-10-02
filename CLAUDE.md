@@ -1,11 +1,11 @@
 # Agent Office
 
-Electron desktop app that hosts AI coding agents (Claude Code, Codex; Antigravity planned) and shows them
+Electron desktop app that hosts AI coding agents (Claude Code, Codex, Antigravity) and shows them
 as characters in a themed office. The user is the CEO; each session is a manager with its own branch;
 subagents are workers. See README.md for the full picture.
 
 ## Layout
-- `electron/` main process: sessions, drivers (`drivers/claude.ts`, `drivers/codex*.ts`), pty host, ingest server, tray
+- `electron/` main process: sessions, drivers (`drivers/claude.ts`, `drivers/codex*.ts`, `drivers/agy*.ts`), board, session store, pty host, ingest server, tray
 - `src/` renderer: React shell (`src/ui/`), Phaser world (`src/scene/`, `src/world/`), theme loader (`src/theme/`)
 - `shared/` contracts: events, theme format, IPC, sessions, chat
 - `themes/<name>/` art + maps. **A theme must need no code changes.** Format: header of `shared/theme.ts` + README "Writing a theme"

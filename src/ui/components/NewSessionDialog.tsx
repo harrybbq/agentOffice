@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { PermissionMode, ProviderId, SessionHistoryEntry } from '../../../shared/sessions'
 import { useApp, useAppState } from '../controller'
-import { canResume, cleanError, loginHint, modeHints, modelPlaceholder, shortenPath, whenAgo } from '../format'
+import { canResume, cleanError, loginHint, modeHints, modelHint, modelPlaceholder, shortenPath, whenAgo } from '../format'
 import { cx } from '../hooks'
 import { IconAlert, IconChevron, IconClose, IconFolder } from '../icons'
-import { LoginPrompt } from './ProviderAccount'
+import { LoginPrompt, UsageMeter } from './ProviderAccount'
 
 /** What each mode means differs per provider: the help line comes from format.modeHints. */
 const MODES: { id: PermissionMode; label: string }[] = [
@@ -296,6 +296,12 @@ export function NewSessionDialog() {
               <input id="ns-model" className="input" value={model} onChange={(ev) => setModel(ev.target.value)} placeholder={modelPlaceholder(provider)} maxLength={80} spellCheck={false} />
             </div>
           </div>
+          {modelHint(provider) && (
+            <div className="field quota-note">
+              <p className="field-hint">{modelHint(provider)}</p>
+              {chosen && !needsLogin && <UsageMeter usage={chosen.usage} />}
+            </div>
+          )}
 
           {error && (
             <div className="form-error" role="alert">

@@ -90,8 +90,8 @@ the current screen when you show it.
 ## Hosted sessions
 
 The app can launch agents itself and be your main window onto them. It hosts **Claude Code** in an
-embedded terminal (described first) and **Codex** in a chat view (see [Codex](#codex)).
-Antigravity is listed as a provider but has no driver yet.
+embedded terminal (described first), **Codex** in a chat view (see [Codex](#codex)) and Google's
+**Antigravity** CLI in the same chat view (see [Antigravity](#antigravity)).
 
 **How a session is launched.** You pick a provider and a folder. The main process then:
 
@@ -266,6 +266,128 @@ in a scratch folder, with four short turns: approval allowed, approval denied wi
 order in the middle of a turn, an interrupt, then a restart and resume. It also watches for console
 windows while Codex and its commands run.
 
+### Antigravity
+
+Google's Antigravity CLI (`agy`) has no interface the app could embed either, so the app hosts it
+headless and shows the session in the same chat view as Codex. Protocol notes, measurements and
+what was verified with the real binary: `docs/spikes-phase-c.md`.
+
+**How it runs.** One `agy` process per session: `agy --input-format stream-json --output-format
+stream-json --add-dir <session folder> --disable-slash-commands --log-file <session folder>\agy.log
+--model <model> [--conversation <id>] --dangerously-skip-permissions`, started in your project
+folder without a shell and without a console window, with `CLAUDE*`, `AI_AGENT`, `CODEX_*`,
+`ANTIGRAVITY_*`, `AGY_*`, `GEMINI_*` and `AO_*` variables removed and agy's self-updater switched
+off. The process stays alive for the whole session and takes one prompt per turn on its input. It
+uses your normal agy sign-in and keeps its conversations in your agy history (`~/.gemini`), which
+the app never writes to. Each session uses about 130 MB idle and 190 MB while working (plus about
+45 MB for the board bridge once the session has used the board), and counts towards the limit of
+eight live sessions like any other.
+
+**The session folder.** Everything the app adds lives in `<config dir>/agy-sessions/<session id>/`,
+never in your project and never in `~/.gemini`: `.agents/hooks.json` (two hooks), a copy of
+`hook/agy-hook.cjs` next to it, and with the office board `.agents/mcp_config.json` plus a copy of
+`hook/agy-board-mcp.cjs`. agy loads them because the folder is passed with `--add-dir`. No file in
+it holds a secret: the hook's token and the board's token are in the process environment only. The
+folder is deleted when the session ends (leftovers of a crash at the next start). The hooks run
+with `node`, which must be on your PATH (as for the Claude Code hook).
+
+**Why `--dangerously-skip-permissions`, and what replaces agy's own checks.** In headless mode agy
+cannot ask you anything: a command that needs approval is refused on the spot ("soft-deny") and the
+turn ends. A hook that answers `allow` does not change that, and agy takes its permission rules
+only from your own `settings.json`, which the app must not touch. The one way to let a hosted
+session run a command at all is the flag that lifts agy's checks. With it, **the app is agy's
+permission system**: agy asks the app's `PreToolUse` hook before every tool call, and that hook
+is the only gate. It fails closed: `deny`, a crashed hook and an answer without a decision all
+block the call (verified with the real binary). Four things keep it honest:
+
+1. **No gate, no session.** Before agy is started with the flag, the app asks agy itself, without
+   quota (`agy -p /hooks`), which hooks it would load for this session's folder. Unless the answer
+   lists the app's `PreToolUse` hook, for every tool, from this session's own `hooks.json`, with
+   exactly the app's command, the session is refused ("Antigravity did not load Agent Office's
+   approval hook…") and the flagged process is never spawned. The same check runs before every
+   wake, reopen and respawn.
+2. **The hook says no when it cannot ask.** `hook/agy-hook.cjs` posts the tool call to the app on
+   127.0.0.1 and prints the app's answer. If the app is not reachable, answers late, answers with
+   anything but a well-formed `allow` or `deny`, or the script fails in any way, it prints `deny`.
+   It passes nothing else through (no permission overrides, no rewritten arguments).
+3. **The gate cannot be edited from inside.** The policy refuses every tool call that reads or
+   changes the session folder or the app's data folder: by path argument (links resolved), and for
+   commands by the path written anywhere in them, whatever the quoting (`"…"`, `^`, backticks,
+   `%APPDATA%`, `$env:APPDATA`, `~`). A command that only smells of it gets a card marked "May
+   touch Agent Office's own files". Before every turn and every tool call the app compares a hash
+   of the hook files with what it wrote; a difference stops the session with a notice.
+4. **The hook's token opens one door.** Each session gets its own token, valid on `/hooks/agy`
+   only and only as that session; that route takes questions and never a decision. The global
+   token, a Claude session's token and a board token are refused there. Tokens are never written
+   to a file or logged. A question is only accepted for a tool call agy itself announced on its
+   output, once per call, so a command that posts to the route with the session's token gets no
+   card.
+
+What this cannot do: a command you approve runs with your rights and can do anything, as with every
+agent. A card is the place to stop it.
+
+**Permission modes** are the app's own rules (`electron/drivers/agyPolicy.ts`); agy's `--mode` flag
+is not used:
+
+| Mode in the app | Reads in the folder | File edits in the folder | Commands | Web, browser, other MCP tools, unknown tools |
+|---|---|---|---|---|
+| `default` | allowed | ask | ask | ask |
+| `acceptEdits` | allowed | allowed | ask | ask |
+| `plan` | allowed | refused ("plan mode: read-only") | refused | ask |
+
+Anything outside the session's folder asks, with the usual risk badge; so does a secrets file and
+an agent's own settings (`.agents/`, `.gemini/`, …), also in `acceptEdits`. The office board's own
+tools never ask. Sub-agents, workflows and scheduled tasks are refused in every mode: the app
+could not check what they do. In `plan` the session is told so in its briefing.
+
+**Approvals.** A call that has to ask becomes a card in the CEO inbox, like the other providers':
+"Command: …", "Create / Write / Edit: path" with the content, "MCP: server · tool", a browser or
+web card with a caution badge. The hook's answer is held open until you decide (the app sets the hook's
+timeout to one hour and agy reports it as such; holds of up to 15 seconds were seen working,
+longer ones were not tried). Allow runs the call; deny refuses it, and your
+message is the reason the model reads. A card disappears ("resolved elsewhere") when the turn
+ends, is interrupted, or the process dies. There is no "always allow".
+
+**Chat, orders, interrupt.** What you type in the chat box is a real user turn; orders from the
+order bar arrive the same way (target: the session, `provider:antigravity` = "All Antigravity", or
+everyone). agy takes one prompt per turn, so a prompt sent while a turn runs is **queued**: the
+chat says so, and it starts when the running turn ends. (Handing it into the running turn through
+the hook before the model's next call worked in the one real turn that tried it;
+`AGENT_OFFICE_AGY_STEER=inject` switches that on.) The chat is built from agy's event stream plus
+the hook's payload, which carries what the stream leaves out: a file card shows the new content as
+a diff. agy has no interrupt on its pipe: **Interrupt** kills the process tree (the running command
+and its children with it), marks what was open as interrupted, and loads the same conversation
+into a new process after the gate check; that takes about five seconds. Stop closes agy's input
+and kills what is left.
+
+**Resume.** The conversation id agy reports at start is saved with the session; waking or
+reopening it starts agy with `--conversation <id>`. agy answers an unknown id with a warning and a
+*new* conversation, so the app compares the ids and treats a mismatch as "the saved conversation
+no longer exists". A resumed session's earlier messages are not shown in the chat (the agent has
+them; the app does not read agy's files). There is no "Resume previous…" list for Antigravity.
+
+**Signing in.** The app cannot start agy's sign-in (there is no login command and no address to
+open). The provider row shows: *Open a terminal, run `agy`, choose the personal Google sign-in (not
+the Google Cloud project option), then come back*, with **Check again**, which asks agy
+(`agy models`, no quota) whether it is signed in now. agy does not report a plan name, so none is
+shown.
+
+**Quota.** The free plan is small: one turn with a few tool calls uses about 2 % of the **week**
+(every model call sends about 13,000 tokens of fixed prompt, uncached). A session uses the
+cheapest model (`gemini-3.8-flash-low`) unless you name one, and the provider row shows the weekly
+meter (`agy -p /usage`, read after each turn, at most once a minute, at no cost).
+
+**What the world shows.** Commands are `exec` (`read` for a plain look such as `git status`), file
+tools `write` / `read`, web and browser tools `web` (`capture` for screenshots), a pending card
+`waiting`, the end of a turn `idle`. The team is named after its model ("Gemini 3.8 Flash").
+
+`npx electron scripts/e2e-phase-c.cjs` runs the flow against the real `agy` on your account, in a
+scratch folder, with at most five short turns (`--free` sends none): a command and a file creation
+allowed from the inbox, a command denied with a message, an interrupt with the respawn, a follow-up
+turn, then a restart and resume. It also watches for console windows.
+`AGENT_OFFICE_AGY_SPAWN=<script.cjs>` (unpackaged builds) runs that script with `node` in place of
+`agy` (`tests/fixtures/fake-agy.cjs` is one), to drive the real window without a model or quota.
+
 ## Restoring sessions
 
 Closing Agent Office stops the agents it hosts, but not your work with them: the next launch shows
@@ -437,7 +559,7 @@ packaged, `AGENT_OFFICE_CODEX_SPAWN=<script.cjs>` runs that script with `node` i
 without a model or quota.
 
 - The ingest server listens on **127.0.0.1 only** (default port 47821).
-- Every request must carry a token in the **`X-Agent-Office-Token` header**: the global one from the config file, or a hosted session's own (which only reaches `/hooks/claude-code`, see [Hosted sessions](#hosted-sessions)). The one exception is `/mcp`, the [office board](#office-board)'s tools, which takes a session's board token as `Authorization: Bearer` and nothing else. A token is never accepted in the URL.
+- Every request must carry a token in the **`X-Agent-Office-Token` header**: the global one from the config file, or a hosted session's own (which only reaches `/hooks/claude-code`, see [Hosted sessions](#hosted-sessions); a hosted Antigravity session's only reaches `/hooks/agy`, see [Antigravity](#antigravity)). The one exception is `/mcp`, the [office board](#office-board)'s tools, which takes a session's board token as `Authorization: Bearer` and nothing else. A token is never accepted in the URL.
 - Requests with a browser `Origin` header or an unexpected `Host` are rejected. This protects against malicious web pages and DNS rebinding.
 - The token is 32 random bytes, generated on first run. Replace it any time from the tray (**Regenerate token**) or by editing the config file.
 
@@ -534,12 +656,14 @@ electron/   main process: window, tray, config, ingest server, adapters, theme p
             hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process),
             the office board (board.ts = model, boardMcp.ts = its MCP tools, boardProject.ts = which repository)
             session restore (sessionStore.ts = sessions.json, windowState.ts = the window position)
-hook/       the SessionStart command hook injected into hosted Claude Code sessions
+hook/       the SessionStart command hook injected into hosted Claude Code sessions; the approval
+            hook and the board bridge copied into each hosted Antigravity session's folder
 shared/     event format, theme format, IPC contract
 src/        renderer: the React shell (src/ui: sessions, terminal, CEO inbox, order bar) and the
             Phaser world (scene, characters, roster)
 themes/     bundled themes
 scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI),
+            e2e-phase-b.cjs / e2e-phase-c.cjs (the same for Codex and for Antigravity),
             e2e-board.cjs (office board check against real Claude Code and Codex sessions),
             e2e-restore.cjs (kill the app with a request pending, bring the session back)
 docs/       research notes (hooks, art direction)
@@ -551,7 +675,7 @@ docs/       research notes (hooks, art direction)
    ✅ Corridor + construction animation when a team arrives, demolition when it leaves
    ✅ Team colours + distinct managers, branch-confined workers, memo relay via managers, CEO speech bar UI + gated `sendOrder` plumbing
 2. ✅ Phase A: hosted Claude Code sessions in an embedded terminal, hook adapter, permission
-   requests answered from the app, real order delivery, the app shell (sessions, terminal, CEO inbox, order bar). Next: Codex (B) and Antigravity (C) drivers, and an
+   requests answered from the app, real order delivery, the app shell (sessions, terminal, CEO inbox, order bar). ✅ Phase B: Codex in a chat view. ✅ Phase C: Antigravity (`agy`) in the chat view, with the app as its permission system. Next: an
    install snippet so sessions started in your own terminal report in too
 3. Claude Code transcript watcher (zero setup), prison theme
 4. Real pixel art

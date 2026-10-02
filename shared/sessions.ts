@@ -23,8 +23,13 @@ export interface ProviderInfo {
   /** Why not, when unavailable (e.g. "not installed", "driver coming in phase B"). */
   reason?: string
   version?: string
-  /** Account state for providers that have their own login (Codex). Undefined = not applicable/unknown. */
+  /** Account state for providers that have their own login (Codex, Antigravity). Undefined = not applicable/unknown. */
   account?: { loggedIn: boolean; plan?: string }
+  /**
+   * Set by a provider whose sign-in the app cannot start itself (Antigravity): what the user has
+   * to do, as one plain sentence. The renderer shows it with "Check again" instead of "Log in".
+   */
+  loginHelp?: string
   /** Usage of the provider's rate-limit window, when the provider reports it. */
   usage?: { usedPercent: number; resetsAt?: number; windowMinutes?: number }
 }

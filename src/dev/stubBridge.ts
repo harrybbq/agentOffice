@@ -7,6 +7,8 @@
 // requests, a simulated external team, an office board) | ?stub=empty (nothing running, an empty
 // board) · ?orders=off · ?overlay=1 · ?board=none (no office board, as an older main process)
 // · ?codex=loggedout (Codex needs a sign-in; "Log in" succeeds after a few seconds)
+// · ?agy=loggedout (Antigravity needs a sign-in the app can't start: the instruction with "Check
+//   again", which finds it signed in at the second try) · ?agy=none (Antigravity is not installed)
 // · ?play=0 (the Codex session does not start its scripted turn by itself) · ?speed=0.5 (script speed)
 // · ?restore=none (nothing saved from an earlier run: no asleep rows, no Recent list) · ?restore=demo
 //   with ?stub=empty (only the restored rows, as right after a restart) · ?restore=old (a bridge
@@ -18,6 +20,7 @@
 // ./stubBoard.ts.
 import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { parseAgentEvent } from '../../shared/events'
+import { friendlyModelName } from '../../shared/models'
 import type { Activity, AgentEvent } from '../../shared/events'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
 import { PROVIDER_TARGET_PREFIX, REASON_DISABLED, REASON_NO_SESSIONS } from '../../shared/orders'
@@ -70,6 +73,10 @@ export function createStubBridge(): AgentOfficeBridge {
 
   const settingsCbs = new Set<(s: RendererSettings) => void>()
   const loggedOut = params.get('codex') === 'loggedout'
+  const agyMode = params.get('agy')
+  const AGY_HELP = 'Open a terminal, run `agy`, choose the personal Google sign-in (not the Google Cloud project option), then come back.'
+  const AGY_USAGE = { usedPercent: 7.4, resetsAt: Date.now() + 6 * DAY, windowMinutes: 10080 }
+  let agyChecks = 0
   let PROVIDERS: ProviderInfo[] = [
     { id: 'claude-code', label: 'Claude Code', available: true, version: '2.1.284 (stub)' },
     {
@@ -80,7 +87,18 @@ export function createStubBridge(): AgentOfficeBridge {
       account: loggedOut ? { loggedIn: false } : { loggedIn: true, plan: 'free' },
       usage: loggedOut ? undefined : { usedPercent: 12, resetsAt: Date.now() + 19 * DAY, windowMinutes: 43200 }
     },
-    { id: 'antigravity', label: 'Antigravity', available: false, reason: 'Not installed' }
+    agyMode === 'none'
+      ? { id: 'antigravity', label: 'Antigravity', available: false, reason: 'not installed' }
+      : {
+          id: 'antigravity',
+          label: 'Antigravity',
+          available: true,
+          version: '1.2.14 (stub)',
+          loginHelp: AGY_HELP,
+          // No plan name: agy does not report one.
+          account: { loggedIn: agyMode !== 'loggedout' },
+          usage: agyMode === 'loggedout' ? undefined : AGY_USAGE
+        }
   ]
   const providerCbs = new Set<(p: ProviderInfo[]) => void>()
   const setCodexAccount = (loggedIn: boolean) => {
@@ -141,7 +159,7 @@ export function createStubBridge(): AgentOfficeBridge {
       },
       activity: (id, activity, detail) => {
         const s = sessions.get(id)
-        if (s) emit({ agentId: id, parentId: null, provider: 'codex', displayName: s.info.title, activity, detail })
+        if (s) emit({ agentId: id, parentId: null, provider: s.info.provider, displayName: s.info.title, activity, detail })
       },
       permission: (requestId) => pending.find((p) => p.id === requestId),
       requestPermission: (id, tool, summary, detail) => {
@@ -245,7 +263,7 @@ export function createStubBridge(): AgentOfficeBridge {
         startedAt: Date.now() + counter,
         permissionMode: req.permissionMode ?? 'default',
         model: req.model,
-        surface: req.provider === 'codex' ? 'chat' : 'terminal',
+        surface: req.provider === 'claude-code' ? 'terminal' : 'chat',
         canReceiveOrders: false
       },
       buffer: '',
@@ -367,7 +385,7 @@ export function createStubBridge(): AgentOfficeBridge {
         state: 'asleep',
         startedAt: Date.now() - 26 * HOUR,
         permissionMode: 'default',
-        surface: o.provider === 'codex' ? 'chat' : 'terminal',
+        surface: o.provider === 'claude-code' ? 'terminal' : 'chat',
         canReceiveOrders: false,
         wakeable: true,
         ...o
@@ -522,7 +540,7 @@ export function createStubBridge(): AgentOfficeBridge {
           startedAt: Date.now() + ++counter,
           permissionMode: r.permissionMode,
           model: r.model,
-          surface: r.provider === 'codex' ? 'chat' : 'terminal',
+          surface: r.provider === 'claude-code' ? 'terminal' : 'chat',
           canReceiveOrders: false
         },
         buffer: '',
@@ -593,6 +611,15 @@ export function createStubBridge(): AgentOfficeBridge {
         c.info.canReceiveOrders = true
         codex.add(c.info.id, { history: true, autoplay: params.get('play') !== '0' })
         codexId = c.info.id
+      }
+      if (agyMode !== 'none' && agyMode !== 'loggedout') {
+        // An Antigravity session: the same chat view (its scripted turn plays when asked: codex.play(id)).
+        const g = create(
+          { provider: 'antigravity', cwd: 'C:\\Users\\Harry\\source\\repos\\storefront', title: 'Gemini 3.8 Flash', model: 'gemini-3.8-flash-low' },
+          'idle'
+        )
+        g.info.canReceiveOrders = true
+        codex.add(g.info.id, { history: true, autoplay: false })
       }
       board.seed({ main: a.info.id, codex: codexId, tests: d.info.id, other: b.info.id })
       pushSessions()
@@ -769,6 +796,14 @@ export function createStubBridge(): AgentOfficeBridge {
       onProvidersChanged: (cb) => (providerCbs.add(cb), () => providerCbs.delete(cb)),
       login: async (provider) => {
         await new Promise((r) => setTimeout(r, 250))
+        if (provider === 'antigravity') {
+          // The app cannot start this sign-in: "Check again" looks, and here the second look succeeds.
+          const signedIn = PROVIDERS.find((p) => p.id === 'antigravity')?.account?.loggedIn
+          if (!signedIn && ++agyChecks < 2) throw new Error(AGY_HELP.replace(/\.$/, ''))
+          PROVIDERS = PROVIDERS.map((p) => (p.id === 'antigravity' ? { ...p, account: { loggedIn: true }, usage: AGY_USAGE } : p))
+          providerCbs.forEach((cb) => cb(PROVIDERS))
+          return
+        }
         if (provider !== 'codex') throw new Error('This provider has no sign-in of its own')
         // The real flow opens the system browser; here it just succeeds after a moment.
         window.setTimeout(() => setCodexAccount(true), 3500)
@@ -781,7 +816,13 @@ export function createStubBridge(): AgentOfficeBridge {
         if (p.account?.loggedIn === false) throw new Error(`${p.label} is not signed in. Log in first.`)
         if (!req.cwd.trim()) throw new Error('Pick a folder first')
         if (/missing|nope/i.test(req.cwd)) throw new Error(`Folder not found: ${req.cwd}`)
-        const s = create(req.provider === 'codex' && !req.title?.trim() ? { ...req, title: req.model?.trim() || 'gpt-6-luna', model: req.model?.trim() || 'gpt-6-luna' } : req)
+        const s = create(
+          req.provider === 'codex' && !req.title?.trim()
+            ? { ...req, title: req.model?.trim() || 'gpt-6-luna', model: req.model?.trim() || 'gpt-6-luna' }
+            : req.provider === 'antigravity' && !req.title?.trim()
+              ? { ...req, title: friendlyModelName(req.model?.trim() || 'gemini-3.8-flash-low'), model: req.model?.trim() || 'gemini-3.8-flash-low' }
+              : req
+        )
         if (s.info.surface === 'chat') codex.add(s.info.id, req.resume ? { history: true, autoplay: false } : undefined)
         pushSessions()
         // Only the terminal stub has a folder-trust question.

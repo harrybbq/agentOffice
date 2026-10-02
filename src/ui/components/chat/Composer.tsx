@@ -1,11 +1,11 @@
 // The chat box under the message list: Enter sends, Shift+Enter adds a line, Up recalls earlier
-// prompts. While a turn runs the prompt is added to that turn ("steer") and Interrupt sits next to
-// the send button.
+// prompts. While a turn runs the prompt is added to that turn ("steer"; for a provider that takes
+// one prompt per turn it is queued for the next turn) and Interrupt sits next to the send button.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { CHAT_MAX_PROMPT_CHARS } from '../../../../shared/chat'
 import type { SessionInfo } from '../../../../shared/sessions'
 import { useApp } from '../../controller'
-import { composerState } from '../../format'
+import { composerState, midTurnPrompt } from '../../format'
 import { cx } from '../../hooks'
 import { IconAlert, IconClose, IconInterrupt, IconSend } from '../../icons'
 import { useStore } from '../../store'
@@ -25,6 +25,8 @@ export function Composer({ session, providerLabel }: { session: SessionInfo; pro
   /** Focus was asked while the box was disabled (a session that is still starting). */
   const wantFocus = useRef(false)
   const mode = composerState(session.state, providerLabel)
+  /** A prompt sent mid-turn waits for the next turn instead of joining the running one. */
+  const queues = midTurnPrompt(session.provider) === 'queue'
   const canSend = mode.enabled && !sending && text.trim().length > 0
 
   const setText = (next: string) => {
@@ -82,7 +84,9 @@ export function Composer({ session, providerLabel }: { session: SessionInfo; pro
   const placeholder = !mode.enabled
     ? (mode.reason ?? '')
     : mode.steer
-      ? `Add to the running turn: ${providerLabel} reads it after its current step`
+      ? queues
+        ? `Queue a prompt: ${providerLabel} runs it as the next turn`
+        : `Add to the running turn: ${providerLabel} reads it after its current step`
       : `Ask ${providerLabel} to…`
 
   return (
@@ -112,7 +116,7 @@ export function Composer({ session, providerLabel }: { session: SessionInfo; pro
           disabled={!mode.enabled}
           maxLength={CHAT_MAX_PROMPT_CHARS}
           spellCheck={false}
-          aria-label={mode.steer ? 'Add to the running turn' : `Message ${providerLabel}`}
+          aria-label={mode.steer ? (queues ? 'Queue a prompt for the next turn' : 'Add to the running turn') : `Message ${providerLabel}`}
           placeholder={placeholder}
           onChange={(ev) => {
             ui.history.reset()
@@ -144,7 +148,7 @@ export function Composer({ session, providerLabel }: { session: SessionInfo; pro
             {!mode.enabled ? null : mode.steer ? (
               <>
                 <span className="spinner" />
-                {session.state === 'waiting-permission' ? 'Waiting for your approval' : 'Working'} · <kbd>Enter</kbd> adds to this turn
+                {session.state === 'waiting-permission' ? 'Waiting for your approval' : 'Working'} · <kbd>Enter</kbd> {queues ? 'queues it for the next turn' : 'adds to this turn'}
               </>
             ) : (
               <>
@@ -160,7 +164,7 @@ export function Composer({ session, providerLabel }: { session: SessionInfo; pro
           )}
           <button type="submit" className="btn btn-primary btn-sm" disabled={!canSend}>
             <IconSend />
-            {sending ? 'Sending…' : mode.steer ? 'Add to turn' : 'Send'}
+            {sending ? 'Sending…' : mode.steer ? (queues ? 'Queue' : 'Add to turn') : 'Send'}
           </button>
         </div>
       </div>

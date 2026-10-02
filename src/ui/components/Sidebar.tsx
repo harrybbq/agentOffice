@@ -136,6 +136,12 @@ export function Sidebar() {
                   {g.provider.account.plan}
                 </span>
               )}
+              {/* A provider that reports no plan (Antigravity) still says that it is signed in. */}
+              {g.provider.available && g.provider.account?.loggedIn && !g.provider.account.plan && (
+                <span className="group-tag plan-tag" title="Signed in">
+                  signed in
+                </span>
+              )}
             </h2>
             {!g.provider.available && <p className="group-note">{g.provider.reason ?? 'Not available'}</p>}
             {g.provider.available && loginHint(g.provider) && <LoginPrompt provider={g.provider} variant="sidebar" />}

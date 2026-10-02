@@ -10,6 +10,9 @@ export const SESSION_TOKEN_ROUTE = '/hooks/claude-code'
 /** The one route a board token may use (the office board's MCP tools, electron/boardMcp.ts). */
 export const BOARD_TOKEN_ROUTE = '/mcp'
 
+/** The one route an Antigravity hook token may use (the agy hook script, hook/agy-hook.cjs). */
+export const AGY_HOOK_ROUTE = '/hooks/agy'
+
 /**
  * Who a request is:
  * - `global`: the user's own tools (the token from config.json);
@@ -17,9 +20,15 @@ export const BOARD_TOKEN_ROUTE = '/mcp'
  *   header; it only reaches SESSION_TOKEN_ROUTE, and only for its session);
  * - `board`: the same agent using the office board (a SEPARATE per-session token, sent as
  *   `Authorization: Bearer`; it only reaches BOARD_TOKEN_ROUTE). "Can post events" and "can use the
- *   board" are different scopes: neither token works on the other's route.
+ *   board" are different scopes: neither token works on the other's route;
+ * - `agy`: the hook script of a hosted Antigravity session (a THIRD per-session token, in the token
+ *   header; it only reaches AGY_HOOK_ROUTE, for its session). That route only ever takes questions.
  */
-export type Auth = { kind: 'global' } | { kind: 'session'; sessionId: string } | { kind: 'board'; sessionId: string }
+export type Auth =
+  | { kind: 'global' }
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'board'; sessionId: string }
+  | { kind: 'agy'; sessionId: string }
 
 function equalConstantTime(got: string, expected: string): boolean {
   const a = Buffer.from(got, 'utf8')
@@ -93,12 +102,14 @@ function bearerOf(req: IncomingMessage): string {
  * header is looked up as the global token or a session's hook token; a bearer token only as a board
  * token (and only when no token header was sent). Tokens are never read from the URL.
  */
-export function authenticate(req: IncomingMessage, globalToken: string, sessions?: SessionTokens, boards?: SessionTokens): Auth | null {
+export function authenticate(req: IncomingMessage, globalToken: string, sessions?: SessionTokens, boards?: SessionTokens, agy?: SessionTokens): Auth | null {
   const got = req.headers[TOKEN_HEADER]
   if (typeof got === 'string' && got.length > 0) {
     if (globalToken.length > 0 && equalConstantTime(got, globalToken)) return { kind: 'global' }
     const sessionId = sessions?.sessionOf(got)
-    return sessionId ? { kind: 'session', sessionId } : null
+    if (sessionId) return { kind: 'session', sessionId }
+    const agySession = agy?.sessionOf(got)
+    return agySession ? { kind: 'agy', sessionId: agySession } : null
   }
   if (got !== undefined) return null
   const bearer = bearerOf(req)
@@ -107,15 +118,16 @@ export function authenticate(req: IncomingMessage, globalToken: string, sessions
 }
 
 /**
- * What an identity may do. The global token may use everything except the board route (the board
- * needs to know which session is calling). A session token may only POST to SESSION_TOKEN_ROUTE,
- * and if it names a session in the session header, it must be its own. A board token only reaches
+ * What an identity may do. The global token may use everything except the board route and the
+ * Antigravity hook route (both need to know which session is calling). A session token may only
+ * POST to SESSION_TOKEN_ROUTE, and if it names a session in the session header, it must be its own;
+ * the same holds for an agy hook token and AGY_HOOK_ROUTE. A board token only reaches
  * BOARD_TOKEN_ROUTE.
  */
 export function authorise(auth: Auth, req: IncomingMessage, path: string): boolean {
-  if (auth.kind === 'global') return path !== BOARD_TOKEN_ROUTE
+  if (auth.kind === 'global') return path !== BOARD_TOKEN_ROUTE && path !== AGY_HOOK_ROUTE
   if (auth.kind === 'board') return path === BOARD_TOKEN_ROUTE
-  if (req.method !== 'POST' || path !== SESSION_TOKEN_ROUTE) return false
+  if (req.method !== 'POST' || path !== (auth.kind === 'agy' ? AGY_HOOK_ROUTE : SESSION_TOKEN_ROUTE)) return false
   const claimed = req.headers[SESSION_HEADER]
   return typeof claimed !== 'string' || claimed.length === 0 || claimed === auth.sessionId
 }

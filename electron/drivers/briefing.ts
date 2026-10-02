@@ -1,10 +1,11 @@
 // What a hosted session is told about where it runs: one short, factual text per provider, built
 // from the same parts. Claude Code gets it appended to its system prompt
-// (`--append-system-prompt-file`); Codex gets it as `developerInstructions` of its thread.
+// (`--append-system-prompt-file`); Codex gets it as `developerInstructions` of its thread;
+// Antigravity gets it as an injected message before its first model call (a `PreInvocation` hook).
 // It is context, not instructions. Edit the template here; the tests check its size and that it
 // carries no secrets.
-import type { ProviderId } from '../../shared/sessions'
-import { BOARD_SERVER_CLAUDE, BOARD_SERVER_CODEX } from '../boardMcp'
+import type { PermissionMode, ProviderId } from '../../shared/sessions'
+import { BOARD_SERVER_AGY, BOARD_SERVER_CLAUDE, BOARD_SERVER_CODEX } from '../boardMcp'
 
 /** First line of an order delivered through a Claude Code session's inbox, so the session can tell where it came from. */
 export const CEO_ORDER_TAG = '[CEO order via Agent Office]'
@@ -14,6 +15,13 @@ export interface BriefingValues {
   title: string
   /** The session has the office board's tools (electron/boardMcp.ts): the briefing says how to use them. */
   board?: boolean
+  /** Antigravity only: the app itself enforces the mode, so the session is told which one it is in. */
+  mode?: PermissionMode
+  /**
+   * Antigravity only: the session's working folder. agy lists the app's own session folder as a
+   * second workspace, and a model was seen taking that one for "the current folder".
+   */
+  cwd?: string
 }
 
 /** A title is the user's own text; keep it on one line and inside its quotes. */
@@ -71,7 +79,25 @@ const PARTS: Partial<Record<ProviderId, ProviderParts>> = {
     ],
     alone: "Other sessions, possibly other AI providers, may be working in other folders. Don't assume their work is visible.",
     boardServer: BOARD_SERVER_CODEX
+  },
+  antigravity: {
+    session: 'This Antigravity session',
+    bullets: [
+      'The user talks to you through a chat pane in the app. There is no terminal UI.',
+      'Agent Office decides what you may do. Commands, file changes, web and browser tools and MCP tools may first be shown to the user in their "CEO inbox"; a refused call comes back as a tool error with the reason. Do not retry a refused call in another form. Sub-agents, workflows and scheduled tasks are not available here.',
+      'Your workspace also lists a second folder that belongs to Agent Office (its path contains "agy-sessions"). It is not the project and holds nothing for you: never use it as the working directory of a command or as the place for a file. Reading or changing it is refused.',
+      "The user also types \"orders\" in the app's order bar, for this session, for one provider's sessions, or for every agent at once. An order reaches you as an ordinary user message."
+    ],
+    alone: "Other sessions, possibly other AI providers, may be working in other folders. Don't assume their work is visible.",
+    boardServer: BOARD_SERVER_AGY
   }
+}
+
+/** What an Antigravity session is told about its permission mode (the app's hook enforces it). */
+const AGY_MODE_LINES: Record<PermissionMode, string> = {
+  default: 'This session asks the user before every command and every file change. Reading files in the project folder needs no approval.',
+  acceptEdits: 'In this session, file edits inside the project folder go through without asking; commands and everything else are shown to the user first.',
+  plan: 'This session is in plan mode: it is read-only. Commands and file changes are refused. Read what you need, then describe the change you would make instead of making it.'
 }
 
 /** The briefing for one provider. Providers without a text of their own get the Claude Code one. */
@@ -79,9 +105,13 @@ export function officeBriefing(provider: ProviderId, values: BriefingValues): st
   const title = quotable(values.title)
   const parts = PARTS[provider] ?? (PARTS['claude-code'] as ProviderParts)
   const worker = provider === 'codex' ? 'each sub-agent you spawn' : 'each subagent you spawn'
-  const bullets = values.board
-    ? [...parts.bullets, ...boardBullets(parts.boardServer), ...(parts.withBoard ? [parts.withBoard] : [])]
-    : [...parts.bullets, parts.alone]
+  let own = parts.bullets
+  if (provider === 'antigravity') {
+    // The folder first: it decides where every command runs and every file goes.
+    const folder = values.cwd ? [`The project folder, and your working folder, is ${values.cwd.replace(/[\r\n`]/g, ' ').slice(0, 400)} . Run every command there (as its working directory) and resolve every relative path against it. "The current folder" always means this folder.`] : []
+    own = [...folder, ...parts.bullets, ...(values.mode ? [AGY_MODE_LINES[values.mode]] : [])]
+  }
+  const bullets = values.board ? [...own, ...boardBullets(parts.boardServer), ...(parts.withBoard ? [parts.withBoard] : [])] : [...own, parts.alone]
   // With the board there IS something to do differently: check it before starting a task.
   const closing = values.board
     ? 'This is context, so you can answer "where am I running?", understand orders, and avoid repeating another team\'s work.'

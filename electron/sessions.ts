@@ -1,7 +1,7 @@
 // Session manager: the sessions the app launched itself, whatever the provider. It validates every
 // request from the renderer, owns the fixed provider table, routes terminal I/O, chat events and
 // chat input, permission decisions and CEO orders, and tells the renderer when anything changes.
-// A session's surface is a terminal (Claude Code) or the chat view (Codex); see drivers/types.ts.
+// A session's surface is a terminal (Claude Code) or the chat view (Codex, Antigravity); see drivers/types.ts.
 //
 // Security rules (shared/sessions.ts): the renderer picks a provider id and a folder, never a
 // command, args or env; approvals and orders arrive over renderer IPC only.
@@ -28,6 +28,7 @@ import type { EventSink } from './adapters/types'
 import { boardAccess, boardStatus, parseBoardSettingsPatch, type Board, type BoardAccess, type BoardEndpoint } from './board'
 import { resolveBoardProject, type BoardProject } from './boardProject'
 import type { BoardSettings, BoardSnapshot } from '../shared/board'
+import type { AgyHookTarget, AgyHookTargets } from './drivers/agyHookBridge'
 import type { AgentDriver, ProviderDefinition, PtyHost, ValidatedStart } from './drivers/types'
 import { parsePermissionDecision, PermissionRegistry } from './permissions'
 import { PTY_MAX_WRITE_CHARS } from './ptyProtocol'
@@ -50,10 +51,8 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   codex: 'Codex',
   antigravity: 'Antigravity'
 }
-/** Providers without a driver yet, and the phase that brings it. */
-const COMING: Partial<Record<ProviderId, string>> = {
-  antigravity: 'driver coming in phase C'
-}
+/** Providers without a driver yet, and the phase that brings it. (None at the moment.) */
+const COMING: Partial<Record<ProviderId, string>> = {}
 
 export interface SessionManagerOptions {
   pty: PtyHost
@@ -136,7 +135,7 @@ interface Session {
 
 const cleanText = (s: string): string => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()
 
-export class SessionManager implements HostedSessions {
+export class SessionManager implements HostedSessions, AgyHookTargets {
   readonly permissions: PermissionRegistry
   private sessions = new Map<string, Session>()
   /** Saved sessions without a process (state `asleep`), by app id. */
@@ -242,7 +241,8 @@ export class SessionManager implements HostedSessions {
     if (s.lastPrompt) info.lastPrompt = s.lastPrompt
     if (this.waking.has(s.id)) info.waking = true
     if (s.note) info.interruptedNote = { closedAt: s.note.closedAt, pending: s.note.pending.map((p) => ({ ...p })) }
-    if (s.notice) info.notice = s.notice
+    const notice = s.notice ?? (s.driver.state === 'exited' ? s.driver.endNotice : undefined)
+    if (notice) info.notice = notice
     return info
   }
 
@@ -953,6 +953,12 @@ export class SessionManager implements HostedSessions {
   hookTarget(sessionId: string): HostedHookTarget | undefined {
     const driver = this.sessions.get(sessionId)?.driver as (AgentDriver & Partial<HostedHookTarget>) | undefined
     return driver && typeof driver.handleHook === 'function' ? (driver as AgentDriver & HostedHookTarget) : undefined
+  }
+
+  /** The driver of a live hosted Antigravity session, for the `/hooks/agy` route (drivers/agyHookBridge.ts). */
+  agyHookTarget(sessionId: string): AgyHookTarget | undefined {
+    const driver = this.sessions.get(sessionId)?.driver as (AgentDriver & Partial<AgyHookTarget>) | undefined
+    return driver && driver.provider === 'antigravity' && typeof driver.handleAgyHook === 'function' ? (driver as AgentDriver & AgyHookTarget) : undefined
   }
 
   ownsProviderSession(providerSessionId: string): boolean {

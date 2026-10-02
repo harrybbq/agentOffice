@@ -1444,3 +1444,29 @@ button.cc-head:focus-visible {
     opacity: 0;
   }
 }
+
+/* A provider that is signed in outside the app (Antigravity): the instruction wraps, the button follows. */
+.login-manual .login-text {
+  flex-basis: 100%;
+  line-height: 1.45;
+  user-select: text;
+}
+.login-manual .login-text code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.18));
+  font: 11.5px var(--mono);
+}
+.login-manual .login-error {
+  flex: 1;
+  flex-basis: auto;
+  color: var(--text-3);
+}
+/* New session: what a model costs on a small weekly limit, with the meter under it. */
+.quota-note {
+  margin-top: -4px;
+}
+.quota-note .usage {
+  margin-top: 6px;
+  max-width: 260px;
+}

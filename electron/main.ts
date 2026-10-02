@@ -26,6 +26,8 @@ import { createClaudeCodeHooksAdapter } from './adapters/claude-code-hooks'
 import { Board } from './board'
 import { BOARD_MCP_ROUTE, boardMcpRoute } from './boardMcp'
 import { EventBus } from './bus'
+import { agyProvider, sweepAgySessions, type AgyProvider } from './drivers/agy'
+import { createAgyHooksAdapter } from './drivers/agyHookBridge'
 import { claudeProvider, sweepSessionFiles } from './drivers/claude'
 import { codexProvider, type CodexProvider } from './drivers/codex'
 import { isAllowedLoginUrl } from './drivers/codexProtocol'
@@ -50,6 +52,10 @@ const PTY_HOST = join(HERE, 'ptyHost.js')
 const SESSION_START_HOOK = app.isPackaged
   ? join(process.resourcesPath, 'hook', 'claude-session-start.cjs')
   : join(HERE, '../../hook/claude-session-start.cjs')
+// Copied next to each hosted Antigravity session's hooks.json (and run by `node` from there).
+const HOOK_DIR = app.isPackaged ? join(process.resourcesPath, 'hook') : join(HERE, '../../hook')
+const AGY_HOOK = join(HOOK_DIR, 'agy-hook.cjs')
+const AGY_BOARD_BRIDGE = join(HOOK_DIR, 'agy-board-mcp.cjs')
 const DEV_URL = process.env.ELECTRON_RENDERER_URL
 const OVERLAY_SHORTCUT = 'CommandOrControl+Shift+O'
 
@@ -68,6 +74,11 @@ const sessionTokens = new SessionTokens()
  * route and nothing else. One per session, replaced on every start/resume, gone when it ends.
  */
 const boardTokens = new SessionTokens()
+/**
+ * Hook tokens of hosted Antigravity sessions (memory only): a third scope that reaches the
+ * `/hooks/agy` route and nothing else. That route only takes questions; it never approves.
+ */
+const agyTokens = new SessionTokens()
 /** The office board (electron/board.ts): in memory, fed by the sessions, shown in the board panel. */
 const board = new Board({
   settings: () => getConfig().board,
@@ -85,6 +96,8 @@ const WINDOW_MIN = { width: 1000, height: 650 }
 const WINDOW_SAVE_DEBOUNCE_MS = 400
 /** Owns the shared `codex app-server` child (started on the first Codex need). */
 let codex: CodexProvider | null = null
+/** Owns the `agy` processes of hosted Antigravity sessions. */
+let agy: AgyProvider | null = null
 let shutdownDone = false
 
 // ---------- pre-ready ----------
@@ -115,6 +128,7 @@ if (!app.requestSingleInstanceLock()) {
   process.on('exit', () => {
     sessionStore?.flush()
     codex?.server.killSync()
+    agy?.cli.killSync()
   })
   // Keep running in the tray when windows go away (also covers overlay recreation).
   app.on('window-all-closed', () => {})
@@ -152,7 +166,8 @@ async function onReady(): Promise<void> {
       sink: bus,
       sessionTokens,
       claudeHooks: createClaudeCodeHooksAdapter(sessions ?? undefined),
-      board: { route: boardMcpRoute(board), tokens: boardTokens }
+      board: { route: boardMcpRoute(board), tokens: boardTokens },
+      agy: { adapter: createAgyHooksAdapter(() => sessions), tokens: agyTokens }
     })
     setInterval(() => board.sweep(), BOARD_SWEEP_MS).unref()
     serverStatus = `listening on 127.0.0.1:${server.port}`
@@ -214,6 +229,25 @@ function createSessions(): void {
       await shell.openExternal(url)
     }
   })
+  // Antigravity: one folder per live session under userData (hooks.json + the hook script), never
+  // in the user's project and never in ~/.gemini.
+  const agySessionsDir = join(app.getPath('userData'), 'agy-sessions')
+  sweepAgySessions(agySessionsDir)
+  // Development only: AGENT_OFFICE_AGY_SPAWN=<script> runs that script with `node` in place of
+  // `agy` (tests/fixtures/fake-agy.cjs), to drive the real UI without a model or any quota.
+  const fakeAgy = app.isPackaged ? undefined : process.env.AGENT_OFFICE_AGY_SPAWN
+  agy = agyProvider({
+    sessionsDir: agySessionsDir,
+    // No session may read or change the app's own data (config.json holds the ingest token).
+    protectedPaths: [app.getPath('userData')],
+    hookScript: AGY_HOOK,
+    boardScript: AGY_BOARD_BRIDGE,
+    ingest: { baseUrl: () => (server ? `http://${HOST}:${server.port}` : null), tokens: agyTokens },
+    // A prompt sent while a turn runs waits for the next turn. AGENT_OFFICE_AGY_STEER=inject hands
+    // it into the running turn instead (seen working once with the real agy; see the README).
+    ...(process.env.AGENT_OFFICE_AGY_STEER === 'inject' ? { steer: 'inject' as const } : {}),
+    ...(fakeAgy ? { cli: { findExecutable: () => 'node', resolveSpawn: (_exe: string, args: string[]) => ({ file: 'node', args: [fakeAgy, ...args] }) } } : {})
+  })
   sessionStore = new SessionStore({ file: join(app.getPath('userData'), 'sessions.json') })
   sessions = new SessionManager({
     restore: {
@@ -230,7 +264,8 @@ function createSessions(): void {
         inbox,
         ingest: { baseUrl: () => (server ? `http://${HOST}:${server.port}` : null), tokens: sessionTokens }
       }),
-      codex
+      codex,
+      agy
     ],
     allowOrders: () => getConfig().allowOrders,
     worldTopLevel: () => bus.topLevel(),

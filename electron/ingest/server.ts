@@ -26,6 +26,11 @@ export interface IngestServerOptions {
    * hosted session, valid for this route only. Absent = no such route.
    */
   board?: { route: BoardMcpRoute; tokens: SessionTokens }
+  /**
+   * Hosted Antigravity sessions (electron/drivers/agyHookBridge.ts): the `/hooks/agy` adapter and
+   * the tokens of their hook scripts, valid for that route only. Absent = no such route.
+   */
+  agy?: { adapter: HttpAdapter; tokens: SessionTokens }
 }
 
 export interface IngestServer {
@@ -48,16 +53,16 @@ type Verdict = { ok: true; auth: Auth } | { ok: false; status: number; message: 
 /**
  * Shared gate for HTTP requests and WebSocket upgrades. Order: Origin, OPTIONS, Host, token, then
  * what that token may reach (a per-session token only POSTs to the Claude Code hooks route, a
- * board token only reaches the board route).
+ * board token only reaches the board route, an agy hook token only POSTs to the agy hooks route).
  */
-function gate(req: IncomingMessage, port: number, token: string, sessionTokens?: SessionTokens, boardTokens?: SessionTokens): Verdict {
+function gate(req: IncomingMessage, port: number, token: string, sessionTokens?: SessionTokens, boardTokens?: SessionTokens, agyTokens?: SessionTokens): Verdict {
   if (req.headers.origin !== undefined) return { ok: false, status: 403, message: 'browser requests are not allowed' }
   if (req.method === 'OPTIONS') return { ok: false, status: 403, message: 'forbidden' }
   const host = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : ''
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
     return { ok: false, status: 403, message: 'bad host' }
   }
-  const auth = authenticate(req, token, sessionTokens, boardTokens)
+  const auth = authenticate(req, token, sessionTokens, boardTokens, agyTokens)
   if (!auth) return { ok: false, status: 401, message: 'unauthorized' }
   if (!authorise(auth, req, pathOf(req))) return { ok: false, status: 403, message: 'not allowed for this token' }
   return { ok: true, auth }
@@ -150,11 +155,11 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
 }
 
 export function startIngestServer(opts: IngestServerOptions): Promise<IngestServer> {
-  const { port, getToken, sink, sessionTokens, board } = opts
-  const adapters: HttpAdapter[] = [genericAdapter, opts.claudeHooks ?? createClaudeCodeHooksAdapter()]
+  const { port, getToken, sink, sessionTokens, board, agy } = opts
+  const adapters: HttpAdapter[] = [genericAdapter, opts.claudeHooks ?? createClaudeCodeHooksAdapter(), ...(agy ? [agy.adapter] : [])]
 
   const onRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const v = gate(req, port, getToken(), sessionTokens, board?.tokens)
+    const v = gate(req, port, getToken(), sessionTokens, board?.tokens, agy?.tokens)
     if (!v.ok) {
       // An MCP client told "401" looks for the scheme to use.
       const extra: Record<string, string> = v.status === 401 && board && pathOf(req) === board.route.route ? { 'WWW-Authenticate': 'Bearer' } : {}
@@ -225,7 +230,7 @@ export function startIngestServer(opts: IngestServerOptions): Promise<IngestServ
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on('error', () => socket.destroy())
-    const v = gate(req, port, getToken(), sessionTokens, board?.tokens)
+    const v = gate(req, port, getToken(), sessionTokens, board?.tokens, agy?.tokens)
     if (!v.ok) return rejectUpgrade(socket, v.status, v.message)
     if (pathOf(req) !== '/ws') return rejectUpgrade(socket, 404, 'not found')
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))

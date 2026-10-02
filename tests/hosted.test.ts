@@ -813,7 +813,7 @@ await t('hosted session end to end: start, hooks, state, permission allow/deny/d
   const providers = await manager.providers()
   assert.deepEqual(providers.map((p) => [p.id, p.available]), [['claude-code', true], ['codex', false], ['antigravity', false]])
   assert.equal(providers[1].reason, 'no driver') // this manager was built without the Codex provider (tests/codex.test.ts has it)
-  assert.equal(providers[2].reason, 'driver coming in phase C')
+  assert.equal(providers[2].reason, 'no driver') // nor with the Antigravity one (tests/agy.test.ts has it)
   assert.ok(providers[0].version)
   const bad = async (req: unknown, re: RegExp) => assert.rejects(manager.start(req), re)
   await bad(null, /invalid/)

@@ -803,3 +803,31 @@ unreachable/failing hook blocks, hook `allow` runs. Fallback: agy's TUI in a PTY
   the app's PreToolUse hook for that session folder; the hook script denies when the app can't be reached; the
   session folder is guarded against writes by the agent (deny in the hook + hash check before each turn).
 - Cost note: that single turn used 67.6k input tokens.
+
+## The driver against the real binary — VERIFIED 2026-10-02 (5 turns): `scripts/e2e-phase-c.cjs`
+
+Through the real stack (session manager, `electron/drivers/agy.ts`, the `/hooks/agy` route, `hook/agy-hook.cjs`), under
+Electron, model `gemini-3.8-flash-low`. Weekly quota: 7.0 % used before, 12.6 % after (about 1 to 2 % per turn).
+
+- **PASS: hook `allow` held for the CEO inbox, then the command ran** (output in the stream's `DONE`); `write_to_file`'s
+  hook payload carries `CodeContent` (the file card's diff is built from it); hook `deny` with the user's message: the
+  model repeated the message's word in its answer.
+- **PASS: a completed MCP call.** agy started the stdio server from `<session>/.agents/mcp_config.json` (the app's
+  bridge to the board route) on the first call; the hook saw `call_mcp_tool {ServerName, ToolName, Arguments}`.
+- **PASS (one turn): `PreInvocation` -> `{"injectSteps":[{"userMessage": …}]}` steers the running turn.** A prompt sent
+  while the turn waited on a card was taken in at the next model call; no second `result` followed. Off by default
+  (`AGENT_OFFICE_AGY_STEER=inject`): one turn is not enough to rely on.
+- **PASS: kill in the middle of a command.** `taskkill /T /F` on agy took the whole tree down (agy, `conhost`, the MCP
+  bridge, `powershell.exe` and the command's `node.exe`); the command never printed. `--conversation <id>` then loaded
+  the conversation in 5 s and a follow-up turn remembered the first command's output.
+- **PASS: spawned from Electron (a GUI process), no console window appeared**, neither for agy nor for its hooks or
+  commands (window watcher of the e2e script).
+- **PASS: a second prompt in the same process**, and a resume in a fresh stack (`init.conversation_id` = the saved id); an
+  unknown id gives a new conversation and is detected by comparing the ids.
+- `/hooks` reports the gate hook with `timeout_seconds: 3600`. A hold beyond 15 s is still UNTESTED.
+- **FINDING: the model may take the `--add-dir` session folder for "the current folder".** In the first turn the model
+  ran the command with `Cwd` = the session folder and wrote the file there (both refused by the policy: fail closed).
+  The briefing now names the project folder as the working folder, and the refusal says where to work; the next run
+  used the project folder for every call.
+- Not covered by a real turn: `plan` and `acceptEdits` (policy only), web and browser tools, sub-agents (refused by the
+  policy), a hook timeout, the quota limit, a logged-out start.

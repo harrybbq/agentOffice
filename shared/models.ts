@@ -18,7 +18,10 @@ const RULES: readonly Rule[] = [
   // claude-opus-5-5, claude-haiku-4-5-20251001, claude-opus-4
   { pattern: /^claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/, name: (m) => `${cap(m[1])} ${version(m[2], m[3])}` },
   // The older order: claude-3-5-sonnet-20241022
-  { pattern: /^claude-(\d{1,2})(?:-(\d{1,2}))?-([a-z]+)(?:-\d{8})?$/, name: (m) => `${cap(m[3])} ${version(m[1], m[2])}` }
+  { pattern: /^claude-(\d{1,2})(?:-(\d{1,2}))?-([a-z]+)(?:-\d{8})?$/, name: (m) => `${cap(m[3])} ${version(m[1], m[2])}` },
+  // Antigravity's ids carry the reasoning effort, which is not part of the name:
+  // gemini-3.8-flash-low, gemini-3.1-pro-high, gemini-3.6-flash
+  { pattern: /^gemini-(\d{1,2}(?:\.\d{1,2})?)-([a-z]+)(?:-(?:low|medium|high|max))?$/, name: (m) => `Gemini ${m[1]} ${cap(m[2])}` }
 ]
 
 /** "claude-opus-5-5" -> "Opus 5.5". Unknown ids come back unchanged. */

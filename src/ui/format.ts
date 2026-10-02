@@ -371,7 +371,7 @@ export function cleanError(err: unknown): string {
   return msg.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '')
 }
 
-// ---- providers with their own account (Codex) -------------------------------------------------
+// ---- providers with their own account (Codex, Antigravity) ------------------------------------
 
 /** Does the provider need the user to sign in before a session can start? */
 export function loginHint(p: Pick<ProviderInfo, 'account'> | undefined): boolean {
@@ -420,6 +420,14 @@ export function modeHints(provider: ProviderId | null): Record<PermissionMode, s
       plan: 'Read-only: looks and plans, changes nothing'
     }
   }
+  if (provider === 'antigravity') {
+    // Agent Office itself is Antigravity's permission system: these are the app's own rules.
+    return {
+      default: 'Ask before every command and file change',
+      acceptEdits: 'Edit files in the folder freely; ask for commands',
+      plan: 'Read-only: looks and plans, changes nothing'
+    }
+  }
   return {
     default: 'Asks before edits and commands',
     acceptEdits: 'File edits run without asking',
@@ -452,7 +460,22 @@ export function whenAgo(ts: number, now = Date.now()): string {
 export function modelPlaceholder(provider: ProviderId | null): string {
   if (provider === 'codex') return 'Account default, e.g. gpt-6-luna'
   if (provider === 'claude-code') return 'Default, e.g. opus or sonnet'
+  if (provider === 'antigravity') return 'Cheapest: gemini-3.8-flash-low'
   return 'Provider default'
+}
+
+/**
+ * What a prompt sent while a turn runs becomes: Codex takes it into the running turn (`steer`);
+ * Antigravity reads one prompt per turn, so it waits and runs as the next turn (`queue`).
+ */
+export function midTurnPrompt(provider: ProviderId | null | undefined): 'steer' | 'queue' {
+  return provider === 'antigravity' ? 'queue' : 'steer'
+}
+
+/** A note under the model field: what choosing a model costs (Antigravity's free weekly limit is small). */
+export function modelHint(provider: ProviderId | null): string | null {
+  if (provider === 'antigravity') return 'The free plan has a small weekly limit: one turn with a few tool calls uses about 2–3 % of the week. The cheapest model is used unless you name one.'
+  return null
 }
 
 export interface ComposerState {

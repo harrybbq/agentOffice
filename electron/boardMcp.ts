@@ -23,6 +23,8 @@ export const BOARD_MCP_MAX_BATCH = 20
 export const BOARD_SERVER_CLAUDE = 'agent-office'
 /** The server's name in a Codex thread's config (a TOML key: no dash). */
 export const BOARD_SERVER_CODEX = 'agent_office'
+/** The server's name in a hosted Antigravity session's `.agents/mcp_config.json` (`call_mcp_tool` ServerName). */
+export const BOARD_SERVER_AGY = 'agent_office'
 export const BOARD_TOOL_NAMES = ['board_read', 'board_claim', 'board_post', 'board_release', 'board_handover'] as const
 export type BoardToolName = (typeof BOARD_TOOL_NAMES)[number]
 

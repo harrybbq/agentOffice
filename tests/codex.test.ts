@@ -1028,9 +1028,9 @@ await t('providers: codex available with account + usage; logged out -> start re
   // Logged in.
   const a = stack()
   const list = await a.manager.providers()
-  assert.deepEqual(list.map((p) => [p.id, p.available, p.reason]), [['claude-code', false, 'no driver'], ['codex', true, undefined], ['antigravity', false, 'driver coming in phase C']])
+  assert.deepEqual(list.map((p) => [p.id, p.available, p.reason]), [['claude-code', false, 'no driver'], ['codex', true, undefined], ['antigravity', false, 'no driver']])
   assert.deepEqual(list[1], { id: 'codex', label: 'Codex', available: true, version: '0.160.0', account: { loggedIn: true, plan: 'free' }, usage: { usedPercent: 1, resetsAt: 1793536961000, windowMinutes: 43200 } })
-  await assert.rejects(a.manager.start({ provider: 'antigravity', cwd: dir }), /phase C/)
+  await assert.rejects(a.manager.start({ provider: 'antigravity', cwd: dir }), /Antigravity: no driver/)
   await assert.rejects(a.manager.login('antigravity'), /no login/)
   await assert.rejects(a.manager.login('bash'), /unknown provider/)
   await a.manager.login('codex') // already logged in: nothing to open
@@ -1478,6 +1478,7 @@ await t('codex: history lists the folder\'s earlier conversations for "Resume pr
 
 console.log(`\n${pass} codex tests passed`)
 
+await import('./agy.test.ts')
 await import('./restore.test.ts')
 await import('./board.test.ts')
 await import('./ui.test.ts')
