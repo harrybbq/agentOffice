@@ -1,5 +1,5 @@
 // The app shell: sessions | world + order bar | terminal panel, with a status bar underneath.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useApp, useAppState } from './controller'
 import { cx, useWindowWidth } from './hooks'
 import { appChord, inTerminal, isTyping } from './keys'
@@ -11,7 +11,6 @@ import { PreviewPane, usePreviewFootprint } from './components/PreviewPane'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { WorldView } from './components/WorldView'
-import { Calculator } from './components/Calculator'
 
 /**
  * Below this window width the "auto" dock puts the terminal under the world. The default window
@@ -28,7 +27,6 @@ export function App() {
   // The preview pane (left of the office) takes its share of the window before the dock is chosen.
   const width = useWindowWidth() - usePreviewFootprint()
   const workspace = useRef<HTMLDivElement>(null)
-  const [calculatorOpen, setCalculatorOpen] = useState(false)
   const dock = layout.dock === 'auto' ? (width >= AUTO_DOCK_RIGHT_MIN ? 'right' : 'bottom') : layout.dock
   // Docked right, the inbox sits above the terminal; otherwise it floats over the world.
   const inboxInSide = dock === 'right' && layout.panelOpen && !overlay
@@ -84,8 +82,7 @@ export function App() {
           </div>
         </div>
       </div>
-      <StatusBar onOpenCalculator={() => setCalculatorOpen(true)} />
-      {calculatorOpen && !overlay && <Calculator onClose={() => setCalculatorOpen(false)} />}
+      <StatusBar />
       {dialog === 'new-session' && !overlay && <NewSessionDialog />}
     </div>
   )

@@ -24,7 +24,7 @@ function splitStatus(text: string): { prefix: string; mode: string; extra: strin
   return { prefix: i < 0 ? '' : text.slice(0, i + 2), mode: j < 0 ? rest : rest.slice(0, j), extra: j < 0 ? '' : rest.slice(j + 1) }
 }
 
-export function StatusBar({ onOpenCalculator }: { onOpenCalculator: () => void }) {
+export function StatusBar() {
   const app = useApp()
   const connection = useAppState((s) => s.connection)
   const eventCount = useAppState((s) => s.eventCount)
@@ -86,10 +86,6 @@ export function StatusBar({ onOpenCalculator }: { onOpenCalculator: () => void }
         {eventCount} {eventCount === 1 ? 'event' : 'events'}{lastEventAt ? ` · last ${ago(now - lastEventAt)} ago` : ''}
       </span>
       <span className="status-spacer" />
-      <button type="button" className="status-item status-btn" onClick={onOpenCalculator} title="Open calculator" aria-label="Open calculator">
-        <span aria-hidden="true">±</span>
-        Calculator
-      </button>
       <span className="status-item status-keys">
         <kbd>Ctrl K</kbd> order
         <kbd>Ctrl 1-9</kbd> session
