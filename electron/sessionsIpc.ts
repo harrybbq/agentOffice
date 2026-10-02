@@ -78,6 +78,10 @@ export function registerSessionIpc(opts: SessionIpcOptions): SessionIpc {
   handle(IPC.boardDelete, (kind, id) => manager.boardRemove(kind, id))
   handle(IPC.boardSetSettings, (patch) => manager.boardSetSettings(patch))
 
+  // The progress bars: read-only, apart from closing an order's bar.
+  handle(IPC.progressGet, () => manager.progress())
+  handle(IPC.progressDismissOrder, (id) => manager.dismissOrder(id))
+
   handle(IPC.listPermissions, () => manager.listPermissions())
   handle(IPC.decidePermission, (id, decision) => manager.decide(id, decision))
 

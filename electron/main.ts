@@ -36,6 +36,7 @@ import { isAllowedLoginUrl } from './drivers/codexProtocol'
 import { codexEnv } from './drivers/codexServer'
 import { SessionTokens } from './ingest/auth'
 import { HOST, startIngestServer, type IngestServer } from './ingest/server'
+import { ProgressTracker } from './progress'
 import { PtyHostClient } from './ptyClient'
 import { windowsBuildNumber } from './ptyProtocol'
 import { SessionInbox } from './sessionInbox'
@@ -94,7 +95,13 @@ let inspectorWatch: InspectorWatch<number> | null = null
  * what the drivers know. Read-only: it only ever answers "what is this agent doing?".
  */
 const stats = new AgentStats({ onChange: () => inspectorWatch?.poke() })
-bus.observe((e) => stats.event(e))
+/** The progress bars (electron/progress.ts): fed by the session manager and by the helpers seen in the world. */
+const progress = new ProgressTracker({ onChanged: (snapshot) => toRenderer(IPC.progressChanged, snapshot) })
+// The one bus observer: the inspector's stats, then the helpers a manager spawned.
+bus.observe((e) => {
+  stats.event(e)
+  progress.event(e)
+})
 /** Token usage of Claude sessions, read from their transcripts under ~/.claude/projects when a hook says there is news. */
 const transcripts = new ClaudeTranscripts({ onUsage: (agentId, usage, model) => stats.fact({ kind: 'tokens', agentId, usage, model }) })
 /** Claims, notes and "ended" rows expire on their own: look every so often, so the panel follows. */
@@ -293,6 +300,7 @@ function createSessions(): void {
     onChatEvent: (e) => toRenderer(IPC.chatEvent, e),
     onProvidersChanged: (list) => toRenderer(IPC.providersChanged, list),
     stats,
+    progress,
     board: {
       model: board,
       endpoint: { url: () => (server ? `http://${HOST}:${server.port}${BOARD_MCP_ROUTE}` : null), tokens: boardTokens },

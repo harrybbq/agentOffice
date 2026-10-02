@@ -48,6 +48,8 @@ import { RelayBook } from './relay'
 import { TeamLooks } from './teamLook'
 import { IdleClock } from './idle'
 import { HoverCard, StationLabels } from './stationLabels'
+import { SignBars } from './signBars'
+import type { SignBarState } from './signBars'
 import type { StationHit } from './stationLabels'
 import { StationRouter } from '../theme/stations'
 import { spanText } from '../ui/inspect'
@@ -120,6 +122,8 @@ export interface SceneOptions {
   onAgentClick?: (agentId: string | null) => void
   /** When an agent was first seen, for the hover card (survives a rebuild of the scene). */
   agentSince?: (agentId: string) => number | undefined
+  /** The progress bars under the branch signs, by team id (the shell keeps them across rebuilds). */
+  progress?: ReadonlyMap<string, SignBarState>
 }
 
 const DRIFT_HOME_MS = 4000
@@ -219,6 +223,8 @@ export class OfficeScene extends Phaser.Scene {
   private router: StationRouter
   private idle: IdleClock
   private labels: StationLabels | null = null
+  /** The progress bars under the branch signs (a DOM layer, like the station tags). */
+  private signBars: SignBars | null = null
   private hoverCard: HoverCard | null = null
   private labelsOn: boolean
   /** Last event per agent with a character (what the hover card says it is doing). */
@@ -272,6 +278,8 @@ export class OfficeScene extends Phaser.Scene {
       this.labels = new StationLabels(this.opts.overlayEl, this.router.labels, this.layout.tile)
       this.labels.setEnabled(this.labelsOn)
       this.hoverCard = new HoverCard(this.opts.overlayEl)
+      this.signBars = new SignBars(this.opts.overlayEl)
+      if (this.opts.progress) this.signBars.set(this.opts.progress)
     }
     this.addBlockView(this.layout.hq, true)
     this.labels?.add(this.layout.hq, false)
@@ -309,6 +317,8 @@ export class OfficeScene extends Phaser.Scene {
       this.chars.clear()
       this.labels?.destroy()
       this.hoverCard?.destroy()
+      this.signBars?.destroy()
+      this.signBars = null
       this.labels = null
       this.hoverCard = null
       this.game.canvas.style.cursor = ''
@@ -334,6 +344,11 @@ export class OfficeScene extends Phaser.Scene {
     this.labelsOn = on
     this.labels?.setEnabled(on)
     if (!on) this.setHoverStation(null)
+  }
+
+  /** The progress bars under the branch signs, by team id (a team that is not in the map has none). */
+  setProgress(states: ReadonlyMap<string, SignBarState>): void {
+    this.signBars?.set(states)
   }
 
   /** The agent the inspector shows (null: nobody). Its character keeps a ring. */
@@ -496,6 +511,10 @@ export class OfficeScene extends Phaser.Scene {
     const cam = this.cameras.main
     const v = cam.worldView
     const view = { x: v.x, y: v.y, zoom: cam.zoom, width: cam.width, height: cam.height }
+    this.signBars?.layout(view, (teamId) => {
+      const box = this.views.get(teamId)?.signBox
+      return box ? { ...box, color: this.teamColorCss(teamId) } : null
+    })
     if (this.hoverStation && this.labels) this.labels.setHover(this.hoverStation, this.namesAt(this.hoverStation))
     if (this.labels) {
       const bubbles = []

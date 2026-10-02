@@ -6,6 +6,7 @@ import { useApp, useAppState } from '../controller'
 import { shortenPath, STATE_LABEL } from '../format'
 import { cx } from '../hooks'
 import { IconInterrupt, IconStop } from '../icons'
+import { HeaderProgress } from './Progress'
 import { StateDot, Swatch } from './Sidebar'
 
 export function SessionHeader({ session, onInterrupted }: { session: SessionInfo; onInterrupted?: () => void }) {
@@ -30,6 +31,7 @@ export function SessionHeader({ session, onInterrupted }: { session: SessionInfo
         <StateDot state={session.state} />
         {STATE_LABEL[session.state]}
       </span>
+      <HeaderProgress sessionId={session.id} color={color} />
       <span className="term-meta">
         {session.permissionMode !== 'default' && (
           <span className="meta-chip" title="Permission mode">

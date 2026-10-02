@@ -14,6 +14,7 @@ import { IconAlert, IconArrowRight, IconChat, IconCheck, IconChevron, IconCopy, 
 import { clockShort, contextUse, countRows, facts, FILE_KIND, roleLine, stateChip } from '../inspect'
 import type { Fact } from '../inspect'
 import { QuestionText } from './Inbox'
+import { InspectProgress } from './Progress'
 import { Swatch } from './Sidebar'
 
 function Portrait({ agentId, look, color, providerColor }: { agentId: string; look: string; color?: string; providerColor?: string }) {
@@ -215,6 +216,8 @@ function Details({ d }: { d: AgentDetails }) {
             </FactCell>
           ))}
       </dl>
+
+      {d.role === 'manager' && hosted && session && <InspectProgress key={session.id} sessionId={session.id} color={team?.color} />}
 
       {counts.length > 0 && (
         <section className="inspect-section">

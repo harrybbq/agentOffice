@@ -124,6 +124,15 @@ export class BlockView {
     return { x: b.offset.x, y: b.offset.y, width: b.width, height: b.height }
   }
 
+  /**
+   * The sign as it stands now: its centre, bottom edge and width in world coordinates. Null while it
+   * is not (fully) there: the block is still being built or is coming down.
+   */
+  get signBox(): { x: number; y: number; width: number } | null {
+    if (this.state !== 'ready' || this.sign.alpha < 1) return null
+    return { x: this.sign.x, y: this.sign.y, width: this.signText.width }
+  }
+
   /** Team name, team colour swatch and (optional) provider colour dot. */
   setSign(text: string, color: number | null, providerColor: number | null = null): void {
     this.signText.setText(text)

@@ -4,7 +4,7 @@
 //
 // No Electron imports: paths and services come in through ClaudeProviderOptions / DriverContext.
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import type {
@@ -17,10 +17,13 @@ import {
   AO_ENVELOPE_KEY,
   CLAUDE_HOOKS_ROUTE,
   ClaudeHookMapper,
+  PLANNING_TOOLS,
   type HostedHookTarget
 } from '../adapters/claude-code-hooks'
 import { ClaudeHookObserver } from '../adapters/claudeInspect'
+import { ClaudePlan } from '../adapters/claudePlan'
 import type { RequestContext } from '../adapters/types'
+import type { ProgressSignal } from '../progress'
 import type { TranscriptPoker } from '../transcriptUsage'
 import { BOARD_SERVER_CLAUDE, CLAUDE_BOARD_ALLOW } from '../boardMcp'
 import { DEFAULT_DENY_MESSAGE, describeToolInput } from '../permissions'
@@ -304,6 +307,8 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   private readonly mapper: ClaudeHookMapper
   /** What the inspector learns from the hooks (turns, workers' tasks, files, token usage). */
   private readonly observer: ClaudeHookObserver
+  /** The main thread's to-do list, read from the hooks: what the progress bar counts. */
+  private readonly plan: ClaudePlan
   private machine: SessionStateMachine | null = null
   /** Temp files of this session: its settings, its briefing and its MCP config. */
   private tempFiles: string[] = []
@@ -329,6 +334,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       transcripts: opts.transcripts,
       cwd: ctx.start.cwd
     })
+    this.plan = new ClaudePlan(this.id)
   }
 
   get state(): SessionState {
@@ -433,18 +439,24 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     const mapped = this.mapper.handle(body)
     for (const e of mapped.events) this.ctx.sink.emit(e)
     this.observer.observe(body, mapped)
+    const steps = this.plan.observe(body, mapped)
+    if (steps) this.progress({ kind: 'plan', steps })
+    logPlanHook(body)
     const mainThread = mapped.agentId === this.id
 
     switch (mapped.kind) {
       case 'session-start':
         machine.ready()
         break
-      case 'prompt':
+      case 'prompt': {
+        // A prompt taken into a running turn (typed or delivered mid-turn) does not start a new one.
+        const midTurn = machine.state === 'busy' || machine.state === 'waiting-permission'
+        if (typeof body.prompt === 'string') this.ctx.events.onPrompt?.(orderText(body.prompt), { midTurn })
         machine.activity()
         for (const w of this.promptWaiters.splice(0)) w(true)
-        if (typeof body.prompt === 'string') this.ctx.events.onPrompt?.(orderText(body.prompt))
         // A real prompt (typed, or an order) gets the office board's digest, when there is news.
         return this.promptDigest()
+      }
       case 'synthetic-prompt':
         // A hand-back or a task notification: no digest.
         machine.activity()
@@ -468,12 +480,23 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       case 'stop':
         // Leftover cards of the main thread; a background subagent may still be waiting.
         this.ctx.permissions.clearSession(this.id, this.id)
+        // Stop only fires for a turn that ran to its end (after Esc there is none).
+        this.progress({ kind: 'turn-end', how: 'completed' })
         machine.turnEnded()
         break
       default:
         break
     }
     return {}
+  }
+
+  /** Something for the progress bar (electron/progress.ts). Never in the way of a hook. */
+  private progress(signal: ProgressSignal): void {
+    try {
+      this.ctx.events.onProgress?.(signal)
+    } catch {
+      // the progress bar is a convenience
+    }
   }
 
   // -- office board (electron/board.ts). A failure here must never get in the way of a hook. --
@@ -684,6 +707,23 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
         // swept on the next start
       }
     }
+  }
+}
+
+/**
+ * Development only: AGENT_OFFICE_HOOK_LOG=<file> appends the hook payloads of the plan and to-do
+ * tools (name, input, response) to that file, one JSON object per line. It is how the shapes in
+ * docs/progress-notes.md were recorded, and how to record them again when a Claude Code release
+ * changes them. Nothing is written without the variable.
+ */
+function logPlanHook(body: Record<string, unknown>): void {
+  const file = process.env.AGENT_OFFICE_HOOK_LOG
+  if (!file || typeof body.tool_name !== 'string' || !PLANNING_TOOLS.includes(body.tool_name)) return
+  try {
+    const { hook_event_name, tool_name, tool_use_id, agent_id, agent_type, tool_input, tool_response } = body
+    appendFileSync(file, JSON.stringify({ ts: Date.now(), hook_event_name, tool_name, tool_use_id, agent_id, agent_type, tool_input, tool_response }) + '\n')
+  } catch {
+    // a debugging aid: never in the way of a hook
   }
 }
 

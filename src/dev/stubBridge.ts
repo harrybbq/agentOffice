@@ -17,6 +17,8 @@
 //   theme's idle location after 5 s instead of the theme's own time)
 // · ?approvals=all|important|auto (which requests are asked about; default important) ·
 //   ?approvals=none (no approval modes, as an older main process)
+// · ?progress=none (no progress bars, as an older main process) · ?progress=quiet (bars follow the
+//   fake sessions, but no demo plan / helpers / order are played); see ./stubProgress.ts
 // Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id),
 // codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout(), board.note(text),
 // details(agentId), agents(), question(id, text), routine(), approvalMode(),
@@ -45,6 +47,7 @@ import type {
 import { subagentId } from '../../shared/sessions'
 import { createBoardStub } from './stubBoard'
 import { createCodexStub } from './stubCodex'
+import { createProgressStub, DEMO_PLAN, demoSteps } from './stubProgress'
 
 const ESC = '\x1b'
 const dim = (s: string) => `${ESC}[2m${s}${ESC}[0m`
@@ -158,6 +161,8 @@ export function createStubBridge(): AgentOfficeBridge {
   const permCbs = new Set<(p: PermissionRequestInfo[]) => void>()
   const dataCbs = new Set<(id: string, data: string) => void>()
   const sessions = new Map<string, FakeSession>()
+  /** The progress bars: the real tracker, fed by the fake sessions (./stubProgress.ts). */
+  const progress = createProgressStub(params.get('progress'))
   let pending: PermissionRequestInfo[] = []
   let counter = 0
   // An asleep row has no team: it is not on the office board.
@@ -288,10 +293,12 @@ export function createStubBridge(): AgentOfficeBridge {
     const e = parseAgentEvent({ provider: 'claude-code', ts: Date.now(), ...input })
     if (!e) return
     track(e)
+    progress.event(e)
     eventCbs.forEach((cb) => cb(e))
   }
   const pushSessions = () => {
     const list = [...sessions.values()].map((s) => ({ ...s.info }))
+    progress.sync(list)
     sessionCbs.forEach((cb) => cb(list))
     board.sync()
   }
@@ -299,8 +306,10 @@ export function createStubBridge(): AgentOfficeBridge {
     const list = [...pending]
     permCbs.forEach((cb) => cb(list))
   }
-  const setState = (s: FakeSession, state: SessionState) => {
+  const setState = (s: FakeSession, state: SessionState, ended: 'completed' | 'interrupted' = 'completed') => {
     if (s.info.state === 'exited' || !sessions.has(s.info.id)) return
+    // A fake turn that goes idle says how it ended, as a driver would.
+    if (state === 'idle' && (s.info.state === 'busy' || s.info.state === 'waiting-permission')) progress.turnEnd(s.info.id, ended)
     s.info.state = state
     s.info.canReceiveOrders = state === 'idle' || state === 'busy'
     pushSessions()
@@ -359,6 +368,7 @@ export function createStubBridge(): AgentOfficeBridge {
   const fakeTurn = (s: FakeSession, prompt: string) => {
     const id = s.info.id
     const name = s.info.title
+    progress.prompt(id)
     setState(s, 'busy')
     const file = SAMPLE_FILES[Math.floor(Math.random() * SAMPLE_FILES.length)]
     out(s, `\r\n\r\n${fg(42, '●')} Looking into ${bold(JSON.stringify(prompt.slice(0, 60)))}\r\n`)
@@ -437,6 +447,7 @@ export function createStubBridge(): AgentOfficeBridge {
       timers: []
     }
     sessions.set(id, s)
+    progress.sync([...sessions.values()].map((x) => x.info))
     emit({ agentId: id, parentId: null, provider: req.provider, displayName: s.info.title, activity: 'idle', detail: '' })
     return s
   }
@@ -754,6 +765,57 @@ export function createStubBridge(): AgentOfficeBridge {
     getSelected: async () => (selectedSaved && sessions.has(selectedSaved) ? selectedSaved : null)
   }
 
+  /**
+   * The progress demo: `a` works through a seven-step plan (and starts over a while after it is
+   * done), `b` has helpers and no plan (finished / spawned), `d` has nothing to count (the striped
+   * "working" bar), and one order went to all three.
+   */
+  const progressDemo = (a: FakeSession, b: FakeSession, d: FakeSession) => {
+    const { tracker } = progress
+    let done = 2
+    const startPlan = (from: number) => {
+      done = from
+      tracker.prompt(a.info.id)
+      if (a.info.state === 'idle') setState(a, 'busy')
+      tracker.signal(a.info.id, { kind: 'plan', steps: demoSteps(done) })
+      emit({ agentId: a.info.id, parentId: null, displayName: a.info.title, activity: 'write', detail: `planning: ${DEMO_PLAN[done]} (${done}/${DEMO_PLAN.length} done)` })
+    }
+    startPlan(2)
+    window.setInterval(() => {
+      // Only a turn that is running moves on (not while it waits for a permission, not after an exit).
+      if (a.info.state !== 'busy' || !sessions.has(a.info.id)) return
+      const p = tracker.get(a.info.id)
+      if (!p || p.kind !== 'plan' || p.total !== DEMO_PLAN.length || p.finishedAt !== undefined) return
+      done = Math.min(DEMO_PLAN.length, done + 1)
+      tracker.signal(a.info.id, { kind: 'plan', steps: demoSteps(done) })
+      if (done < DEMO_PLAN.length) return
+      // The last step is done: the turn ends, and the next piece of work starts a while later.
+      emit({ agentId: a.info.id, parentId: null, displayName: a.info.title, activity: 'idle', detail: '' })
+      setState(a, 'idle')
+      later(a, 14_000, () => a.info.state === 'idle' && startPlan(0))
+    }, 5000)
+
+    // b: two more helpers, then they come back one by one (1/3, 2/3).
+    const finish = (worker: string, name: string) => {
+      b.workers = b.workers.filter((w) => w !== worker)
+      emit({ agentId: worker, parentId: b.info.id, displayName: name, activity: 'done', detail: '' })
+    }
+    const links = addWorker(b, 'Links', 'read', 'docs/links.md')
+    const examples = addWorker(b, 'Examples', 'exec', 'npm run docs:examples')
+    later(b, 7000, () => finish(links, 'Links'))
+    later(b, 26_000, () => finish(examples, 'Examples'))
+
+    // One order to all three; d is done with it after a while.
+    later(a, 1500, () => {
+      tracker.order({ text: "Add today's changes to the CHANGELOG and post a note on the board", target: 'all', sentAt: tracker.now() - 1500, delivered: [a.info.id, b.info.id, d.info.id] })
+    })
+    later(d, 18_000, () => {
+      if (d.info.state !== 'busy') return
+      emit({ agentId: d.info.id, parentId: null, displayName: d.info.title, activity: 'idle', detail: '' })
+      setState(d, 'idle')
+    })
+  }
+
   // ---- demo scenario -----------------------------------------------------------------------
   if (mode === 'demo') {
     window.setTimeout(() => {
@@ -773,6 +835,14 @@ export function createStubBridge(): AgentOfficeBridge {
       emit({ agentId: a.info.id, parentId: null, displayName: a.info.title, activity: 'write', detail: 'src/ui/store.ts' })
       const w1 = addWorker(a, 'Explore', 'read', 'src/scene/roster.ts')
       addWorker(a, 'Tests', 'exec', 'npm test')
+      // The progress demo: b works with helpers and no plan, d works with nothing to count.
+      if (progress.demo) {
+        progress.prompt(b.info.id)
+        setState(b, 'busy')
+        progress.prompt(d.info.id)
+        setState(d, 'busy')
+        emit({ agentId: d.info.id, parentId: null, displayName: d.info.title, activity: 'exec', detail: 'npm test' })
+      }
       addWorker(b, 'Docs', 'web', 'vite.dev/guide')
       if (!loggedOut) {
         // A resumed Codex session: it has an earlier exchange, and plays its scripted turn the
@@ -793,6 +863,7 @@ export function createStubBridge(): AgentOfficeBridge {
       }
       board.seed({ main: a.info.id, codex: codexId, tests: d.info.id, other: b.info.id })
       pushSessions()
+      if (progress.demo) progressDemo(a, b, d)
 
       // A simulated external team the app can't answer (shows as "answer in its own terminal").
       emit({ agentId: 'ext-sim', parentId: null, provider: 'simulate', displayName: 'Sim: docs site', activity: 'write', detail: 'docs/index.md' })
@@ -968,6 +1039,7 @@ export function createStubBridge(): AgentOfficeBridge {
       }
     },
     sendOrder: async (req): Promise<OrderResult> => {
+      const sentAt = progress.tracker.now()
       await new Promise((r) => setTimeout(r, 350))
       if (!settings.allowOrders) return { delivered: [], failed: [{ agentId: req.target, reason: REASON_DISABLED }] }
       const all = [...sessions.values()]
@@ -985,6 +1057,7 @@ export function createStubBridge(): AgentOfficeBridge {
         }
         res.delivered.push(s.info.id)
         if (s.info.surface === 'chat') {
+          if (s.info.state === 'idle') progress.prompt(s.info.id)
           void codex.deliver(s.info.id, req.text, 'order')
           continue
         }
@@ -999,6 +1072,14 @@ export function createStubBridge(): AgentOfficeBridge {
       if (mode === 'empty' && req.target === 'all' && res.delivered.length === 0) {
         return { delivered: [], failed: [{ agentId: 'all', reason: REASON_NO_SESSIONS }] }
       }
+      // The order's own progress bar, as the session manager would register it.
+      progress.tracker.order({
+        text: req.text,
+        target: req.target,
+        sentAt: sentAt,
+        delivered: res.delivered,
+        failed: res.failed.filter((f) => sessions.has(f.agentId)).map((f) => ({ sessionId: f.agentId, reason: f.reason }))
+      })
       return res
     },
 
@@ -1069,7 +1150,7 @@ export function createStubBridge(): AgentOfficeBridge {
         for (const p of pending.filter((x) => x.sessionId === id)) settle(p.id, 'elsewhere')
         out(s, `\r\n  ${dim('⎿')}  ${fg(203, 'Interrupted')} ${dim('· What should Claude do instead?')}\r\n\r\n${PROMPT}`)
         emit({ agentId: id, parentId: null, displayName: s.info.title, activity: 'idle', detail: '' })
-        setState(s, 'idle')
+        setState(s, 'idle', 'interrupted')
       },
       pickFolder: async () => {
         const samples = ['C:\\Users\\Harry\\source\\repos\\new-project', 'C:\\Users\\Harry\\source\\repos\\untrusted-demo', 'D:\\work\\api-server']
@@ -1114,6 +1195,9 @@ export function createStubBridge(): AgentOfficeBridge {
     },
 
     chat: codex.chat,
+
+    // ?progress=none: a main process from before the progress bars.
+    progress: progress.bridge,
 
     // ?board=none: a main process from before the office board.
     board: params.get('board') === 'none' ? (undefined as unknown as AgentOfficeBridge['board']) : board.bridge,

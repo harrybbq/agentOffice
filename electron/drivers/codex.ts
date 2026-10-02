@@ -25,6 +25,7 @@ import { DETAIL_QUESTION } from '../../shared/details'
 import { INSPECT_PREVIEW_CHARS } from '../../shared/inspector'
 import { relativeTo } from '../../shared/paths'
 import type { AgentFact } from '../agentStats'
+import type { ProgressSignal } from '../progress'
 import { savedText } from '../sessionStore'
 import { ClaudeHookMapper } from '../adapters/claude-code-hooks'
 import type { BoardConflict } from '../board'
@@ -32,7 +33,7 @@ import { BOARD_SERVER_CODEX } from '../boardMcp'
 import type { BoardFile } from '../../shared/board'
 import { officeBriefing } from './briefing'
 import { approvalResult, describeServerRequest } from './codexApproval'
-import { clientMessageId, CodexChat, type ChatContext, type UserOrigin } from './codexChat'
+import { clientMessageId, CodexChat, planSteps, type ChatContext, type UserOrigin } from './codexChat'
 import {
   accountInfo,
   arr,
@@ -476,6 +477,8 @@ export class CodexDriver implements AgentDriver {
         if (!this.endedTurns.has(str(params.turnId, 100))) {
           const plan = planActivity(params)
           this.emitWorld(this.world.activity(agentId, plan.activity, plan.detail, now))
+          // The main thread's list is what the progress bar counts (a worker's own is not).
+          if (main) this.progress({ kind: 'plan', steps: planSteps(params) })
         }
         break
       }
@@ -514,6 +517,7 @@ export class CodexDriver implements AgentDriver {
         this.ctx.permissions.clearSession(this.id, agentId)
         if (main) {
           this.activeTurnId = null
+          this.progress({ kind: 'turn-end', how: turn.status === 'interrupted' || turn.status === 'failed' ? turn.status : 'completed' })
           // The account knows whether the login is really gone; onAccountChanged takes it from there.
           if (turn.status === 'failed' && isAuthError(turn.error)) void this.deps.account.read(0).catch(() => {})
         }
@@ -1008,6 +1012,15 @@ export class CodexDriver implements AgentDriver {
 
   private emitWorld(events: readonly AgentEvent[]): void {
     for (const e of events) this.ctx.sink.emit(e)
+  }
+
+  /** Something for the progress bar (electron/progress.ts). Never in the way of the session. */
+  private progress(signal: ProgressSignal): void {
+    try {
+      this.ctx.events.onProgress?.(signal)
+    } catch {
+      // the progress bar is a convenience
+    }
   }
 
   /** Something for the inspector (electron/agentStats.ts). Never in the way of the session. */

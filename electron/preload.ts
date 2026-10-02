@@ -5,6 +5,7 @@ import { IPC, type AgentOfficeBridge, type RendererSettings } from '../shared/ip
 import type { BoardSettings, BoardSnapshot } from '../shared/board'
 import type { ChatEvent } from '../shared/chat'
 import type { AgentDetails } from '../shared/inspector'
+import type { ProgressSnapshot } from '../shared/progress'
 import type { PermissionRequestInfo, ProviderInfo, SessionInfo } from '../shared/sessions'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -82,6 +83,12 @@ const bridge: AgentOfficeBridge = {
     list: () => ipcRenderer.invoke(IPC.listPermissions),
     decide: (id, decision) => ipcRenderer.invoke(IPC.decidePermission, id, decision),
     onChanged: (cb) => subscribe<PermissionRequestInfo[]>(IPC.permissionsChanged, cb)
+  },
+
+  progress: {
+    get: () => ipcRenderer.invoke(IPC.progressGet),
+    onChanged: (cb) => subscribe<ProgressSnapshot>(IPC.progressChanged, cb),
+    dismissOrder: (id) => ipcRenderer.invoke(IPC.progressDismissOrder, id)
   }
 }
 

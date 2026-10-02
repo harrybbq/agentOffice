@@ -8,6 +8,7 @@ import { cx, useNow } from '../hooks'
 import { IconAlert, IconAsleep, IconPlus } from '../icons'
 import { canWakeRow, interruptedTag, lastActiveLabel } from '../restore'
 import { LoginPrompt, UsageMeter } from './ProviderAccount'
+import { RowProgress } from './Progress'
 import { RecentSection } from './Restore'
 
 export function StateDot({ state }: { state: SessionState }) {
@@ -94,6 +95,7 @@ export function Sidebar() {
                 {interruptedTag(s.interruptedNote)}
               </span>
             )}
+            <RowProgress sessionId={s.id} color={team?.color} />
           </span>
           {asks > 0 && <span className="count-badge">{asks}</span>}
           {isWaking ? <span className="spinner" role="img" aria-label="Waking" /> : <StateDot state={s.state} />}

@@ -1,7 +1,7 @@
 // The agent inspector, main-process side (shared/inspector.ts): the per-agent stats registry, the
 // Claude subagent task correlation, the transcript tailer (token usage), the Codex and Antigravity
 // token feeds against the fake servers, the watch throttle, and the stable activity details
-// (shared/details.ts). Runs with `npm test` (chained from codex.test.ts).
+// (shared/details.ts). Runs with `npm test` (chained from codex.test.ts; progress.test.ts follows).
 //
 // The transcript lines below are modelled on the SHAPE of a real Claude Code transcript (field
 // names and nesting); every value in them is made up.
@@ -1303,3 +1303,5 @@ await t('claude (hosted): inspect() gives the task, the worker with its descript
 })
 
 console.log(`\n${pass} inspector tests passed\n`)
+
+await import('./progress.test.ts')

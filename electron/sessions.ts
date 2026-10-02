@@ -12,6 +12,7 @@ import { statSync } from 'node:fs'
 import { basename, isAbsolute, resolve } from 'node:path'
 import { CHAT_MAX_PROMPT_CHARS, type ChatEvent, type ChatItem } from '../shared/chat'
 import type { AgentDetails } from '../shared/inspector'
+import type { ProgressSnapshot } from '../shared/progress'
 import { planOrder, REASON_ASLEEP, REASON_NOT_CONNECTED, type OrderResult } from '../shared/orders'
 import { canWake, MAX_SAVED_PENDING, type RestoreMode, type RestoreSettings, type SavedPendingRequest, type SavedSession } from '../shared/restore'
 import type {
@@ -33,6 +34,7 @@ import type { BoardSettings, BoardSnapshot } from '../shared/board'
 import type { AgyHookTarget, AgyHookTargets } from './drivers/agyHookBridge'
 import type { AgentDriver, ProviderDefinition, PtyHost, ValidatedStart } from './drivers/types'
 import { parsePermissionDecision, PermissionRegistry } from './permissions'
+import type { ProgressTracker } from './progress'
 import { PTY_MAX_WRITE_CHARS } from './ptyProtocol'
 import { assignTitles } from './sessionTitles'
 import { promptPreview, type SessionStore } from './sessionStore'
@@ -83,6 +85,11 @@ export interface SessionManagerOptions {
    * and answers `inspect()` from it. Absent = no inspector. Read-only: nothing here reaches an agent.
    */
   stats?: AgentStats
+  /**
+   * The progress bars (progress.ts): the manager tells it about prompts, states, plans and orders,
+   * and answers `progress()` from it. Absent = no progress bars. Read-only: nothing here reaches an agent.
+   */
+  progress?: ProgressTracker
 }
 
 export interface SessionRestoreOptions {
@@ -410,8 +417,9 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
         onChat: (e) => {
           if (this.chatAttached.has(id)) this.opts.onChatEvent?.(e)
         },
-        onPrompt: (text) => this.onPrompt(id, text),
-        onFact: (fact) => this.fact(fact)
+        onPrompt: (text, o) => this.onPrompt(id, text, o?.midTurn === true),
+        onFact: (fact) => this.fact(fact),
+        onProgress: (signal) => this.track((p) => p.signal(id, signal))
       }
     })
     const now = Date.now()
@@ -421,11 +429,16 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     if (saved.note) session.note = saved.note
     if (saved.restored) session.restored = true
     this.sessions.set(id, session)
+    this.track((p) => {
+      p.session(id, session.title)
+      p.state(id, driver.state)
+    })
     this.retitle() // another live session may already go by this name
     try {
       await driver.start()
     } catch (err) {
       this.sessions.delete(id)
+      this.track((p) => p.forget(id))
       this.leaveBoard(id, board, true)
       this.retitle()
       // Whatever was saved while it was starting (a woken session's record is put back by wake()).
@@ -447,8 +460,30 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     }
   }
 
+  /** Something for the progress bars. Never in the way of a session. */
+  private track(fn: (progress: ProgressTracker) => void): void {
+    const progress = this.opts.progress
+    if (!progress) return
+    try {
+      fn(progress)
+    } catch {
+      // the progress bars are a convenience
+    }
+  }
+
+  /** What the progress bars show: every live session's progress and the orders being worked on. */
+  progress(): ProgressSnapshot {
+    return this.opts.progress?.snapshot() ?? { sessions: [], orders: [] }
+  }
+
+  /** The user closed an order's progress bar. False if it was already gone. */
+  dismissOrder(id: unknown): boolean {
+    return this.opts.progress?.dismissOrder(id) ?? false
+  }
+
   private onState(id: string, state: SessionInfo['state']): void {
     this.opts.board?.model.setStatus(id, boardStatus(state))
+    this.track((p) => p.state(id, state))
     // A turn that is thinking shows no activity in the world: the manager's working clock follows the session's state.
     this.fact({ kind: 'busy', agentId: id, busy: state === 'busy' || state === 'waiting-permission' })
     const s = this.sessions.get(id)
@@ -468,10 +503,12 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     this.changed()
   }
 
-  /** The user sent a prompt (typed, or an order). */
-  private onPrompt(id: string, text: string): void {
+  /** The user sent a prompt (typed, or an order). `midTurn`: into a turn that was already running. */
+  private onPrompt(id: string, text: string, midTurn = false): void {
     const s = this.sessions.get(id)
     if (!s) return
+    // A new piece of work: the progress bar starts over.
+    if (!midTurn) this.track((p) => p.prompt(id))
     const preview = promptPreview(text)
     if (preview) {
       s.lastPrompt = preview
@@ -555,6 +592,7 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
       if (!title || title === s.title) continue
       s.title = title
       s.driver.setTitle(title)
+      this.track((p) => p.session(s.id, title))
       // Its team goes by the new name on the board too.
       this.opts.board?.model.rename(s.id, title)
       this.save(s)
@@ -605,6 +643,7 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     if (!s) return
     if (s.removeTimer) clearTimeout(s.removeTimer)
     this.sessions.delete(id)
+    this.track((p) => p.forget(id))
     this.attached.delete(id)
     this.chatAttached.delete(id)
     if (s.driver.surface === 'terminal') this.opts.pty.dispose(id)
@@ -1141,6 +1180,7 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
     const plan = planOrder(input, { allowOrders: this.opts.allowOrders(), known: [...hosted, ...external] })
     if (!plan.ok) return plan.result
     const result: OrderResult = { delivered: [], failed: [] }
+    const sentAt = this.opts.progress?.now() ?? Date.now()
     await Promise.all(
       plan.targets.map(async (id) => {
         const s = this.sessions.get(id)
@@ -1153,6 +1193,16 @@ export class SessionManager implements HostedSessions, AgyHookTargets {
         } catch {
           result.failed.push({ agentId: id, reason: 'delivery failed' })
         }
+      })
+    )
+    // The order's own progress bar: the sessions that took it, and the live ones that could not.
+    this.track((p) =>
+      p.order({
+        text: plan.text,
+        target: typeof (input as { target?: unknown }).target === 'string' ? (input as { target: string }).target : '',
+        sentAt,
+        delivered: result.delivered,
+        failed: result.failed.filter((f) => this.sessions.has(f.agentId)).map((f) => ({ sessionId: f.agentId, reason: f.reason }))
       })
     )
     return result

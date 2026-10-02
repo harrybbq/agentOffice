@@ -1,0 +1,426 @@
+/* Progress bars (shared/progress.ts): the bar itself, a session's bar in the sidebar and the
+   terminal / chat header, the Inspect tab's "Progress" block, the bar of a major task at the top of
+   the world, and the slim bar under each branch's sign (scene/signBars.ts).
+
+   One rule for all of them: a filled bar means a real count (steps, helpers). No count = moving
+   stripes ("working"), never a made-up width. */
+
+/* ---- the bar ----------------------------------------------------------------------------- */
+.pbar {
+  --pbar-h: 3px;
+  /* The fill: the tone's colour when the bar is waiting / stopped / finished, else the team colour
+     (set inline as --pbar-color), else the accent. */
+  --pbar-fill: var(--pbar-tone, var(--pbar-color, var(--accent)));
+  position: relative;
+  display: block;
+  flex: 1 1 auto;
+  min-width: 24px;
+  height: var(--pbar-h);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+  overflow: hidden;
+}
+.pbar-lg {
+  --pbar-h: 5px;
+  border-radius: 3px;
+}
+.pbar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--pbar-fill);
+  transition: width 0.45s var(--ease);
+}
+/* No count: stripes that travel. Full width on purpose, so it can't be read as "a third done". */
+.pbar.is-indeterminate .pbar-fill {
+  inset: 0;
+  background: repeating-linear-gradient(90deg, var(--pbar-fill) 0 7px, color-mix(in srgb, var(--pbar-fill) 22%, transparent) 7px 14px);
+  background-size: 28px 100%;
+  animation: pbar-travel 0.9s linear infinite;
+  transition: none;
+}
+@keyframes pbar-travel {
+  to {
+    background-position: 28px 0;
+  }
+}
+/* Blocked on the user: amber, and the stripes stand still. */
+.pbar.is-waiting {
+  --pbar-tone: var(--warn);
+}
+.pbar.is-waiting .pbar-fill {
+  animation-play-state: paused;
+}
+/* Cut short: where it was, greyed. */
+.pbar.is-stopped {
+  --pbar-tone: var(--text-3);
+}
+.pbar.is-stopped .pbar-fill {
+  animation: none;
+  opacity: 0.75;
+}
+.pbar.is-finished {
+  --pbar-tone: var(--ok);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pbar.is-indeterminate .pbar-fill,
+  .sign-bar.is-indeterminate .sign-bar-fill {
+    animation: none !important;
+  }
+}
+
+/* ---- sidebar row ------------------------------------------------------------------------- */
+.session-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 11px;
+  margin-top: 2px;
+}
+.session-progress-n {
+  flex: none;
+  color: var(--text-3);
+  font: 500 10px/11px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.session-row.is-exited .session-progress {
+  display: none;
+}
+
+/* ---- terminal / chat header --------------------------------------------------------------- */
+.term-progress {
+  flex: 0 1 190px;
+  min-width: 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  justify-content: center;
+}
+.term-progress-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 14px;
+}
+.term-progress-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term-progress-n {
+  flex: none;
+  color: var(--text-3);
+  font: 500 10px/14px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.term-progress .pbar {
+  flex: none;
+}
+.term-progress.is-stopped .term-progress-text {
+  color: var(--text-3);
+}
+
+/* ---- Inspect tab --------------------------------------------------------------------------- */
+.inspect-progress .pbar {
+  margin-top: 2px;
+}
+.inspect-progress-source {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+.inspect-progress-current {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 7px 0 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+.inspect-progress-now {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--accent-weak);
+  color: var(--accent-text);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+.inspect-progress.is-stopped .inspect-progress-now {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+.progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 9px !important;
+}
+.progress-step {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: start;
+  column-gap: 6px;
+  padding: 2px 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.progress-step-mark {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 18px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+.progress-step-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.progress-step.is-completed {
+  color: var(--text-3);
+}
+.progress-step.is-completed .progress-step-mark {
+  color: var(--ok);
+}
+.progress-step.is-in-progress {
+  color: var(--text);
+  font-weight: 550;
+}
+.progress-step.is-in-progress .progress-step-mark {
+  color: var(--accent);
+}
+.inspect-progress.is-stopped .progress-step.is-in-progress .progress-step-mark {
+  color: var(--text-3);
+}
+.progress-steps-more {
+  padding: 2px 0 2px 22px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+.inspect-progress .card-toggle {
+  margin: 4px 0 0 -4px;
+}
+
+/* ---- a major task (top of the world) ------------------------------------------------------- */
+.task-bar {
+  pointer-events: auto;
+  width: min(520px, 100%);
+  padding: 7px 8px 9px 10px;
+  border-radius: 12px;
+  background: var(--float);
+  box-shadow: var(--shadow-float);
+  color: var(--text);
+  backdrop-filter: blur(8px);
+  animation: drop-in 0.3s var(--ease);
+  transition: opacity 0.5s ease;
+}
+.task-bar.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+.task-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.task-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 4px 2px 2px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font-size: 12.5px;
+  line-height: 18px;
+  text-align: left;
+}
+.task-toggle:hover {
+  background: var(--surface-hover);
+}
+.task-toggle .icon {
+  flex: none;
+  color: var(--text-3);
+}
+.task-toggle .icon:first-child {
+  transition: transform 0.15s var(--ease);
+}
+.task-bar.is-open .task-toggle .icon:first-child {
+  transform: rotate(90deg);
+}
+.task-bar.is-all-done .task-toggle .icon:nth-child(2) {
+  color: var(--ok);
+}
+.task-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-count {
+  flex: none;
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.task-bar.is-all-done .task-count {
+  color: var(--ok);
+  font-weight: 600;
+}
+.task-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+.task-bar > .pbar {
+  margin: 0 2px;
+}
+.task-teams {
+  list-style: none;
+  margin: 8px 0 -3px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 188px;
+  overflow-y: auto;
+}
+.task-team {
+  display: grid;
+  grid-template-columns: 9px minmax(70px, 1.1fr) minmax(48px, 1.4fr) 34px minmax(64px, auto);
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  padding: 4px 6px 4px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 16px;
+  text-align: left;
+}
+.task-team:hover {
+  background: var(--surface-hover);
+}
+.task-team-name {
+  min-width: 0;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-team-n {
+  color: var(--text-3);
+  font: 500 10px/16px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.task-team-state {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 11.5px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-team.is-done .task-team-state {
+  color: var(--ok);
+}
+.task-team.is-waiting .task-team-state {
+  color: var(--warn);
+}
+.task-team.is-failed .task-team-state {
+  color: var(--danger);
+}
+.task-team.is-queued .task-team-state {
+  color: var(--text-3);
+}
+
+/* ---- under the branch signs (in the world: the same look whatever the interface theme) ------ */
+.sign-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 5px;
+  border: 1px solid rgba(8, 9, 14, 0.85);
+  border-top: 0;
+  border-radius: 0 0 3px 3px;
+  background: rgba(20, 22, 32, 0.85);
+  box-sizing: border-box;
+  will-change: transform;
+}
+.sign-bar.is-hidden {
+  display: none;
+}
+.sign-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 0 0 2px 2px;
+  background: var(--pbar-color, #7c8cff);
+  transition: width 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sign-bar.is-indeterminate .sign-bar-fill {
+  inset: 0;
+  background: repeating-linear-gradient(90deg, var(--pbar-color, #7c8cff) 0 6px, rgba(255, 255, 255, 0.1) 6px 12px);
+  background-size: 24px 100%;
+  animation: sign-bar-travel 0.9s linear infinite;
+  transition: none;
+}
+@keyframes sign-bar-travel {
+  to {
+    background-position: 24px 0;
+  }
+}
+.sign-bar.is-waiting .sign-bar-fill {
+  background-color: #f0b64f;
+  animation-play-state: paused;
+}
+.sign-bar.is-waiting.is-indeterminate .sign-bar-fill {
+  background-image: repeating-linear-gradient(90deg, #f0b64f 0 6px, rgba(255, 255, 255, 0.1) 6px 12px);
+}
+.sign-bar.is-stopped .sign-bar-fill {
+  background: #8a8fa0;
+  animation: none;
+}
+.sign-bar.is-stopped.is-indeterminate .sign-bar-fill {
+  background: repeating-linear-gradient(90deg, #8a8fa0 0 6px, rgba(255, 255, 255, 0.1) 6px 12px);
+}
+.sign-bar.is-finished .sign-bar-fill {
+  background: #4cc38a;
+}
+.sign-bar-label {
+  position: absolute;
+  left: calc(100% + 5px);
+  top: -4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(20, 22, 32, 0.85);
+  color: #f4f1ea;
+  font: 500 9.5px/12px var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sign-bar-label:empty {
+  display: none;
+}

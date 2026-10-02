@@ -36,6 +36,7 @@ import type { PermissionDecision, PermissionOutcome, ProviderInfo, SessionState 
 import { ClaudeHookMapper } from '../adapters/claude-code-hooks'
 import type { RequestContext } from '../adapters/types'
 import type { AgentFact } from '../agentStats'
+import type { ProgressSignal } from '../progress'
 import { BOARD_SERVER_AGY } from '../boardMcp'
 import { AGY_HOOK_ROUTE, type SessionTokens } from '../ingest/auth'
 import { DEFAULT_DENY_MESSAGE } from '../permissions'
@@ -769,6 +770,7 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
       const how = e.status === 'SUCCESS' ? 'completed' : e.status === 'CANCELED' || e.status === 'INTERRUPTED' ? 'interrupted' : 'failed'
       const error = how === 'failed' ? `Antigravity ended the turn with an error (${e.status || 'unknown'})${e.response ? `: ${e.response.slice(0, 500)}` : ''}` : undefined
       this.emitChat(this.chat.turnEnded(turn.id, how, { agentId: this.id, now, turnId: turn.id }, error))
+      this.progress({ kind: 'turn-end', how })
       // A failed turn may mean the sign-in is gone or the weekly limit is reached: look again.
       if (how === 'failed') this.deps.account.invalidate()
     }
@@ -1066,7 +1068,7 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
     const noticeId = `queued:${shown.id}`
     this.emitChat(this.chat.notice('info', AGY_QUEUED_NOTE, at, noticeId))
     this.queue.push({ text, origin, itemId: shown.id, noticeId })
-    this.ctx.events.onPrompt?.(text)
+    this.ctx.events.onPrompt?.(text, { midTurn: true })
     return { ok: true, queued: true }
   }
 
@@ -1119,6 +1121,7 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
     this.ctx.permissions.clearSession(this.id)
     const now = this.now()
     if (turn) this.emitChat(this.chat.turnEnded(turn.id, 'interrupted', { agentId: this.id, now, turnId: turn.id }))
+    if (turn) this.progress({ kind: 'turn-end', how: 'interrupted' })
     this.emitWorld(this.world.settle(this.id, now))
     this.refresh()
     try {
@@ -1214,6 +1217,15 @@ export class AgyDriver implements AgentDriver, AgyHookTarget {
 
   private emitWorld(events: readonly AgentEvent[]): void {
     for (const e of events) this.ctx.sink.emit(e)
+  }
+
+  /** Something for the progress bar (electron/progress.ts). Never in the way of the session. */
+  private progress(signal: ProgressSignal): void {
+    try {
+      this.ctx.events.onProgress?.(signal)
+    } catch {
+      // the progress bar is a convenience
+    }
   }
 
   /** Something for the inspector (electron/agentStats.ts). Never in the way of the session. */

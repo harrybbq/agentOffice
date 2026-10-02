@@ -19,6 +19,7 @@ import type {
 } from '../../shared/sessions'
 import type { EventSink } from '../adapters/types'
 import type { AgentFact } from '../agentStats'
+import type { ProgressSignal } from '../progress'
 import type { BoardAccess } from '../board'
 import type { SessionTokens } from '../ingest/auth'
 import type { PermissionRegistry } from '../permissions'
@@ -83,14 +84,23 @@ export interface DriverEvents {
   onExit(exitCode: number | null): void
   /** Chat-based drivers: the session's chat list changed. */
   onChat(e: ChatEvent): void
-  /** The user sent a prompt (typed, or an order): never a synthetic one. For the saved preview (shared/restore.ts). */
-  onPrompt?(text: string): void
+  /**
+   * The user sent a prompt (typed, or an order): never a synthetic one. For the saved preview
+   * (shared/restore.ts). `midTurn`: it was taken into a turn that was already running (or waits for
+   * that turn to end), so it does not begin a new piece of work (electron/progress.ts).
+   */
+  onPrompt?(text: string, opts?: { midTurn?: boolean }): void
   /**
    * Something the inspector shows about one of the session's agents (electron/agentStats.ts): a
    * turn, token usage, a changed file, a worker's task. Read-only bookkeeping; never needed for the
    * session to work.
    */
   onFact?(fact: AgentFact): void
+  /**
+   * The session's plan (its to-do list) changed, or its turn ended: what the progress bar is made of
+   * (electron/progress.ts). Read-only bookkeeping, like onFact.
+   */
+  onProgress?(signal: ProgressSignal): void
 }
 
 export interface DriverContext {

@@ -569,6 +569,40 @@ waits), `checking the board`, `delegating`.
 `npx electron scripts/e2e-inspector.cjs` checks it against a real Claude Code session on `haiku`
 (one turn: one subagent, one new file), through the real IPC bridge.
 
+## Progress bars
+
+Every hosted session (a branch) has a progress bar, and so has every order that went to two or
+more sessions at once (`shared/progress.ts`, `electron/progress.ts`).
+
+**No invented percentages.** A bar is filled only when there is a real count behind it; its tooltip
+says which:
+
+| Bar | Count | From |
+|---|---|---|
+| Plan | steps completed / steps | the agent's own to-do list: Claude Code's task tools (`TaskCreate`, `TaskUpdate`, `TaskList`) and `TodoWrite`, Codex's `turn/plan/updated`. Only the manager's list counts, not a worker's |
+| Helpers | helpers finished / helpers spawned | used when there is no plan but the manager started workers during this run |
+| Working | none: moving stripes | the session is busy (or waits on a permission) and nothing can be counted. Antigravity has no plan tool, so this is its only bar |
+
+A new prompt starts a new run. When a turn ends with every step done, the bar stays at 100 % for
+8 s and then goes away. A turn that was interrupted or failed, or that ended with steps left, keeps
+its bar where it was, greyed, until the next prompt. Nothing is saved: a session that is asleep has
+no bar.
+
+Where a branch's bar shows: under its sign in the world (also in overlay mode), under its row in
+the sidebar (with "3/7"), in the terminal / chat header (with the step in progress), and in the
+Inspect tab of its manager (the step list with check marks).
+
+**An order** to everyone or to a provider gets one bar at the top of the world: the order's text,
+"2 of 4 teams done", and an overall bar that is the average of the teams (a team with a count
+contributes its fraction; a team without one counts 0 while it works and 1 when it is done; a team
+that failed is left out). Expanded, it has one row per team with that team's own bar; a click
+selects the team. A team is done when its manager goes idle after the order, and failed when the
+order could not be delivered, the turn was cut short or the session ended. A finished order says so
+for a moment and then fades (the main process keeps it 30 s, and at most 5 orders).
+
+The payload shapes of Claude Code's task tools as they were seen, and the limits, are in
+`docs/progress-notes.md`.
+
 ## Setup
 
 Requires **Node 22.12+** (Electron 44).
@@ -739,6 +773,7 @@ electron/   main process: window, tray, config, ingest server, adapters, theme p
             session restore (sessionStore.ts = sessions.json, windowState.ts = the window position)
             the inspector (agentStats.ts = per-agent stats + the watch, transcriptUsage.ts = Claude token
             usage from transcripts, adapters/claudeInspect.ts = what the hooks say about workers and files)
+            the progress bars (progress.ts = the tracker, adapters/claudePlan.ts = Claude's to-do list from its hooks)
 hook/       the SessionStart command hook injected into hosted Claude Code sessions; the approval
             hook and the board bridge copied into each hosted Antigravity session's folder
 shared/     event format, theme format, IPC contract

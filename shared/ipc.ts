@@ -5,6 +5,7 @@ import type { OrderRequest, OrderResult } from './orders'
 import type { BoardSettings, BoardSnapshot } from './board'
 import type { ChatEvent, ChatItem } from './chat'
 import type { AgentDetails } from './inspector'
+import type { ProgressSnapshot } from './progress'
 import type { RestoreSettings, SavedSession } from './restore'
 import type {
   PermissionDecision,
@@ -106,6 +107,14 @@ export const IPC = {
   inspectUnwatch: 'agent-office:inspect:unwatch',
   /** main -> renderer: AgentDetails for the watched agent (throttled) */
   inspectChanged: 'agent-office:inspect:changed',
+
+  // ---- progress bars (shared/progress.ts) ----
+  /** invoke: ProgressSnapshot */
+  progressGet: 'agent-office:progress:get',
+  /** invoke: close an order's bar (its id) -> boolean */
+  progressDismissOrder: 'agent-office:progress:dismiss-order',
+  /** main -> renderer: the full ProgressSnapshot (coalesced, at most every PROGRESS_PUSH_MS) */
+  progressChanged: 'agent-office:progress:changed',
 
   // ---- permissions ----
   /** invoke */
@@ -241,6 +250,15 @@ export interface AgentOfficeBridge {
     list(): Promise<PermissionRequestInfo[]>
     decide(id: string, decision: PermissionDecision): Promise<PermissionOutcome>
     onChanged(cb: (pending: PermissionRequestInfo[]) => void): () => void
+  }
+
+  /** Progress bars (shared/progress.ts). Absent with a main process from before them. */
+  progress?: {
+    get(): Promise<ProgressSnapshot>
+    /** The full snapshot whenever anything changed (coalesced, at most every PROGRESS_PUSH_MS). */
+    onChanged(cb: (snapshot: ProgressSnapshot) => void): () => void
+    /** Closes an order's bar. Resolves false if it was already gone. */
+    dismissOrder(id: string): Promise<boolean>
   }
 }
 

@@ -8,6 +8,7 @@ import type { ThemeManifest } from '../shared/theme'
 import { parseMap, ThemeError, validateTheme } from './theme/loader'
 import { OfficeScene } from './scene/OfficeScene'
 import type { TeamInfo } from './scene/OfficeScene'
+import type { SignBarState } from './scene/signBars'
 import { AgentStore } from './agents'
 import { OfficeWide } from './officeWide'
 
@@ -37,6 +38,8 @@ export class WorldController {
   private overlayEl: HTMLElement | null = null
   private selectedAgent: string | null = null
   private labelsOn = true
+  /** The progress bars under the branch signs (kept here so a rebuilt scene shows them again). */
+  private progress: ReadonlyMap<string, SignBarState> = new Map()
   private observer: ResizeObserver | null = null
   private generation = 0
   private settings: RendererSettings | null = null
@@ -117,6 +120,12 @@ export class WorldController {
         resolve(url)
       })
     })
+  }
+
+  /** The progress bars under the branch signs, by team id (see ui/progress.ts signBars). */
+  setProgress(states: ReadonlyMap<string, SignBarState>): void {
+    this.progress = states
+    this.scene?.setProgress(states)
   }
 
   /** The station tags on or off. */
@@ -221,6 +230,7 @@ export class WorldController {
         if (gen !== this.generation) return
         this.scene = sc
         sc.setSelectedAgent(this.selectedAgent)
+        sc.setProgress(this.progress)
         // Rebuild the roster from what we already know; characters walk in again.
         sc.replay(this.agents.replay())
       }

@@ -140,6 +140,17 @@ function toolResult(item: Record<string, unknown>): string | undefined {
   return undefined
 }
 
+/** The steps of a `turn/plan/updated` notification (`plan: [{ step, status }]`), in order. */
+export function planSteps(params: Record<string, unknown>): Array<{ text: string; status: 'pending' | 'in-progress' | 'completed' }> {
+  return arr(params.plan)
+    .slice(0, 200)
+    .filter(isRecord)
+    .map((s) => ({
+      text: str(s.step, 2000),
+      status: s.status === 'completed' ? ('completed' as const) : s.status === 'inProgress' ? ('in-progress' as const) : ('pending' as const)
+    }))
+}
+
 const SUBAGENT_ACTIONS: Record<string, Extract<ChatItem, { kind: 'subagent' }>['action']> = {
   spawnAgent: 'spawn',
   sendInput: 'message',
@@ -397,13 +408,7 @@ export class CodexChat {
 
       case 'turn/plan/updated': {
         if (!turnId) return []
-        const steps = arr(params.plan)
-          .slice(0, 200)
-          .filter(isRecord)
-          .map((s) => ({
-            text: str(s.step, 2000),
-            status: s.status === 'completed' ? ('completed' as const) : s.status === 'inProgress' ? ('in-progress' as const) : ('pending' as const)
-          }))
+        const steps = planSteps(params)
         const item = this.base(`plan:${turnId}`, ctx, turnId, { kind: 'plan', steps })
         const explanation = str(params.explanation, 4000)
         if (explanation && item.kind === 'plan') item.explanation = explanation

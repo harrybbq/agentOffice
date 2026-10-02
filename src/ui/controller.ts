@@ -8,6 +8,7 @@ import type { AgentDetails } from '../../shared/inspector'
 import type { ThemeManifest } from '../../shared/theme'
 import type { AgentOfficeBridge, RendererSettings } from '../../shared/ipc'
 import type { OrderResult } from '../../shared/orders'
+import type { OrderProgress, ProgressSnapshot, SessionProgress } from '../../shared/progress'
 import type { RestoreSettings } from '../../shared/restore'
 import type {
   PermissionDecision,
@@ -29,6 +30,7 @@ import { appendLog, cleanError, orderSummary, orderTargets, pushRecent, retainEx
 import type { LogEntry, OrderSummary } from './format'
 import { approvalsBridge, isApprovalMode, pushHandled, toggleMute, wantsAttention } from './approvals'
 import type { ApprovalMode, AutoAllowed } from './approvals'
+import { cleanSnapshot, progressById, signBars } from './progress'
 import { EMPTY_RECENT, recentReducer, restoreSelection, restoreSummary } from './restore'
 import type { RecentState, RestoreSummary } from './restore'
 import { Store, useStore } from './store'
@@ -145,6 +147,12 @@ export interface AppState {
   // ---- approvals: what the app allowed without asking ----
   /** Routine requests allowed automatically, newest first (the inbox's "Handled for you"). */
   handled: AutoAllowed[]
+
+  // ---- progress bars (shared/progress.ts) ----
+  /** Each live session's progress, by session id (empty with a main process from before them). */
+  progress: Readonly<Record<string, SessionProgress>>
+  /** The orders being worked on (and the ones that just finished), oldest first. */
+  orders: OrderProgress[]
 }
 
 const LAYOUT_KEY = 'agentOffice.layout'
@@ -281,7 +289,9 @@ export class AppController {
       agentId: null,
       agentDetails: null,
       agentStatus: 'none',
-      handled: []
+      handled: [],
+      progress: {},
+      orders: []
     })
     this.world = new WorldController({
       onTeams: (teams) => this.store.set({ teams }),
@@ -337,6 +347,22 @@ export class AppController {
           this.store.set({ agentDetails: details, agentStatus: 'ready' })
         }
       })
+    }
+
+    // The progress bars (a main process from before them has none: no bars).
+    const progressApi = (b as Partial<AgentOfficeBridge>).progress
+    if (progressApi && typeof progressApi.get === 'function' && typeof progressApi.onChanged === 'function') {
+      let pushedProgress = false
+      progressApi.onChanged((snapshot) => {
+        pushedProgress = true
+        this.setProgress(snapshot)
+      })
+      void progressApi
+        .get()
+        .then((snapshot) => {
+          if (!pushedProgress) this.setProgress(snapshot)
+        })
+        .catch((err) => console.warn('[agent-office] could not read the progress', err))
     }
 
     // Requests the app allowed without asking ("important only" mode): a quiet audit trail.
@@ -480,6 +506,27 @@ export class AppController {
       if (gone.length > 0) patch.wakeErrors = Object.fromEntries(Object.entries(s.wakeErrors).filter(([id]) => !gone.includes(id)))
       return patch
     })
+    // A session that waits on the user (or no longer does): its bar under the branch sign follows.
+    this.syncSignBars()
+  }
+
+  /** A new progress snapshot: the bars in the shell read the store, the ones in the world are told. */
+  private setProgress(input: ProgressSnapshot): void {
+    const snapshot = cleanSnapshot(input)
+    this.store.set({ progress: progressById(snapshot.sessions), orders: snapshot.orders })
+    this.syncSignBars()
+  }
+
+  private syncSignBars(): void {
+    const s = this.store.get()
+    const waiting = new Set(s.sessions.filter((x) => x.state === 'waiting-permission').map((x) => x.id))
+    this.world.setProgress(signBars(Object.values(s.progress), waiting))
+  }
+
+  /** Closes an order's progress bar: gone at once here, and for good in the main process. */
+  dismissOrder(id: string): void {
+    this.store.set((s) => ({ orders: s.orders.filter((o) => o.id !== id) }))
+    void this.bridge.progress?.dismissOrder(id).catch((err) => console.warn('[agent-office] could not dismiss the order', err))
   }
 
   private setPermissions(next: PermissionRequestInfo[]): void {
