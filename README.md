@@ -52,7 +52,7 @@ The app is your main window onto the agents, not only a viewer:
   **Enter** (**Shift+Enter** adds a line, Esc leaves the field). The CEO says it in a speech
   bubble and a sealed order envelope flies to the manager(s). For more than one session a PA
   banner also runs across the top. The result shows above the bar ("Delivered to 2", or who
-  failed and why). Orders are **off by default**: turn on **Allow CEO orders** in the tray.
+  failed and why). Orders are **on by default**; turn them off with **Allow CEO orders** in the tray.
 - **Panel (right, or under the world in a narrow window).** Two tabs. **Terminal** is the
   selected session's real terminal, with **Interrupt** and **Stop** (asks first). **Events** is
   the live event log, filterable by activity and by the selected session. Drag the splitter to
@@ -219,7 +219,8 @@ read-only until the Windows sandbox is set up in Codex), the chat shows a warnin
 **Approvals.** Codex asks on the same pipe (`item/commandExecution/requestApproval`,
 `item/fileChange/requestApproval`, `item/permissions/requestApproval`, and yes/no questions of
 plugins). Each becomes a card in the CEO inbox, like Claude's: "Command: node -e …" (the command
-itself, not the PowerShell wrapper Codex runs it in) or "Edit: path (+N more)" with the diff.
+itself, not the PowerShell wrapper Codex runs it in) or "Create / Edit / Delete: path (+N more)"
+with the diff, the path as seen from the session's folder.
 Allow answers `accept`; deny answers `decline`, and the turn goes on with the model knowing it was
 refused. Codex's answer has no field for a reason, so a deny message is sent into the running turn
 right after the decision. A card disappears ("resolved elsewhere") when Codex withdraws the request

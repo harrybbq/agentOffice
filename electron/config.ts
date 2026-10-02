@@ -38,7 +38,7 @@ function defaults(): AppConfig {
     theme: 'office',
     alwaysOnTop: false,
     overlay: false,
-    allowOrders: false,
+    allowOrders: true,
     officeWideMinutes: 10
   }
 }
