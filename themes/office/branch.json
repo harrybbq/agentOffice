@@ -9,9 +9,33 @@
  "tilewidth": 32,
  "tileheight": 32,
  "infinite": false,
- "nextlayerid": 4,
- "nextobjectid": 68,
+ "nextlayerid": 5,
+ "nextobjectid": 88,
  "layers": [
+  {
+   "id": 4,
+   "name": "floor",
+   "type": "imagelayer",
+   "image": "art/branch-floor.png",
+   "opacity": 1,
+   "visible": true,
+   "x": 0,
+   "y": 0,
+   "offsetx": -16,
+   "offsety": -16,
+   "properties": [
+    {
+     "name": "scale",
+     "type": "float",
+     "value": 2
+    },
+    {
+     "name": "walls",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
   {
    "id": 1,
    "name": "furniture",
@@ -47,6 +71,11 @@
        "name": "solid",
        "type": "bool",
        "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
@@ -75,11 +104,49 @@
        "name": "solid",
        "type": "bool",
        "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
      "id": 14,
+     "name": "mgr_chair",
+     "x": 83.2,
+     "y": 24,
+     "width": 25.6,
+     "height": 30.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5d6b82"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_manager"
+      }
+     ]
+    },
+    {
+     "id": 15,
      "name": "mgr_desk",
      "x": 48,
      "y": 70.4,
@@ -103,11 +170,49 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_manager"
       }
      ]
     },
     {
-     "id": 16,
+     "id": 17,
+     "name": "mgr_plant",
+     "x": 14.4,
+     "y": 24,
+     "width": 22.4,
+     "height": 22.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6a994e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "plant"
+      }
+     ]
+    },
+    {
+     "id": 18,
      "name": "printer",
      "x": 216,
      "y": 19.2,
@@ -135,7 +240,7 @@
      ]
     },
     {
-     "id": 18,
+     "id": 20,
      "name": "filing",
      "x": 403.2,
      "y": 19.2,
@@ -163,7 +268,7 @@
      ]
     },
     {
-     "id": 20,
+     "id": 22,
      "name": "server_rack",
      "x": 521.6,
      "y": 19.2,
@@ -191,7 +296,7 @@
      ]
     },
     {
-     "id": 22,
+     "id": 24,
      "name": "whiteboard",
      "x": 396.8,
      "y": 123.2,
@@ -219,7 +324,7 @@
      ]
     },
     {
-     "id": 23,
+     "id": 25,
      "name": "whiteboard_foot_l",
      "x": 400,
      "y": 132.8,
@@ -247,7 +352,7 @@
      ]
     },
     {
-     "id": 24,
+     "id": 26,
      "name": "whiteboard_foot_r",
      "x": 470.4,
      "y": 132.8,
@@ -275,7 +380,7 @@
      ]
     },
     {
-     "id": 26,
+     "id": 28,
      "name": "lounge_rug",
      "x": 432,
      "y": 236.8,
@@ -303,7 +408,7 @@
      ]
     },
     {
-     "id": 27,
+     "id": 29,
      "name": "sofa",
      "x": 454.4,
      "y": 243.2,
@@ -331,7 +436,7 @@
      ]
     },
     {
-     "id": 28,
+     "id": 30,
      "name": "water",
      "x": 440,
      "y": 297.6,
@@ -359,7 +464,7 @@
      ]
     },
     {
-     "id": 31,
+     "id": 33,
      "name": "desk_1",
      "x": 24,
      "y": 198.4,
@@ -383,11 +488,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk"
       }
      ]
     },
     {
-     "id": 32,
+     "id": 34,
      "name": "monitor_1",
      "x": 46.4,
      "y": 201.6,
@@ -411,11 +521,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 34,
+     "id": 35,
+     "name": "chair_1",
+     "x": 44.8,
+     "y": 230.4,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 36,
+     "name": "chair_back_1",
+     "x": 44.8,
+     "y": 243.2,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 38,
      "name": "desk_2",
      "x": 120,
      "y": 198.4,
@@ -439,11 +625,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_b"
       }
      ]
     },
     {
-     "id": 35,
+     "id": 39,
      "name": "monitor_2",
      "x": 142.4,
      "y": 201.6,
@@ -467,11 +658,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 37,
+     "id": 40,
+     "name": "chair_2",
+     "x": 140.8,
+     "y": 230.4,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 41,
+     "name": "chair_back_2",
+     "x": 140.8,
+     "y": 243.2,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 43,
      "name": "desk_3",
      "x": 216,
      "y": 198.4,
@@ -495,11 +762,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_c"
       }
      ]
     },
     {
-     "id": 38,
+     "id": 44,
      "name": "monitor_3",
      "x": 238.4,
      "y": 201.6,
@@ -523,11 +795,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 40,
+     "id": 45,
+     "name": "chair_3",
+     "x": 236.8,
+     "y": 230.4,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 46,
+     "name": "chair_back_3",
+     "x": 236.8,
+     "y": 243.2,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 48,
      "name": "desk_4",
      "x": 312,
      "y": 198.4,
@@ -551,11 +899,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk"
       }
      ]
     },
     {
-     "id": 41,
+     "id": 49,
      "name": "monitor_4",
      "x": 334.4,
      "y": 201.6,
@@ -579,11 +932,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 43,
+     "id": 50,
+     "name": "chair_4",
+     "x": 332.8,
+     "y": 230.4,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 51,
+     "name": "chair_back_4",
+     "x": 332.8,
+     "y": 243.2,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 53,
      "name": "desk_5",
      "x": 24,
      "y": 291.2,
@@ -607,11 +1036,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_c"
       }
      ]
     },
     {
-     "id": 44,
+     "id": 54,
      "name": "monitor_5",
      "x": 46.4,
      "y": 294.4,
@@ -635,11 +1069,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 46,
+     "id": 55,
+     "name": "chair_5",
+     "x": 44.8,
+     "y": 323.2,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 56,
+     "name": "chair_back_5",
+     "x": 44.8,
+     "y": 336,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 58,
      "name": "desk_6",
      "x": 120,
      "y": 291.2,
@@ -663,11 +1173,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk"
       }
      ]
     },
     {
-     "id": 47,
+     "id": 59,
      "name": "monitor_6",
      "x": 142.4,
      "y": 294.4,
@@ -691,11 +1206,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 49,
+     "id": 60,
+     "name": "chair_6",
+     "x": 140.8,
+     "y": 323.2,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 61,
+     "name": "chair_back_6",
+     "x": 140.8,
+     "y": 336,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 63,
      "name": "desk_7",
      "x": 216,
      "y": 291.2,
@@ -719,11 +1310,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_b"
       }
      ]
     },
     {
-     "id": 50,
+     "id": 64,
      "name": "monitor_7",
      "x": 238.4,
      "y": 294.4,
@@ -747,11 +1343,87 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 52,
+     "id": 65,
+     "name": "chair_7",
+     "x": 236.8,
+     "y": 323.2,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 66,
+     "name": "chair_back_7",
+     "x": 236.8,
+     "y": 336,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 68,
      "name": "desk_8",
      "x": 312,
      "y": 291.2,
@@ -775,11 +1447,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_c"
       }
      ]
     },
     {
-     "id": 53,
+     "id": 69,
      "name": "monitor_8",
      "x": 334.4,
      "y": 294.4,
@@ -803,11 +1480,153 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 55,
+     "id": 70,
+     "name": "chair_8",
+     "x": 332.8,
+     "y": 323.2,
+     "width": 22.4,
+     "height": 19.2,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8e9bb3"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_seat"
+      }
+     ]
+    },
+    {
+     "id": 71,
+     "name": "chair_back_8",
+     "x": 332.8,
+     "y": 336,
+     "width": 22.4,
+     "height": 9.6,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#73819b"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_back"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 73,
+     "name": "plant_door",
+     "x": 14.4,
+     "y": 174.4,
+     "width": 22.4,
+     "height": 22.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6a994e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "plant"
+      }
+     ]
+    },
+    {
+     "id": 74,
+     "name": "plant_printer",
+     "x": 289.6,
+     "y": 24,
+     "width": 22.4,
+     "height": 22.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6a994e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "plant"
+      }
+     ]
+    },
+    {
+     "id": 75,
      "name": "photo_booth",
      "x": 19.2,
      "y": 360,
@@ -835,7 +1654,7 @@
      ]
     },
     {
-     "id": 57,
+     "id": 77,
      "name": "kanban_wall",
      "x": 326.4,
      "y": 395.2,
@@ -863,7 +1682,7 @@
      ]
     },
     {
-     "id": 59,
+     "id": 79,
      "name": "vault",
      "x": 499.2,
      "y": 350.4,
@@ -891,7 +1710,7 @@
      ]
     },
     {
-     "id": 60,
+     "id": 80,
      "name": "vault_door",
      "x": 520,
      "y": 368,
@@ -919,7 +1738,7 @@
      ]
     },
     {
-     "id": 62,
+     "id": 82,
      "name": "mat",
      "x": 224,
      "y": 384,
@@ -943,6 +1762,11 @@
        "name": "solid",
        "type": "bool",
        "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "mat"
       }
      ]
     }
@@ -1169,7 +1993,7 @@
    "y": 0,
    "objects": [
     {
-     "id": 15,
+     "id": 16,
      "name": "manager_seat",
      "type": "manager_seat",
      "x": 96,
@@ -1178,10 +2002,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "south"
+      }
+     ]
     },
     {
-     "id": 17,
+     "id": 19,
      "name": "printer",
      "type": "printer",
      "x": 248,
@@ -1193,7 +2024,7 @@
      "visible": true
     },
     {
-     "id": 19,
+     "id": 21,
      "name": "filing_cabinet",
      "type": "filing_cabinet",
      "x": 429,
@@ -1205,7 +2036,7 @@
      "visible": true
     },
     {
-     "id": 21,
+     "id": 23,
      "name": "server_room",
      "type": "server_room",
      "x": 502,
@@ -1217,7 +2048,7 @@
      "visible": true
     },
     {
-     "id": 25,
+     "id": 27,
      "name": "whiteboard",
      "type": "whiteboard",
      "x": 438,
@@ -1229,7 +2060,7 @@
      "visible": true
     },
     {
-     "id": 29,
+     "id": 31,
      "name": "lounge",
      "type": "lounge",
      "x": 499,
@@ -1241,7 +2072,7 @@
      "visible": true
     },
     {
-     "id": 30,
+     "id": 32,
      "name": "water_cooler",
      "type": "water_cooler",
      "x": 451,
@@ -1253,7 +2084,7 @@
      "visible": true
     },
     {
-     "id": 33,
+     "id": 37,
      "name": "desk_1",
      "type": "desk",
      "x": 56,
@@ -1262,10 +2093,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 36,
+     "id": 42,
      "name": "desk_2",
      "type": "desk",
      "x": 152,
@@ -1274,10 +2112,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 39,
+     "id": 47,
      "name": "desk_3",
      "type": "desk",
      "x": 248,
@@ -1286,10 +2131,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 42,
+     "id": 52,
      "name": "desk_4",
      "type": "desk",
      "x": 344,
@@ -1298,10 +2150,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 45,
+     "id": 57,
      "name": "desk_5",
      "type": "desk",
      "x": 56,
@@ -1310,10 +2169,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 48,
+     "id": 62,
      "name": "desk_6",
      "type": "desk",
      "x": 152,
@@ -1322,10 +2188,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 51,
+     "id": 67,
      "name": "desk_7",
      "type": "desk",
      "x": 248,
@@ -1334,10 +2207,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 54,
+     "id": 72,
      "name": "desk_8",
      "type": "desk",
      "x": 344,
@@ -1346,10 +2226,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 56,
+     "id": 76,
      "name": "photo_booth",
      "type": "photo_booth",
      "x": 112,
@@ -1361,7 +2248,7 @@
      "visible": true
     },
     {
-     "id": 58,
+     "id": 78,
      "name": "noticeboard",
      "type": "noticeboard",
      "x": 371,
@@ -1373,7 +2260,7 @@
      "visible": true
     },
     {
-     "id": 61,
+     "id": 81,
      "name": "vault",
      "type": "vault",
      "x": 477,
@@ -1385,7 +2272,7 @@
      "visible": true
     },
     {
-     "id": 63,
+     "id": 83,
      "name": "entrance",
      "type": "entrance",
      "x": 256,
@@ -1397,7 +2284,7 @@
      "visible": true
     },
     {
-     "id": 64,
+     "id": 84,
      "name": "door_bottom",
      "type": "door",
      "x": 256,
@@ -1409,7 +2296,7 @@
      "visible": true
     },
     {
-     "id": 65,
+     "id": 85,
      "name": "door_top",
      "type": "door",
      "x": 352,
@@ -1421,7 +2308,7 @@
      "visible": true
     },
     {
-     "id": 66,
+     "id": 86,
      "name": "door_left",
      "type": "door",
      "x": 0,
@@ -1433,7 +2320,7 @@
      "visible": true
     },
     {
-     "id": 67,
+     "id": 87,
      "name": "door_right",
      "type": "door",
      "x": 576,

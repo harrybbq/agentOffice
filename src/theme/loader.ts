@@ -2,7 +2,8 @@
 // world. Parsing lives in ./parse (Phaser-free) and is re-exported here.
 import Phaser from 'phaser'
 import type { Block } from '../world/layout'
-import type { FurnitureRect, ParsedMap, WallRect } from './parse'
+import type { ThemeArt } from '../../shared/theme'
+import type { FurnitureRect, ImageLayerRef, ParsedMap, WallRect } from './parse'
 
 export * from './parse'
 
@@ -11,10 +12,23 @@ export type TemplateKind = 'hq' | 'branch'
 const mapKey = (kind: TemplateKind) => `map:${kind}`
 const tilesetKey = (kind: TemplateKind, name: string, i: number) => `tileset:${kind}:${i}:${name}`
 
-/** Queue tileset images for both templates (call from Scene.preload). */
-export function preloadTemplates(scene: Phaser.Scene, maps: Record<TemplateKind, ParsedMap>, baseUrl: string): void {
+const imageKey = (kind: TemplateKind, i: number) => `floor:${kind}:${i}`
+/** The theme's furniture atlas (theme.json `art.furniture`). */
+export const FURNITURE_ATLAS = 'art:furniture'
+
+/** Queue the maps' pictures (tilesets, image layers) and the furniture atlas (call from Scene.preload). */
+export function preloadTemplates(
+  scene: Phaser.Scene,
+  maps: Record<TemplateKind, ParsedMap>,
+  baseUrl: string,
+  art?: ThemeArt
+): void {
+  if (art?.furniture?.image && art.furniture.data) {
+    scene.load.atlas(FURNITURE_ATLAS, baseUrl + art.furniture.image, baseUrl + art.furniture.data)
+  }
   for (const kind of ['hq', 'branch'] as const) {
     const map = maps[kind]
+    map.images.forEach((img, i) => scene.load.image(imageKey(kind, i), baseUrl + img.image))
     if (!map.useTiles) continue
     scene.load.tilemapTiledJSON(mapKey(kind), map.raw)
     map.tilesets.forEach((ts, i) => scene.load.image(tilesetKey(kind, ts.name, i), baseUrl + ts.image))
@@ -42,6 +56,36 @@ export function drawTileLayers(scene: Phaser.Scene, block: Block, depth = -1000)
     console.warn('[agent-office] tilemap render failed, drawing furniture instead', err)
   }
   return out
+}
+
+export interface FloorImage {
+  image: Phaser.GameObjects.Image
+  ref: ImageLayerRef
+}
+
+/**
+ * The block's image layers at its world offset, bottom first. [] unless every one of them loaded:
+ * half a floor is worse than the placeholder.
+ */
+export function drawImageLayers(scene: Phaser.Scene, block: Block, depth = -1000): FloorImage[] {
+  const refs = block.template.images
+  if (refs.length === 0 || !refs.every((_, i) => scene.textures.exists(imageKey(block.kind, i)))) return []
+  return refs.map((ref, i) => ({
+    ref,
+    image: scene.add
+      .image(block.offset.x + ref.x, block.offset.y + ref.y, imageKey(block.kind, i))
+      .setOrigin(0, 0)
+      .setScale(1 / ref.scale)
+      .setDepth(depth + i * 0.01)
+  }))
+}
+
+/** Image px per map px of the furniture atlas (its `meta.scale`), or 0 when there is no atlas. */
+export function furnitureScale(scene: Phaser.Scene): number {
+  if (!scene.textures.exists(FURNITURE_ATLAS)) return 0
+  const meta = (scene.textures.get(FURNITURE_ATLAS).customData as { meta?: { scale?: unknown } }).meta
+  const v = Number(meta?.scale)
+  return Number.isFinite(v) && v > 0 ? v : 1
 }
 
 /** Draws one block at its world offset. Returns every object created, for fading/destroying. */

@@ -4,27 +4,40 @@
   "hq": "hq.json",
   "branch": "branch.json",
   "background": "#2b2d42",
+  "art": {
+    "filter": "smooth",
+    "furniture": {
+      "image": "art/furniture.png",
+      "data": "art/furniture.json"
+    }
+  },
+  "corridor": {
+    "floor": "#dfe3ea",
+    "edge": "#f4f6f9"
+  },
   "roles": {
     "boss": {
       "label": "CEO",
       "placeholder": {
         "accessory": "tie",
         "accent": "#c0392b",
-        "scale": 1.15
+        "scale": 1.3
       }
     },
     "manager": {
       "label": "Manager",
       "placeholder": {
         "accessory": "clipboard",
-        "accent": "#8d6e63"
+        "accent": "#8d6e63",
+        "scale": 1.15
       }
     },
     "worker": {
       "label": "Worker",
       "placeholder": {
         "accessory": "none",
-        "accent": "#ffffff"
+        "accent": "#ffffff",
+        "scale": 1.15
       }
     }
   },

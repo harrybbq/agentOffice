@@ -1,9 +1,11 @@
-// Generates the office theme's placeholder maps (no tiles) as Tiled 1.10 JSON:
+// Generates the office theme's maps as Tiled 1.10 JSON:
 //   themes/office/hq.json      CEO office (sealed) + reception with the memo inbox
 //   themes/office/branch.json  one team's branch, stamped out per active session
 // Stations are just furniture + a location point: what they are called, who goes there and when is
 // in themes/office/theme.json (stationLabels, stationRules, idle).
-// Once real art exists, edit the maps in Tiled instead and delete this script.
+// Art: the branch points at pictures made by scripts/gen-office-art.cjs (an image layer for the
+// floor and walls, `sprite` names for furniture). That script reads branch.json, so run this one
+// first. Everything that has no picture yet is still drawn as a coloured rectangle.
 const fs = require('fs')
 const path = require('path')
 const T = 32
@@ -12,21 +14,30 @@ const WALL_COLOR = '#5c5470'
 
 function builder(W, H) {
   let id = 1
-  const furn = [], walls = [], locs = []
-  const props = (color, label, solid) => [
+  const furn = [], walls = [], locs = [], images = []
+  // art: { sprite, ysort, fallback } (see the header of shared/theme.ts)
+  const props = (color, label, solid, art = {}) => [
     { name: 'color', type: 'color', value: color },
     { name: 'label', type: 'string', value: label },
-    { name: 'solid', type: 'bool', value: solid }
+    { name: 'solid', type: 'bool', value: solid },
+    ...(art.sprite ? [{ name: 'sprite', type: 'string', value: art.sprite }] : []),
+    ...(art.ysort ? [{ name: 'ysort', type: 'bool', value: true }] : []),
+    ...(art.fallback ? [{ name: 'fallback', type: 'bool', value: true }] : [])
   ]
   const box = (name, tx, ty, tw, th) => ({ id: id++, name, x: tx * T, y: ty * T, width: tw * T, height: th * T, rotation: 0, visible: true })
   const b = {
     /** Decorative floor area (walkable). */
-    area: (name, tx, ty, tw, th, color, label = '') => furn.push({ ...box(name, tx, ty, tw, th), type: 'area', properties: props(color, label, false) }),
+    area: (name, tx, ty, tw, th, color, label = '', art) => furn.push({ ...box(name, tx, ty, tw, th), type: 'area', properties: props(color, label, false, art) }),
     /** Furniture: characters path around it. */
-    item: (name, tx, ty, tw, th, color, label = '') => furn.push({ ...box(name, tx, ty, tw, th), type: 'furniture', properties: props(color, label, true) }),
+    item: (name, tx, ty, tw, th, color, label = '', art) => furn.push({ ...box(name, tx, ty, tw, th), type: 'furniture', properties: props(color, label, true, art) }),
+    /** A picture of the floor and walls under everything; `margin` map px stick out on every side. */
+    image: (name, file, margin, scale) => images.push({ id: 0, name, type: 'imagelayer', image: file, opacity: 1, visible: true,
+      x: 0, y: 0, offsetx: -margin, offsety: -margin,
+      properties: [{ name: 'scale', type: 'float', value: scale }, { name: 'walls', type: 'bool', value: true }] }),
     wall: (name, tx, ty, tw, th) => walls.push({ ...box(name, tx, ty, tw, th), type: 'wall', properties: [{ name: 'color', type: 'color', value: WALL_COLOR }] }),
-    pt: (type, tx, ty, name = type) =>
-      locs.push({ id: id++, name, type, x: Math.round(tx * T), y: Math.round(ty * T), width: 0, height: 0, point: true, rotation: 0, visible: true }),
+    pt: (type, tx, ty, name = type, seat) =>
+      locs.push({ id: id++, name, type, x: Math.round(tx * T), y: Math.round(ty * T), width: 0, height: 0, point: true, rotation: 0, visible: true,
+        ...(seat ? { properties: [{ name: 'seat', type: 'string', value: seat }] } : {}) }),
     /** Outer walls with door gaps: gaps = { top|bottom: [[from,to]], left|right: [[from,to]] } in tiles. */
     outline(gaps = {}) {
       const run = (side, len, place) => {
@@ -44,10 +55,11 @@ function builder(W, H) {
     write(file) {
       const layer = (lid, name, objects, visible = true) =>
         ({ id: lid, name, type: 'objectgroup', draworder: 'index', opacity: 1, visible, x: 0, y: 0, objects })
+      const imgs = images.map((l, i) => ({ ...l, id: 4 + i }))
       const map = {
         type: 'map', version: '1.10', tiledversion: '1.11.0', orientation: 'orthogonal', renderorder: 'right-down',
-        width: W, height: H, tilewidth: T, tileheight: T, infinite: false, nextlayerid: 4, nextobjectid: id,
-        layers: [layer(1, 'furniture', furn), layer(2, 'walls', walls), layer(3, 'locations', locs, false)],
+        width: W, height: H, tilewidth: T, tileheight: T, infinite: false, nextlayerid: 4 + imgs.length, nextobjectid: id,
+        layers: [...imgs, layer(1, 'furniture', furn), layer(2, 'walls', walls), layer(3, 'locations', locs, false)],
         tilesets: []
       }
       fs.writeFileSync(path.join(__dirname, '..', 'themes', 'office', file), JSON.stringify(map, null, 1))
@@ -103,15 +115,19 @@ function builder(W, H) {
 {
   const W = 18, H = 13
   const b = builder(W, H)
-  b.area('floor', 0, 0, W, H, '#e9e4d8', '')
+  // Floor + walls picture (2x the map's size, 16 px of margin for the outside wall faces).
+  b.image('floor', 'art/branch-floor.png', 16, 2)
+  b.area('floor', 0, 0, W, H, '#e9e4d8', '', { fallback: true })
   b.outline({ bottom: [[7, 9]], top: [[10, 12]], left: [[7.5, 9.5]], right: [[5, 7]] })
   // Manager office with a door
-  b.area('mgr_room', 0, 0, 6, 5, '#d7e3e8', '')
+  b.area('mgr_room', 0, 0, 6, 5, '#d7e3e8', '', { fallback: true })
   b.wall('mgr_wall_right', 6 - WALL, 0, WALL, 5 + WALL)
   b.wall('mgr_wall_bl', 0, 5, 2, WALL)
   b.wall('mgr_wall_br', 3.5, 5, 2.5, WALL)
-  b.item('mgr_desk', 1.5, 2.2, 3, 1, '#795548')
-  b.pt('manager_seat', 3, 1.5)
+  b.area('mgr_chair', 2.6, 0.75, 0.8, 0.95, '#5d6b82', '', { sprite: 'chair_manager' })
+  b.item('mgr_desk', 1.5, 2.2, 3, 1, '#795548', '', { sprite: 'desk_manager' })
+  b.pt('manager_seat', 3, 1.5, 'manager_seat', 'south')
+  b.area('mgr_plant', 0.45, 0.75, 0.7, 0.7, '#6a994e', '', { sprite: 'plant' })
   // Stations along the top wall
   b.item('printer', 6.75, 0.6, 2, 1.4, '#90a4ae')
   b.pt('printer', 7.75, 2.7)
@@ -134,10 +150,16 @@ function builder(W, H) {
   let d = 0
   for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {
     const x = 0.75 + c * 3, y = 6.2 + r * 2.9
-    b.item('desk_' + (++d), x, y, 2, 1, '#a1887f')
-    b.item('monitor_' + d, x + 0.7, y + 0.1, 0.6, 0.35, '#263238')
-    b.pt('desk', x + 1, y + 1.6, 'desk_' + d)
+    b.item('desk_' + (++d), x, y, 2, 1, '#a1887f', '', { sprite: ['desk', 'desk_b', 'desk_c'][(c + r * 2) % 3] })
+    b.item('monitor_' + d, x + 0.7, y + 0.1, 0.6, 0.35, '#263238', '', { fallback: true }) // on the desk picture
+    // The chair is two pictures: the seat under whoever sits there, the backrest in front of them.
+    b.area('chair_' + d, x + 0.65, y + 1.0, 0.7, 0.6, '#8e9bb3', '', { sprite: 'chair_seat' })
+    b.area('chair_back_' + d, x + 0.65, y + 1.4, 0.7, 0.3, '#73819b', '', { sprite: 'chair_back', ysort: true })
+    b.pt('desk', x + 1, y + 1.6, 'desk_' + d, 'north')
   }
+  // Plants (decoration only: nobody paths around them)
+  b.area('plant_door', 0.45, 5.45, 0.7, 0.7, '#6a994e', '', { sprite: 'plant' })
+  b.area('plant_printer', 9.05, 0.75, 0.7, 0.7, '#6a994e', '', { sprite: 'plant' })
   // Along the bottom wall: photo booth, the kanban wall, the vault
   b.item('photo_booth', 0.6, 11.25, 2.2, 1.4, '#b39ddb')
   b.pt('photo_booth', 3.5, 12)
@@ -146,7 +168,7 @@ function builder(W, H) {
   b.item('vault', 15.6, 10.95, 1.9, 1.65, '#78909c')
   b.item('vault_door', 16.25, 11.5, 0.6, 0.6, '#455a64')
   b.pt('vault', 14.9, 12)
-  b.area('mat', 7, 12, 2, 1, '#6d4c41', 'Entrance')
+  b.area('mat', 7, 12, 2, 1, '#6d4c41', 'Entrance', { sprite: 'mat' })
   b.pt('entrance', 8, 12.3)
   b.pt('door', 8, H, 'door_bottom')
   b.pt('door', 11, 0, 'door_top')

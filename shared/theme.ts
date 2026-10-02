@@ -18,6 +18,24 @@
 //     properties `color` (#rrggbb), `label`, `solid` (bool: characters path around it)
 //   - any tile layers + embedded tilesets (image paths relative to the theme folder)
 //
+// Art (all optional; a map without it is drawn as the placeholder rectangles above):
+//   - image layers (Tiled `imagelayer`): one picture of the floor, drawn in layer order under the
+//     furniture at the layer's offset. Custom properties: `scale` (image px per map px, default 1:
+//     2 for a picture drawn at twice the map's size) and `walls` (bool: the picture includes the
+//     walls, so the `walls` rectangles are not drawn; they still block walking).
+//   - furniture property `sprite`: the name of a frame in the theme's furniture atlas
+//     (theme.json `art.furniture`). The rectangle stays the footprint (walking, station tag, hover);
+//     the frame's `pivot` in the atlas says where the centre of that rectangle is in the picture, so
+//     a shadow or a front face can stick out. Without the atlas (or the frame) the rectangle is drawn.
+//   - furniture property `ysort` (bool): the sprite is drawn in front of characters standing behind
+//     its bottom edge (a chair's backrest), instead of under every character.
+//   - furniture property `fallback` (bool): only drawn when the map has no usable floor art (image
+//     layers or tile layers): the plain `floor` rectangle, a monitor that is part of the desk's
+//     picture. Every other furniture rectangle is drawn on top of the floor art, as its sprite or,
+//     without one, as the coloured rectangle.
+//   - location property `seat` ("north" | "south"): a character standing exactly there sits, facing
+//     away from the viewer (its desk is above it on the map) or towards the viewer.
+//
 // Required location types:
 //   hq.json:     boss_seat (1), inbox (1+ memo slots), door (1+, on the map edge, opens to corridor)
 //   branch.json: manager_seat (1), desk (1+), entrance (1+, where characters arrive and leave),
@@ -76,7 +94,9 @@ export interface SpriteSheet {
   overlay?: string
   frameWidth: number
   frameHeight: number
-  /** Animation name -> frames. Recognised names: idle, walk, work, carry. Missing ones fall back to idle. */
+  /** Animation name -> frames. Recognised names: idle, walk, work, carry, and for characters on a
+   *  `seat`: sit, type (facing the viewer), sit_back, type_back (facing away). Missing ones fall back
+   *  (type -> work, sit -> idle, anything -> idle). */
   animations: Record<string, { frames: number[]; fps: number; repeat?: number }>
 }
 
@@ -132,6 +152,22 @@ export interface IdleDef {
   afterMs: number
 }
 
+/** Pictures the theme brings (see the header). */
+export interface ThemeArt {
+  /** 'smooth' (default): pictures are filtered and mip-mapped, for flat vector-like art drawn larger
+   *  than the map. 'pixel': nearest-neighbour, for pixel art drawn at the map's size. */
+  filter?: 'smooth' | 'pixel'
+  /** Furniture sprites: one image plus a TexturePacker "JSON (Hash)" file, both relative to the theme
+   *  folder. `meta.scale` in the data is the image's px per map px (default 1). */
+  furniture?: { image: string; data: string }
+}
+
+/** Colours of the corridors the scene lays between buildings. */
+export interface CorridorColors {
+  floor: string
+  edge: string
+}
+
 /** Longest `stationRules[].detail` pattern that is compiled. */
 export const STATION_RULE_MAX_PATTERN = 200
 
@@ -159,6 +195,10 @@ export interface ThemeManifest {
   stationRules?: StationRule[]
   /** Where characters with nothing to do go, and after how long. */
   idle?: IdleDef
+  /** Pictures: filtering and the furniture atlas. */
+  art?: ThemeArt
+  /** Corridor colours. Default: derived from the branch map's `floor` rectangle and first wall. */
+  corridor?: CorridorColors
 }
 
 /** Used when a theme has no `teams.colors`: 10 clearly distinct colours. */

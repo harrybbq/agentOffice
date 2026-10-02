@@ -56,6 +56,7 @@ import { spanText } from '../ui/inspect'
 import type { Action } from './Character'
 import {
   createSheetAnims,
+  PROP_SCALE,
   ensureProps,
   placeholderSkin,
   preloadSheets,
@@ -251,7 +252,7 @@ export class OfficeScene extends Phaser.Scene {
     this.load.on('loaderror', (file: Phaser.Loader.File) =>
       console.warn(`[agent-office] failed to load ${file.key} (${String(file.url)})`)
     )
-    preloadTemplates(this, { hq: this.opts.hq, branch: this.opts.branch }, this.opts.theme.baseUrl)
+    preloadTemplates(this, { hq: this.opts.hq, branch: this.opts.branch }, this.opts.theme.baseUrl, this.manifest.art)
     preloadSheets(this, this.manifest, this.opts.theme.baseUrl)
   }
 
@@ -376,9 +377,10 @@ export class OfficeScene extends Phaser.Scene {
     try {
       const skin = this.skinFor(entry)
       const tint = this.tintFor(entry)
-      const body = skin.kind === 'placeholder' ? skin.body[0] : skin.body
-      const over = skin.kind === 'placeholder' ? skin.overlay[0] : skin.overlay
-      const frame = skin.kind === 'sheet' ? 0 : undefined
+      const body = skin.body
+      const over = skin.overlay
+      const frame = skin.kind === 'sheet' ? 0 : 'stand'
+      const overFrame = skin.kind === 'sheet' ? 0 : 'front'
       const sig = `${body}|${over ?? ''}|${tint}`
       const cached = this.portraits.get(sig)
       if (cached) return done(cached)
@@ -389,7 +391,7 @@ export class OfficeScene extends Phaser.Scene {
       const dt = this.textures.addDynamicTexture(key, f.width * k, f.height * k)
       if (!dt) return done(null)
       dt.stamp(body, frame, 0, 0, { tint, scale: k, originX: 0, originY: 0 })
-      if (over) dt.stamp(over, frame, 0, 0, { scale: k, originX: 0, originY: 0 })
+      if (over) dt.stamp(over, overFrame, 0, 0, { scale: k, originX: 0, originY: 0 })
       dt.render()
       dt.snapshot((img) => {
         const url = img instanceof HTMLImageElement ? img.src : null
@@ -703,7 +705,8 @@ export class OfficeScene extends Phaser.Scene {
   ): void {
     const img = this.add.image(start.x, start.y, key).setDepth(ORDER_DEPTH)
     // Zoomed out to the whole office a prop of a few pixels would vanish: keep it this wide on screen.
-    const base = opts.minScreenPx ? Math.max(1, opts.minScreenPx / (img.width * this.cameras.main.zoom)) : 1
+    // (Prop textures are drawn larger than they show: PROP_SCALE brings them to map size.)
+    const base = opts.minScreenPx ? Math.max(PROP_SCALE, opts.minScreenPx / (img.width * this.cameras.main.zoom)) : PROP_SCALE
     img.setScale(base)
     const end0 = end()
     const dist = Math.hypot(end0.x - start.x, end0.y - start.y)
@@ -912,6 +915,8 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   private corridorStyle(): { floor: number; edge: number } {
+    const c = this.manifest.corridor
+    if (c && typeof c.floor === 'string' && typeof c.edge === 'string') return { floor: cssToInt(c.floor, 0xe9e4d8), edge: cssToInt(c.edge, 0x5c5470) }
     const t = this.opts.branch
     const floor = t.furniture.find((f) => f.name === 'floor' && !f.solid)?.color ?? 0xe9e4d8
     const edge = t.walls[0]?.color ?? 0x5c5470
@@ -1488,8 +1493,22 @@ export class OfficeScene extends Phaser.Scene {
       y: at.y,
       onIdle: (c) => this.driftHome(entry.id, c),
       findPath: (from, to) => this.findPath(entry.id, from, to),
-      teamColor: entry.role === 'boss' ? undefined : this.teamColor(entry.teamId) ?? undefined
+      teamColor: entry.role === 'boss' ? undefined : this.teamColor(entry.teamId) ?? undefined,
+      seatAt: (p) => this.seatAt(p)
     })
+  }
+
+  /** The seat at exactly this spot (a map location with `seat`), if any. */
+  private seatAt(p: Point): 'north' | 'south' | null {
+    const blocks = this.layout.all()
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]
+      const x = p.x - b.offset.x
+      const y = p.y - b.offset.y
+      if (x < 0 || y < 0 || x > b.width || y > b.height) continue
+      for (const seat of b.template.seats) if (Math.abs(seat.x - x) < 1 && Math.abs(seat.y - y) < 1) return seat.facing
+    }
+    return null
   }
 
   /** After a while with nothing to do, wander back home. */

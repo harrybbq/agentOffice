@@ -1,4 +1,10 @@
-// Procedural Prison-Architect-style characters and prop textures, plus optional theme sprite sheets.
+// Procedural characters and prop textures, plus optional theme sprite sheets.
+//
+// The characters are drawn with the 2D canvas at RES times their size on the map, so they stay smooth
+// when the camera zooms in: a rounded body with stubby arms and feet (white with grey shading: the
+// provider colour is multiplied in with setTint), and on a second, untinted layer the round head, hair,
+// face, the team-colour collar and the role's accessory. No legs to animate: walking is two foot
+// frames plus a bob the Character adds. Canvases are powers of two so they can be mip-mapped.
 import Phaser from 'phaser'
 import type { Placeholder, Role, SpriteSheet, ThemeManifest } from '../../shared/theme'
 import { cssToInt } from '../theme/loader'
@@ -20,7 +26,22 @@ export interface PlaceholderLook {
 
 const BASE_W = 24
 const BASE_H = 32
-const OUTLINE = 0x1e1e24
+/** Text in the world (names, speech bubbles, signs): the shell's sans, not a terminal font. */
+export const WORLD_FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
+/** Texture px per CSS px for that text: it stays sharp when the camera zooms in. */
+export const TEXT_RES = 3
+/** Texture px per map px for everything drawn here. */
+export const RES = 4
+/** One character frame in map px: wider and taller than the 24x32 figure, for arms and bobbing. */
+const FRAME_W = 32
+const FRAME_H = 40
+/** Where the feet (the character's position) are in a frame. */
+const FOOT_X = 16
+const FOOT_Y = 36
+export const CHAR_ORIGIN_Y = FOOT_Y / FRAME_H
+/** Seated characters are this much lower (map px). */
+export const SEAT_DROP = 3
+const INK = '#2b2f3a'
 
 /** Skin + hair pairs; a character picks one by hashing its id. */
 const TONES = [
@@ -38,18 +59,42 @@ export function toneIndex(id: string): number {
   return Math.abs(h) % TONES.length
 }
 
+/** Body frames of the procedural character, by name. */
+export const BODY_FRAMES = [
+  'stand',
+  'walkA',
+  'walkB',
+  'carryA',
+  'carryB',
+  'workA',
+  'workB',
+  'sitBack',
+  'typeBackA',
+  'typeBackB',
+  'sitFront',
+  'typeFrontA',
+  'typeFrontB'
+] as const
+export type BodyFrame = (typeof BODY_FRAMES)[number]
+
 /** What a Character needs to display itself. */
 export type Skin =
   | {
       kind: 'placeholder'
       shadow: string
-      body: [string, string]
-      overlay: [string, string]
+      /** One texture for every character: frames are BODY_FRAMES. */
+      body: string
+      /** Per look: frames 'front' and 'back'. */
+      overlay: string
+      /** Height of the figure on the map, px. */
       height: number
+      /** Display scale of the textures (they are drawn RES times larger). */
+      scale: number
     }
   | {
       kind: 'sheet'
       shadow: string
+      shadowScale: number
       body: string
       overlay: string | null
       /** Animation names available for this sheet. */
@@ -67,187 +112,410 @@ function darken(c: number, f = 0.7): number {
   const b = Math.round((c & 0xff) * f)
   return (r << 16) | (g << 8) | b
 }
+const css = (c: number) => `#${(c & 0xffffff).toString(16).padStart(6, '0')}`
 
-function bake(scene: Phaser.Scene, key: string, w: number, h: number, draw: (g: Phaser.GameObjects.Graphics) => void) {
+type Ctx = CanvasRenderingContext2D
+
+/**
+ * A canvas texture of `cols` x `rows` cells, each drawn in map px with (0,0) at its top-left corner.
+ * Its size is rounded up to powers of two (mip-maps); linear filtering whatever the game's setting.
+ */
+function bakeSheet(
+  scene: Phaser.Scene,
+  key: string,
+  cellW: number,
+  cellH: number,
+  names: readonly string[],
+  cols: number,
+  draw: (ctx: Ctx, name: string) => void
+): void {
   if (scene.textures.exists(key)) return
-  const g = scene.make.graphics({ x: 0, y: 0 }, false)
-  draw(g)
-  g.generateTexture(key, w, h)
-  g.destroy()
-}
-
-function dims(scale: number) {
-  return { w: Math.ceil(BASE_W * scale), h: Math.ceil(BASE_H * scale) }
-}
-
-function ensureShadow(scene: Phaser.Scene, scale: number): string {
-  const { w, h } = dims(scale)
-  const key = `ph:shadow:${w}x${h}`
-  bake(scene, key, w, h, (g) => {
-    g.fillStyle(0x000000, 0.18)
-    g.fillEllipse(w / 2, h - 3 * scale, 20 * scale, 7 * scale)
-    g.fillStyle(0x000000, 0.18)
-    g.fillEllipse(w / 2, h - 3 * scale, 14 * scale, 4 * scale)
+  const pot = (n: number) => {
+    let p = 32
+    while (p < n) p *= 2
+    return p
+  }
+  const rows = Math.ceil(names.length / cols)
+  const tex = scene.textures.createCanvas(key, pot(cols * cellW * RES), pot(rows * cellH * RES))
+  if (!tex) return
+  const ctx = tex.getContext()
+  names.forEach((name, i) => {
+    const x = (i % cols) * cellW * RES
+    const y = Math.floor(i / cols) * cellH * RES
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, y, cellW * RES, cellH * RES)
+    ctx.clip()
+    ctx.translate(x, y)
+    ctx.scale(RES, RES)
+    draw(ctx, name)
+    ctx.restore()
+    tex.add(name, 0, x, y, cellW * RES, cellH * RES)
   })
-  return key
+  tex.refresh()
+  // Smooth art even in a pixel-art theme (otherwise the game's own filtering, with mip-maps, applies).
+  if (scene.game.config.pixelArt) tex.setFilter(Phaser.Textures.FilterMode.LINEAR)
 }
 
-/** Body blob: white with one light-grey shade band, so setTint multiplies cleanly. */
-function drawBody(g: Phaser.GameObjects.Graphics, s: number, dy: number) {
-  g.fillStyle(0xcfcfcf, 1)
-  g.fillRoundedRect(4 * s, (14 + dy) * s, 16 * s, 16 * s, 7 * s)
-  g.fillStyle(0xffffff, 1)
-  g.fillRoundedRect(4 * s, (14 + dy) * s, 13 * s, 12.5 * s, 6 * s)
+function roundRect(ctx: Ctx, x: number, y: number, w: number, h: number, r: number): void {
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2))
+}
+function fillRound(ctx: Ctx, x: number, y: number, w: number, h: number, r: number, fill: string): void {
+  roundRect(ctx, x, y, w, h, r)
+  ctx.fillStyle = fill
+  ctx.fill()
+}
+function ellipse(ctx: Ctx, cx: number, cy: number, rx: number, ry: number, fill: string): void {
+  ctx.beginPath()
+  ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
+  ctx.fillStyle = fill
+  ctx.fill()
 }
 
-function drawOverlay(
-  g: Phaser.GameObjects.Graphics,
-  s: number,
-  dy: number,
-  ph: Placeholder,
-  tone: number,
-  look: PlaceholderLook,
-  role: Role
-) {
+const SHADOW_KEY = 'ph:shadow'
+/** Soft contact shadow, 32x16 map px, centred. */
+function ensureShadow(scene: Phaser.Scene): string {
+  bakeSheet(scene, SHADOW_KEY, 32, 16, ['shadow'], 1, (ctx) => {
+    ctx.translate(16, 8)
+    ctx.scale(1, 0.4)
+    const g = ctx.createRadialGradient(0, 0, 2, 0, 0, 12.5)
+    g.addColorStop(0, 'rgba(24,30,52,0.34)')
+    g.addColorStop(0.55, 'rgba(24,30,52,0.2)')
+    g.addColorStop(1, 'rgba(24,30,52,0)')
+    ctx.fillStyle = g
+    ctx.beginPath()
+    ctx.arc(0, 0, 12.5, 0, Math.PI * 2)
+    ctx.fill()
+  })
+  return SHADOW_KEY
+}
+
+// ---- body (white: tinted with the provider colour) -------------------------------------------------
+
+const BODY_RIM = '#c6c6c6'
+const LIMB = '#ececec'
+const FOOT = '#c2c2c2'
+
+/** The torso: narrow shoulders, a wider rounded bottom. */
+function torso(ctx: Ctx, top: number, bottom: number): void {
+  const cx = FOOT_X
+  const h = bottom - top
+  ctx.beginPath()
+  ctx.moveTo(cx - 6, top + h * 0.22)
+  ctx.quadraticCurveTo(cx - 6, top, cx, top)
+  ctx.quadraticCurveTo(cx + 6, top, cx + 6, top + h * 0.22)
+  ctx.bezierCurveTo(cx + 7.6, top + h * 0.45, cx + 8.6, top + h * 0.62, cx + 8.2, top + h * 0.8)
+  ctx.quadraticCurveTo(cx + 7.6, bottom, cx, bottom)
+  ctx.quadraticCurveTo(cx - 7.6, bottom, cx - 8.2, top + h * 0.8)
+  ctx.bezierCurveTo(cx - 8.6, top + h * 0.62, cx - 7.6, top + h * 0.45, cx - 6, top + h * 0.22)
+  ctx.closePath()
+  const g = ctx.createLinearGradient(0, top, 0, bottom)
+  g.addColorStop(0, '#ffffff')
+  g.addColorStop(0.55, '#f4f4f4')
+  g.addColorStop(1, '#d2d2d2')
+  ctx.fillStyle = g
+  ctx.fill()
+  ctx.lineWidth = 0.55
+  ctx.strokeStyle = BODY_RIM
+  ctx.stroke()
+}
+
+/** A stubby arm: a capsule from the shoulder to the hand. */
+function arm(ctx: Ctx, x0: number, y0: number, x1: number, y1: number): void {
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(x0, y0)
+  ctx.lineTo(x1, y1)
+  ctx.lineWidth = 4.7
+  ctx.strokeStyle = BODY_RIM
+  ctx.stroke()
+  ctx.lineWidth = 3.7
+  ctx.strokeStyle = LIMB
+  ctx.stroke()
+}
+
+function foot(ctx: Ctx, x: number, y: number): void {
+  ellipse(ctx, x, y, 2.9, 1.9, BODY_RIM)
+  ellipse(ctx, x, y - 0.2, 2.4, 1.5, FOOT)
+}
+
+function drawBody(ctx: Ctx, f: BodyFrame): void {
+  const L = FOOT_X - 6.3
+  const R = FOOT_X + 6.3
+  const both = (y0: number, lx: number, ly: number, rx: number, ry: number) => {
+    arm(ctx, L, y0, lx, ly)
+    arm(ctx, R, y0, rx, ry)
+  }
+  switch (f) {
+    case 'stand':
+      foot(ctx, 12.4, 35)
+      foot(ctx, 19.6, 35)
+      both(23, 7.4, 28.6, 24.6, 28.6)
+      torso(ctx, 18.6, 34.6)
+      break
+    case 'walkA':
+    case 'walkB': {
+      const a = f === 'walkA'
+      foot(ctx, 12.4, a ? 35.6 : 33.8)
+      foot(ctx, 19.6, a ? 33.8 : 35.6)
+      both(23, a ? 6.9 : 8, a ? 27.6 : 28.9, a ? 24 : 25.1, a ? 28.9 : 27.6)
+      torso(ctx, 18.6, 34.6)
+      break
+    }
+    case 'carryA':
+    case 'carryB': {
+      const a = f === 'carryA'
+      foot(ctx, 12.4, a ? 35.6 : 33.8)
+      foot(ctx, 19.6, a ? 33.8 : 35.6)
+      torso(ctx, 18.6, 34.6)
+      both(24.2, 11.6, 28, 20.4, 28) // both hands in front, holding the thing
+      break
+    }
+    case 'workA':
+    case 'workB': {
+      const a = f === 'workA'
+      foot(ctx, 12.4, 35)
+      foot(ctx, 19.6, 35)
+      both(23, 5.6, a ? 19.6 : 21.6, 26.4, a ? 21.6 : 19.6) // hands up, busy
+      torso(ctx, 18.6, 34.6)
+      break
+    }
+    case 'sitBack':
+      both(23 + SEAT_DROP, 7.6, 30.4, 24.4, 30.4)
+      torso(ctx, 18.6 + SEAT_DROP, 34)
+      break
+    case 'typeBackA':
+    case 'typeBackB': {
+      const a = f === 'typeBackA'
+      // Seen from behind: elbows out, hands on the keyboard beyond the head.
+      both(24 + SEAT_DROP, 7.2, a ? 21.6 : 22.8, 24.8, a ? 22.8 : 21.6)
+      torso(ctx, 18.6 + SEAT_DROP, 34)
+      break
+    }
+    case 'sitFront':
+    case 'typeFrontA':
+    case 'typeFrontB': {
+      const dl = f === 'typeFrontA' ? 0.9 : 0
+      const dr = f === 'typeFrontB' ? 0.9 : 0
+      foot(ctx, 12.6, 35.2)
+      foot(ctx, 19.4, 35.2)
+      torso(ctx, 18.6 + SEAT_DROP, 34.4)
+      both(25 + SEAT_DROP, 10.6, 31.2 + dl, 21.4, 31.2 + dr) // hands forward, towards the desk
+      break
+    }
+  }
+}
+
+const BODY_KEY = 'ph:body'
+function ensureBody(scene: Phaser.Scene): string {
+  bakeSheet(scene, BODY_KEY, FRAME_W, FRAME_H, BODY_FRAMES, 8, (ctx, name) => drawBody(ctx, name as BodyFrame))
+  return BODY_KEY
+}
+
+// ---- head, hair, collar, accessory (untinted) ------------------------------------------------------
+
+const HEAD_X = FOOT_X
+const HEAD_Y = 12.2
+const HEAD_R = 7.2
+
+function drawOverlay(ctx: Ctx, back: boolean, ph: Placeholder, tone: number, look: PlaceholderLook, role: Role): void {
   const base = TONES[tone % TONES.length]
   const skin = look.head ? SKIN_TONES[look.head.skin % SKIN_TONES.length] : base.skin
-  const hair = look.head ? HAIR_COLORS[look.head.hair % HAIR_COLORS.length] : base.hair
-  const a = look.accent ?? cssToInt(ph.accent, 0xffffff)
-  const cx = 12 * s
-  const y = (v: number) => (v + dy) * s
-  const line = Math.max(1, Math.round(s))
+  const hairN = look.head ? HAIR_COLORS[look.head.hair % HAIR_COLORS.length] : base.hair
+  const hair = css(hairN)
+  const hairDark = css(darken(hairN, 0.78))
+  const accentN = look.accent ?? cssToInt(ph.accent, 0xffffff)
+  const accent = css(accentN)
+  const accentDark = css(darken(accentN, 0.78))
+  const cx = HEAD_X
 
-  // Body outline.
-  g.lineStyle(line, OUTLINE, 1)
-  g.strokeRoundedRect(4.5 * s, y(14.5), 15 * s, 15 * s, 7 * s)
+  // Shade under the chin (over the collar it would dull the colour, so it comes first).
+  ellipse(ctx, cx, 20, 5.6, 1.9, 'rgba(20,24,40,0.16)')
 
-  // Team collar (shows on both sides of the head) and, for workers, a chest badge.
+  // Team collar, and for workers a chest badge.
   if (look.collar !== undefined) {
-    g.fillStyle(look.collar, 1)
-    g.fillRoundedRect(5.5 * s, y(15), 13 * s, 3 * s, 1.5 * s)
-    g.lineStyle(line, OUTLINE, 0.8)
-    g.strokeRoundedRect(5.5 * s, y(15), 13 * s, 3 * s, 1.5 * s)
-    if (role === 'worker') {
-      g.fillStyle(look.collar, 1)
-      g.fillRect(7 * s, y(20), 3.5 * s, 3.5 * s)
-      g.lineStyle(line, OUTLINE, 1)
-      g.strokeRect(7 * s, y(20), 3.5 * s, 3.5 * s)
+    fillRound(ctx, cx - 5.9, 19.2, 11.8, 3.1, 1.55, css(darken(look.collar, 0.8)))
+    fillRound(ctx, cx - 5.9, 19.2, 11.8, 2.4, 1.2, css(look.collar))
+    if (role === 'worker' && !back) {
+      fillRound(ctx, cx - 5.2, 24.6, 3.6, 3.6, 1, css(darken(look.collar, 0.8)))
+      fillRound(ctx, cx - 5.2, 24.4, 3.6, 3.3, 1, css(look.collar))
     }
   }
 
-  // Accessories worn on the body go under the head.
-  switch (ph.accessory) {
-    case 'tie':
-      g.fillStyle(0xffffff, 1)
-      g.fillTriangle(9 * s, y(15), 15 * s, y(15), cx, y(18))
-      g.fillStyle(a, 1)
-      g.fillRect(11 * s, y(16), 2 * s, 6 * s)
-      g.fillTriangle(10.5 * s, y(22), 13.5 * s, y(22), cx, y(24.5))
-      break
-    case 'number':
-      g.fillStyle(a, 1)
-      g.fillRect(8 * s, y(18), 8 * s, 5 * s)
-      g.fillStyle(OUTLINE, 1)
-      g.fillRect(9 * s, y(19), 1 * s, 3 * s)
-      g.fillRect(11 * s, y(19), 2 * s, 1 * s)
-      g.fillRect(12 * s, y(20), 1 * s, 2 * s)
-      g.fillRect(14 * s, y(19), 1 * s, 3 * s)
-      break
-    case 'baton':
-      g.fillStyle(darken(a, 0.8), 1)
-      g.fillRect(4 * s, y(22), 16 * s, 1.5 * s) // belt
-      g.fillStyle(a, 1)
-      g.fillRoundedRect(19 * s, y(17), 2.5 * s, 11 * s, 1 * s)
-      g.lineStyle(line, OUTLINE, 1)
-      g.strokeRoundedRect(19 * s, y(17), 2.5 * s, 11 * s, 1 * s)
-      break
-    case 'clipboard':
-      g.fillStyle(a, 1)
-      g.fillRect(15 * s, y(18), 7 * s, 9 * s)
-      g.fillStyle(0xffffff, 1)
-      g.fillRect(16 * s, y(19.5), 5 * s, 6.5 * s)
-      g.fillStyle(0x9e9e9e, 1)
-      g.fillRect(16.5 * s, y(21), 4 * s, 0.75 * s)
-      g.fillRect(16.5 * s, y(22.75), 4 * s, 0.75 * s)
-      g.fillRect(16.5 * s, y(24.5), 3 * s, 0.75 * s)
-      g.fillStyle(0x424242, 1)
-      g.fillRect(17 * s, y(17.5), 3 * s, 1.5 * s)
-      g.lineStyle(line, OUTLINE, 1)
-      g.strokeRect(15 * s, y(18), 7 * s, 9 * s)
-      break
-    default:
-      break
+  // Accessories worn on the body go under the head. From behind only the baton shows.
+  if (!back) {
+    switch (ph.accessory) {
+      case 'tie':
+        ctx.fillStyle = '#ffffff'
+        ctx.beginPath()
+        ctx.moveTo(cx - 3.6, 19.4)
+        ctx.lineTo(cx + 3.6, 19.4)
+        ctx.lineTo(cx, 23.4)
+        ctx.closePath()
+        ctx.fill()
+        ctx.fillStyle = accent
+        ctx.beginPath()
+        ctx.moveTo(cx - 1.2, 20.2)
+        ctx.lineTo(cx + 1.2, 20.2)
+        ctx.lineTo(cx + 1.7, 27)
+        ctx.lineTo(cx, 29.2)
+        ctx.lineTo(cx - 1.7, 27)
+        ctx.closePath()
+        ctx.fill()
+        fillRound(ctx, cx - 1.5, 19.8, 3, 2, 0.8, accentDark)
+        break
+      case 'number':
+        fillRound(ctx, cx - 4.4, 23.2, 8.8, 5.2, 1.2, accent)
+        ctx.fillStyle = INK
+        ctx.fillRect(cx - 3, 24.4, 1, 2.8)
+        ctx.fillRect(cx - 1, 24.4, 2, 1)
+        ctx.fillRect(cx, 25.4, 1, 1.8)
+        ctx.fillRect(cx + 2, 24.4, 1, 2.8)
+        break
+      case 'clipboard':
+        fillRound(ctx, cx + 3.4, 22.8, 7.6, 9.6, 1.3, 'rgba(20,24,40,0.18)')
+        fillRound(ctx, cx + 3, 22.2, 7.6, 9.6, 1.3, accent)
+        fillRound(ctx, cx + 4, 23.6, 5.6, 7.2, 0.7, '#ffffff')
+        ctx.fillStyle = '#b4bac8'
+        ctx.fillRect(cx + 4.9, 25.4, 3.8, 0.7)
+        ctx.fillRect(cx + 4.9, 27, 3.8, 0.7)
+        ctx.fillRect(cx + 4.9, 28.6, 2.6, 0.7)
+        fillRound(ctx, cx + 5.3, 21.6, 3, 1.7, 0.6, '#4b5468')
+        break
+      default:
+        break
+    }
+  }
+  if (ph.accessory === 'baton') {
+    ctx.fillStyle = accentDark
+    ctx.fillRect(cx - 7.6, 28.4, 15.2, 1.6) // belt
+    fillRound(ctx, cx + 7.4, 23, 2.6, 10.5, 1.3, accent)
   }
 
-  // Head: big oval in a skin tone.
-  g.fillStyle(skin, 1)
-  g.fillEllipse(cx, y(10), 12 * s, 13 * s)
+  // Head: a round ball in a skin tone, lit from the top left.
+  const head = () => {
+    ctx.beginPath()
+    ctx.arc(cx, HEAD_Y, HEAD_R, 0, Math.PI * 2)
+  }
+  head()
+  const g = ctx.createRadialGradient(cx - 2.4, HEAD_Y - 2.8, 1, cx, HEAD_Y, HEAD_R + 1.5)
+  g.addColorStop(0, css(skin))
+  g.addColorStop(0.7, css(skin))
+  g.addColorStop(1, css(darken(skin, 0.84)))
+  ctx.fillStyle = g
+  ctx.fill()
+
   const shaved = ph.accessory === 'number'
   const hatted = ph.accessory === 'cap' || ph.accessory === 'peaked_cap'
   const style = look.head?.style ?? 'short'
-  const cap = (fill: number) => {
-    g.fillStyle(fill, 1)
-    g.beginPath()
-    g.arc(cx, y(8), 6.2 * s, Math.PI, 0, false)
-    g.closePath()
-    g.fillPath()
-    g.fillStyle(darken(fill), 1)
-    g.fillRect(5.5 * s, y(7.5), 13 * s, 2 * s)
-    g.lineStyle(line, OUTLINE, 1)
-    g.strokeRect(5.5 * s, y(7.5), 13 * s, 2 * s)
+  /** Fills inside the head only. */
+  const onHead = (paint: () => void) => {
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(cx, HEAD_Y, HEAD_R + 0.35, 0, Math.PI * 2)
+    ctx.clip()
+    paint()
+    ctx.restore()
   }
-  const crown = (r: number, cy: number) => {
-    g.beginPath()
-    g.arc(cx, y(cy), r * s, Math.PI, 0, false)
-    g.closePath()
-    g.fillPath()
+  /** Hair over the top of the head down to `y` at the sides, with a soft fringe (or the nape). */
+  const crown = (fill: string, y: number, dip: number) =>
+    onHead(() => {
+      ctx.fillStyle = fill
+      ctx.beginPath()
+      ctx.moveTo(cx - 9, y)
+      if (back) ctx.quadraticCurveTo(cx, y + dip, cx + 9, y)
+      else {
+        ctx.quadraticCurveTo(cx - 4, y - dip, cx - 0.5, y - dip * 0.35)
+        ctx.quadraticCurveTo(cx + 4, y - dip * 1.2, cx + 9, y)
+      }
+      ctx.lineTo(cx + 9, 0)
+      ctx.lineTo(cx - 9, 0)
+      ctx.closePath()
+      ctx.fill()
+    })
+  const hairLine = back ? 15.2 : 10.6
+  const dip = back ? 3.4 : 2.6
+  const baseballCap = (fill: number) => {
+    crown(css(fill), back ? 13.2 : 9.6, back ? 2.4 : 0)
+    if (!back) {
+      ellipse(ctx, cx, 10, 8.2, 2.1, css(darken(fill, 0.72)))
+      ellipse(ctx, cx, 9.5, 8, 1.7, css(darken(fill, 0.86)))
+    } else fillRound(ctx, cx - 1.6, 12.6, 3.2, 1.4, 0.7, css(darken(fill, 0.72)))
   }
+
   if (!hatted) {
-    g.fillStyle(shaved ? darken(skin, 0.85) : hair, 1)
-    if (shaved || style === 'short' || style === 'bun') crown(5.8, 9)
-    else if (style === 'long') {
-      crown(6, 9)
-      g.fillRect(5.6 * s, y(8.5), 2.6 * s, 7.5 * s)
-      g.fillRect(15.8 * s, y(8.5), 2.6 * s, 7.5 * s)
-    } else if (style === 'spiky') {
-      crown(5.6, 9.5)
-      for (const x of [7, 10, 13, 16]) g.fillTriangle((x - 1.8) * s, y(6), (x + 1.8) * s, y(6), x * s, y(1.2))
-    } else if (style === 'bald') {
-      g.fillStyle(0xffffff, 0.35)
-      g.fillEllipse(cx - 2 * s, y(6), 4 * s, 2.5 * s)
-      g.fillStyle(hair, 1)
-      g.fillRect(6.2 * s, y(9), 1.6 * s, 3 * s) // a bit of hair over the ears
-      g.fillRect(16.2 * s, y(9), 1.6 * s, 3 * s)
-    }
-  }
-  g.lineStyle(line, OUTLINE, 1)
-  g.strokeEllipse(cx, y(10), 12 * s, 13 * s)
-  if (!hatted && !shaved) {
-    if (style === 'bun') {
-      g.fillStyle(hair, 1)
-      g.fillCircle(cx, y(2.6), 2.8 * s)
-      g.lineStyle(line, OUTLINE, 1)
-      g.strokeCircle(cx, y(2.6), 2.8 * s)
-    } else if (style === 'cap') {
-      cap(a)
+    if (shaved) crown(css(darken(skin, 0.86)), hairLine - 1, dip)
+    else if (style === 'bald') {
+      ellipse(ctx, cx - 2.6, 7.6, 2.4, 1.4, 'rgba(255,255,255,0.35)')
+      onHead(() => {
+        ellipse(ctx, cx - 7, 12.6, 1.7, 2.8, hair)
+        ellipse(ctx, cx + 7, 12.6, 1.7, 2.8, hair)
+        if (back) fillRound(ctx, cx - 7, 13.6, 14, 4, 2, hair)
+      })
+    } else if (style === 'cap') baseballCap(accentN)
+    else {
+      if (style === 'bun') {
+        ellipse(ctx, cx, 4.5, 3, 3, hairDark)
+        ellipse(ctx, cx, 4.3, 2.6, 2.6, hair)
+      }
+      if (style === 'spiky') {
+        ctx.fillStyle = hair
+        ctx.lineJoin = 'round'
+        ctx.beginPath()
+        ctx.moveTo(cx - 6.6, 9)
+        for (const [x, y] of [[-5.6, 3.4], [-3.4, 6], [-1.6, 2], [0.6, 5.6], [2.6, 2.4], [4.2, 6.2], [6.2, 4], [6.6, 9]]) ctx.lineTo(cx + x, y)
+        ctx.closePath()
+        ctx.fill()
+        ctx.lineWidth = 1
+        ctx.strokeStyle = hair
+        ctx.stroke()
+      }
+      if (style === 'long') {
+        if (back) fillRound(ctx, cx - 7.8, 6, 15.6, 16.4, 6, hairDark)
+        else {
+          fillRound(ctx, cx - 8.2, 8.5, 3, 12, 1.5, hairDark)
+          fillRound(ctx, cx + 5.2, 8.5, 3, 12, 1.5, hairDark)
+        }
+      }
+      crown(hair, back && style === 'long' ? 30 : hairLine, dip)
     }
   }
 
-  if (ph.accessory === 'cap') {
-    cap(a)
-  } else if (ph.accessory === 'peaked_cap') {
-    g.fillStyle(a, 1)
-    g.fillRoundedRect(4.5 * s, y(2), 15 * s, 6 * s, 2 * s)
-    g.fillStyle(0x111111, 1)
-    g.fillRect(6 * s, y(7.5), 12 * s, 2 * s)
-    g.fillStyle(0xf2c94c, 1)
-    g.fillCircle(cx, y(4.8), 1.3 * s)
-    g.lineStyle(line, OUTLINE, 1)
-    g.strokeRoundedRect(4.5 * s, y(2), 15 * s, 6 * s, 2 * s)
+  // The face: two eyes, a little colour on the cheeks, a small smile.
+  if (!back) {
+    ellipse(ctx, cx - 4.5, 15.4, 1.5, 1, 'rgba(235,110,95,0.28)')
+    ellipse(ctx, cx + 4.5, 15.4, 1.5, 1, 'rgba(235,110,95,0.28)')
+    ellipse(ctx, cx - 2.7, 13.5, 0.95, 1.15, INK)
+    ellipse(ctx, cx + 2.7, 13.5, 0.95, 1.15, INK)
+    ctx.beginPath()
+    ctx.arc(cx, 15.3, 1.5, Math.PI * 0.2, Math.PI * 0.8)
+    ctx.lineWidth = 0.55
+    ctx.lineCap = 'round'
+    ctx.strokeStyle = 'rgba(43,47,58,0.75)'
+    ctx.stroke()
+  }
+
+  // A soft rim in a darker skin tone instead of an outline.
+  head()
+  ctx.lineWidth = 0.6
+  ctx.strokeStyle = css(darken(skin, 0.72))
+  ctx.globalAlpha = 0.55
+  ctx.stroke()
+  ctx.globalAlpha = 1
+
+  if (ph.accessory === 'cap') baseballCap(accentN)
+  else if (ph.accessory === 'peaked_cap') {
+    fillRound(ctx, cx - 7.8, 3.4, 15.6, 6.4, 2.6, accent)
+    fillRound(ctx, cx - 7.2, 8.4, 14.4, 1.9, 0.9, '#1c1f2a')
+    if (!back) {
+      ellipse(ctx, cx, 10.3, 7.2, 1.5, '#1c1f2a')
+      ellipse(ctx, cx, 6, 1.4, 1.4, '#f2c94c')
+    }
   }
 }
 
-/** Generates (once) the placeholder textures for a role + skin tone (+ look) and returns the skin. */
+/** Generates (once) the textures for a role + skin tone (+ look) and returns the skin. */
 export function placeholderSkin(
   scene: Phaser.Scene,
   role: Role,
@@ -256,66 +524,64 @@ export function placeholderSkin(
   look: PlaceholderLook = {}
 ): Skin {
   const s = ph.scale && ph.scale > 0 ? ph.scale : 1
-  const { w, h } = dims(s)
-  // Every look parameter is in the key: bake() reuses existing textures by key.
+  // Every look parameter is in the key: textures are reused by key.
   const hd = look.head ? `${look.head.style}.${look.head.hair}.${look.head.skin}` : '-'
-  const sig = `${role}:${ph.accessory}:${look.accent ?? ph.accent}:${s}:${hd}:${look.collar ?? '-'}`
-  const body: [string, string] = [`ph:body:${s}:0`, `ph:body:${s}:1`]
-  const overlay: [string, string] = [`ph:over:${sig}:${tone}:0`, `ph:over:${sig}:${tone}:1`]
-  for (let f = 0; f < 2; f++) {
-    const dy = f === 0 ? 0 : -1
-    bake(scene, body[f], w, h, (g) => drawBody(g, s, dy))
-    bake(scene, overlay[f], w, h, (g) => drawOverlay(g, s, dy, ph, tone, look, role))
-  }
-  return { kind: 'placeholder', shadow: ensureShadow(scene, s), body, overlay, height: h }
+  const overlay = `ph:over:${role}:${ph.accessory}:${look.accent ?? ph.accent}:${hd}:${look.collar ?? '-'}:${tone}`
+  bakeSheet(scene, overlay, FRAME_W, FRAME_H, ['front', 'back'], 2, (ctx, name) => drawOverlay(ctx, name === 'back', ph, tone, look, role))
+  return { kind: 'placeholder', shadow: ensureShadow(scene), body: ensureBody(scene), overlay, height: Math.ceil(BASE_H * s), scale: s / RES }
 }
 
 export function propKey(kind: PropKind): string {
   return `prop:${kind}`
 }
+/** Display scale of the prop textures. */
+export const PROP_SCALE = 1 / RES
 
-/** Three distinct carried items: folder (handoff), report (report), sticky memo (memo). */
+/** The carried items: folder (handoff), report, sticky memo, sealed order. 16x16 map px each, centred. */
 export function ensureProps(scene: Phaser.Scene): void {
-  bake(scene, propKey('handoff'), 12, 10, (g) => {
-    g.fillStyle(0xc98f2a, 1)
-    g.fillRect(1, 1, 5, 2) // tab
-    g.fillStyle(0xe8b04a, 1)
-    g.fillRect(0, 2, 12, 8)
-    g.lineStyle(1, OUTLINE, 1)
-    g.strokeRect(0.5, 2.5, 11, 7)
+  const one = (kind: PropKind, draw: (ctx: Ctx) => void) =>
+    bakeSheet(scene, propKey(kind), 16, 16, ['__BASE'], 1, (ctx) => {
+      fillRoundShadow(ctx)
+      draw(ctx)
+    })
+  const fillRoundShadow = (ctx: Ctx) => ellipse(ctx, 8.4, 13.4, 5.4, 1.3, 'rgba(20,24,40,0.16)')
+  one('handoff', (ctx) => {
+    fillRound(ctx, 2.2, 3.4, 5.6, 3, 1, '#c9902e') // tab
+    fillRound(ctx, 2, 4.8, 12, 8.2, 1.4, '#d9a23c')
+    fillRound(ctx, 2, 6, 12, 7, 1.4, '#efbd58')
   })
-  bake(scene, propKey('report'), 9, 11, (g) => {
-    g.fillStyle(0xffffff, 1)
-    g.fillRect(0, 0, 9, 11)
-    g.fillStyle(0x3d7fd1, 1)
-    g.fillRect(0, 0, 9, 3)
-    g.fillStyle(0x9e9e9e, 1)
-    g.fillRect(2, 5, 5, 1)
-    g.fillRect(2, 7, 5, 1)
-    g.lineStyle(1, OUTLINE, 1)
-    g.strokeRect(0.5, 0.5, 8, 10)
+  one('report', (ctx) => {
+    fillRound(ctx, 3.6, 2.2, 9, 11.4, 1.1, '#fdfdfe')
+    fillRound(ctx, 3.6, 2.2, 9, 3, 1.1, '#5b8def')
+    ctx.fillStyle = '#b9bfcc'
+    ctx.fillRect(5.2, 7, 5.8, 0.8)
+    ctx.fillRect(5.2, 8.8, 5.8, 0.8)
+    ctx.fillRect(5.2, 10.6, 3.8, 0.8)
   })
   // Sealed order envelope (CEO -> manager).
-  bake(scene, propKey('order'), 12, 9, (g) => {
-    g.fillStyle(0xfffdf5, 1)
-    g.fillRect(0, 0, 12, 9)
-    g.lineStyle(1, 0x9e9e9e, 1)
-    g.lineBetween(0.5, 0.5, 6, 5)
-    g.lineBetween(11.5, 0.5, 6, 5)
-    g.fillStyle(0xc0392b, 1)
-    g.fillCircle(6, 5, 1.8)
-    g.lineStyle(1, OUTLINE, 1)
-    g.strokeRect(0.5, 0.5, 11, 8)
+  one('order', (ctx) => {
+    fillRound(ctx, 2, 3.6, 12, 9, 1.2, '#fffdf5')
+    ctx.beginPath()
+    ctx.moveTo(2.4, 4.2)
+    ctx.lineTo(8, 9)
+    ctx.lineTo(13.6, 4.2)
+    ctx.lineWidth = 0.7
+    ctx.strokeStyle = '#c4c0b2'
+    ctx.stroke()
+    ellipse(ctx, 8, 9, 1.9, 1.9, '#c0392b')
   })
-  bake(scene, propKey('memo'), 8, 8, (g) => {
-    g.fillStyle(0xf6e05e, 1)
-    g.fillTriangle(0, 0, 8, 0, 0, 8)
-    g.fillTriangle(8, 0, 8, 5, 0, 8)
-    g.fillTriangle(8, 5, 5, 8, 0, 8)
-    g.fillStyle(0xc9b233, 1)
-    g.fillTriangle(8, 5, 5, 5, 5, 8)
-    g.lineStyle(1, OUTLINE, 1)
-    g.strokeRect(0.5, 0.5, 7, 7)
+  one('memo', (ctx) => {
+    fillRound(ctx, 4, 3.6, 8.4, 8.4, 1, '#f6e05e')
+    ctx.fillStyle = '#dcc23a'
+    ctx.beginPath()
+    ctx.moveTo(12.4, 9)
+    ctx.lineTo(9.4, 12)
+    ctx.lineTo(9.4, 9)
+    ctx.closePath()
+    ctx.fill()
+    ctx.fillStyle = '#b9a22e'
+    ctx.fillRect(5.4, 5.4, 5, 0.7)
+    ctx.fillRect(5.4, 7.1, 3.6, 0.7)
   })
 }
 
@@ -380,7 +646,8 @@ export function sheetSkin(scene: Phaser.Scene, key: string, def: SpriteSheet): S
   const ov = overlayKey(key)
   return {
     kind: 'sheet',
-    shadow: ensureShadow(scene, def.frameWidth / BASE_W),
+    shadow: ensureShadow(scene),
+    shadowScale: def.frameWidth / BASE_W / RES,
     body: key,
     overlay: def.overlay && scene.textures.exists(ov) ? ov : null,
     anims: new Set(Object.keys(def.animations)),

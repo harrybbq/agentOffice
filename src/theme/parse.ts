@@ -18,6 +18,33 @@ export interface FurnitureRect extends Rect {
   label: string
   /** Characters path around it. */
   solid: boolean
+  /** Frame in the theme's furniture atlas ('' = none: drawn as a rectangle). */
+  sprite: string
+  /** Drawn in front of characters standing behind its bottom edge. */
+  ysort: boolean
+  /** Only drawn when the map's pictures can't be used. */
+  fallback: boolean
+}
+
+/** A Tiled image layer: one picture of the floor (and maybe the walls). */
+export interface ImageLayerRef {
+  name: string
+  image: string
+  /** Top-left corner in map px. */
+  x: number
+  y: number
+  /** Image px per map px. */
+  scale: number
+  /** The picture includes the walls: the wall rectangles are not drawn. */
+  walls: boolean
+}
+
+/** A location where a character sits. */
+export interface SeatPoint {
+  x: number
+  y: number
+  /** 'north': facing away from the viewer; 'south': facing the viewer. */
+  facing: 'north' | 'south'
 }
 
 export interface WallRect extends Rect {
@@ -43,6 +70,9 @@ export interface ParsedMap {
   useTiles: boolean
   tilesets: TilesetRef[]
   tileLayers: string[]
+  /** Image layers, bottom first. */
+  images: ImageLayerRef[]
+  seats: SeatPoint[]
   raw: Record<string, unknown>
   warnings: string[]
 }
@@ -112,8 +142,22 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
   const furniture: FurnitureRect[] = []
   const walls: WallRect[] = []
   const locations: Locations = new Map()
+  const images: ImageLayerRef[] = []
+  const seats: SeatPoint[] = []
 
   for (const layer of layers) {
+    if (layer.type === 'imagelayer' && typeof layer.image === 'string' && layer.image && layer.visible !== false) {
+      const scale = num(prop(layer, 'scale'), 1)
+      images.push({
+        name: str(layer.name),
+        image: layer.image,
+        x: num(layer.x) + num(layer.offsetx),
+        y: num(layer.y) + num(layer.offsety),
+        scale: scale > 0 ? scale : 1,
+        walls: prop(layer, 'walls') === true
+      })
+      continue
+    }
     if (layer.type !== 'objectgroup' || !Array.isArray(layer.objects)) continue
     const lname = str(layer.name)
     for (const o of layer.objects) {
@@ -128,6 +172,8 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
         const list = locations.get(type)
         if (list) list.push(p)
         else locations.set(type, [p])
+        const seat = prop(o, 'seat')
+        if (seat === 'north' || seat === 'south') seats.push({ x: p.x, y: p.y, facing: seat })
         continue
       }
       const width = num(o.width)
@@ -147,7 +193,10 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
           color,
           alpha,
           label: str(prop(o, 'label')),
-          solid: prop(o, 'solid') === true
+          solid: prop(o, 'solid') === true,
+          sprite: str(prop(o, 'sprite')),
+          ysort: prop(o, 'ysort') === true,
+          fallback: prop(o, 'fallback') === true
         })
       }
     }
@@ -183,6 +232,8 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
     useTiles: tilesOk,
     tilesets: tilesOk ? tilesets : [],
     tileLayers,
+    images,
+    seats,
     raw: input,
     warnings
   }

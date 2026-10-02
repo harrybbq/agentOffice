@@ -9,3 +9,5 @@ scripts/spikes/agy/logs/
 scripts/spikes/board/logs/
 .claude/worktrees/
 docs/reference/
+# Contains a crop of the reference image (someone else's work): local only.
+docs/art-preview/compare.png

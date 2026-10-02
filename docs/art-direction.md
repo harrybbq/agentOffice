@@ -1,5 +1,11 @@
 # Art direction (research 2026-09-30)
 
+> **Update 2026-10-02.** The user chose self-made art drawn in code (option C in `art-shortlist.md`) with a
+> smooth, flat, soft-shadow look instead of pixel art. What still holds below: orthogonal top-down, 32 px
+> tiles, no legs, the two colour axes and the white body layer. What changed: no dark outlines (a soft rim in
+> a darker shade of the same colour), art drawn at 2x-4x and filtered (`pixelArt: false`, mip-maps) instead of
+> `pixelArt: true`. A preview of one room is in `docs/art-preview/`.
+
 ## Direction: Prison Architect / RimWorld style
 - Orthogonal top-down (not isometric), thick flat walls, and props cheated slightly so their fronts show.
 - Characters have no legs: a rounded body blob with a big oval head on top. Walking is a slide plus a 1 px bob, so there's no walk cycle to draw.

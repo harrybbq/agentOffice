@@ -3,13 +3,44 @@ import Phaser from 'phaser'
 import type { Point } from './roster'
 import { compactQueue, MIN_DWELL_MS } from './queue'
 import type { QueueItem } from './queue'
-import { animKey, propKey } from './charTextures'
-import type { PropKind, Skin } from './charTextures'
+import { animKey, CHAR_ORIGIN_Y, PROP_SCALE, propKey, RES, SEAT_DROP, TEXT_RES, WORLD_FONT } from './charTextures'
+import type { BodyFrame, PropKind, Skin } from './charTextures'
 
 export const WALK_SPEED = 140 // px per second
 const BUBBLE_CHARS = 28
-const WALK_FRAME_MS = 150
+/** One step (a foot change and one bounce). */
+const WALK_FRAME_MS = 210
 const WORK_FRAME_MS = 400
+const TYPE_FRAME_MS = 240
+/** Bounce of a step and the slow rise of breathing, map px. */
+const WALK_BOB = 1.5
+const IDLE_BOB = 0.7
+const IDLE_BOB_MS = 2600
+/** A character on a seat facing the viewer sits this much closer to its desk (map px). */
+const SEAT_PULL = 5
+const BUBBLE_PAD_X = 4
+const BUBBLE_PAD_Y = 1.5
+
+/** 'north': seated facing away from the viewer; 'south': facing the viewer. */
+export type SeatFacing = 'north' | 'south'
+
+/** The procedural character's poses: body frames (two alternate), which side of the head shows. */
+const POSES: Record<string, { frames: readonly [BodyFrame, BodyFrame]; back: boolean; seated: boolean; ms: number }> = {
+  idle: { frames: ['stand', 'stand'], back: false, seated: false, ms: 0 },
+  walk: { frames: ['walkA', 'walkB'], back: false, seated: false, ms: WALK_FRAME_MS },
+  carry: { frames: ['carryA', 'carryB'], back: false, seated: false, ms: WALK_FRAME_MS },
+  work: { frames: ['workA', 'workB'], back: false, seated: false, ms: WORK_FRAME_MS },
+  sit: { frames: ['sitFront', 'sitFront'], back: false, seated: true, ms: 0 },
+  type: { frames: ['typeFrontA', 'typeFrontB'], back: false, seated: true, ms: TYPE_FRAME_MS },
+  sit_back: { frames: ['sitBack', 'sitBack'], back: true, seated: true, ms: 0 },
+  type_back: { frames: ['typeBackA', 'typeBackB'], back: true, seated: true, ms: TYPE_FRAME_MS }
+}
+
+/** The pose for an animation on a seat (or not on one). */
+export function poseName(anim: string, seat: SeatFacing | null): string {
+  if (seat && (anim === 'idle' || anim === 'work')) return (anim === 'work' ? 'type' : 'sit') + (seat === 'north' ? '_back' : '')
+  return anim
+}
 
 export type ActionKind = 'spawn' | 'activity' | 'waiting' | 'relay' | 'done' | 'handoff' | 'return' | 'leave' | 'home' | 'rest'
 
@@ -44,6 +75,8 @@ export interface CharacterOptions {
   findPath: (from: Point, to: Point) => Point[] | null
   /** Team colour pin, for sprite-sheet skins (placeholders bake a collar instead). */
   teamColor?: number
+  /** Is this spot a seat (a map location with `seat`)? Asked whenever the character stops. */
+  seatAt?: (p: Point) => SeatFacing | null
 }
 
 /** None, pointed at, or the one the inspector shows. */
@@ -75,8 +108,15 @@ export class Character {
   private current: Action | null = null
   private phase: Phase = 'idle'
   private anim = 'idle'
+  /** The pose shown (an entry of POSES, or the sheet animation playing). */
+  private pose = 'idle'
   private frame = 0
   private frameClock = 0
+  /** Runs on for the bob; starts at a per-character offset so a room doesn't breathe in step. */
+  private bobClock: number
+  private seatAt?: (p: Point) => SeatFacing | null
+  private shadow: Phaser.GameObjects.Image
+  private propY = 0
   private tween: Phaser.Tweens.Tween | null = null
   private timer: Phaser.Time.TimerEvent | null = null
   private onIdle?: (c: Character) => void
@@ -88,6 +128,8 @@ export class Character {
   /** Ring on the floor under the character (hover / selection). */
   private ring: Phaser.GameObjects.Graphics
   private highlight: Highlight = 'none'
+  private labelBg: Phaser.GameObjects.Graphics
+  private bubbleBg: Phaser.GameObjects.Graphics
   private ringTween: Phaser.Tweens.Tween | null = null
 
   constructor(scene: Phaser.Scene, o: CharacterOptions) {
@@ -96,13 +138,19 @@ export class Character {
     this.skin = o.skin
     this.onIdle = o.onIdle
     this.findPath = o.findPath
+    this.seatAt = o.seatAt
+    let hash = 0
+    for (let i = 0; i < o.id.length; i++) hash = (hash * 31 + o.id.charCodeAt(i)) | 0
+    this.bobClock = Math.abs(hash) % IDLE_BOB_MS
     const h = o.skin.height
 
     this.ring = scene.add.graphics().setVisible(false)
-    const shadow = scene.add.image(0, 0, o.skin.shadow).setOrigin(0.5, 1)
+    const shadow = scene.add.image(0, -1, o.skin.shadow).setOrigin(0.5, 0.5)
+    shadow.setScale(o.skin.kind === 'placeholder' ? o.skin.scale : o.skin.shadowScale)
+    this.shadow = shadow
     if (o.skin.kind === 'placeholder') {
-      this.body = scene.add.sprite(0, 0, o.skin.body[0]).setOrigin(0.5, 1)
-      this.overlay = scene.add.sprite(0, 0, o.skin.overlay[0]).setOrigin(0.5, 1)
+      this.body = scene.add.sprite(0, 0, o.skin.body, 'stand').setOrigin(0.5, CHAR_ORIGIN_Y).setScale(o.skin.scale)
+      this.overlay = scene.add.sprite(0, 0, o.skin.overlay, 'front').setOrigin(0.5, CHAR_ORIGIN_Y).setScale(o.skin.scale)
     } else {
       this.body = scene.add.sprite(0, 0, o.skin.body, 0).setOrigin(0.5, 1)
       this.overlay = o.skin.overlay ? scene.add.sprite(0, 0, o.skin.overlay, 0).setOrigin(0.5, 1) : null
@@ -112,38 +160,34 @@ export class Character {
       o.skin.kind === 'sheet' && o.teamColor !== undefined
         ? scene.add.circle(Math.round(h * -0.18), -Math.round(h * 0.38), 2.5, o.teamColor).setStrokeStyle(1, 0x1e1e24)
         : null
-    this.prop = scene.add.image(Math.round(h * 0.3), -Math.round(h * 0.34), propKey('handoff')).setVisible(false)
+    // Held in both hands in front of the body (at the side on a sprite sheet, which has no such pose).
+    const held = o.skin.kind === 'placeholder'
+    this.prop = scene.add
+      .image(held ? h * 0.05 : Math.round(h * 0.3), -Math.round(h * (held ? 0.29 : 0.34)), propKey('handoff'))
+      .setScale(o.skin.kind === 'placeholder' ? o.skin.scale : PROP_SCALE)
+      .setVisible(false)
+    this.propY = this.prop.y
 
+    // Name: white on a small dark pill. Speech: dark on a white rounded bubble with a tail.
+    this.labelBg = scene.add.graphics()
     this.label = scene.add
-      .text(0, -h - 1, o.name, {
-        fontFamily: 'monospace',
-        fontSize: '9px',
-        color: '#ffffff',
-        stroke: '#1e1e24',
-        strokeThickness: 3,
-        resolution: 2
-      })
+      .text(0, -h - 3, o.name, { fontFamily: WORLD_FONT, fontSize: '9px', fontStyle: '600', color: '#ffffff', resolution: TEXT_RES })
       .setOrigin(0.5, 1)
+    this.bubbleBg = scene.add.graphics().setVisible(false)
     this.bubble = scene.add
-      .text(0, -h - 13, '', {
-        fontFamily: 'monospace',
-        fontSize: '9px',
-        color: '#1e1e24',
-        backgroundColor: '#fffdf5',
-        padding: { x: 3, y: 1 },
-        resolution: 2
-      })
+      .text(0, -h - 19, '', { fontFamily: WORLD_FONT, fontSize: '9px', color: '#2b2f3a', resolution: TEXT_RES })
       .setOrigin(0.5, 1)
       .setVisible(false)
+    this.drawLabel()
     this.badge = scene.add
       .text(Math.round(h * 0.45), -h + 2, '', {
-        fontFamily: 'monospace',
+        fontFamily: WORLD_FONT,
         fontSize: '9px',
         fontStyle: 'bold',
         color: '#ffffff',
         backgroundColor: '#d32f2f',
         padding: { x: 3, y: 1 },
-        resolution: 2
+        resolution: TEXT_RES
       })
       .setOrigin(0.5, 1)
       .setVisible(false)
@@ -151,7 +195,7 @@ export class Character {
     const parts: Phaser.GameObjects.GameObject[] = [this.ring, shadow, this.body]
     if (this.overlay) parts.push(this.overlay)
     if (pin) parts.push(pin)
-    parts.push(this.prop, this.label, this.bubble, this.badge)
+    parts.push(this.prop, this.labelBg, this.label, this.bubbleBg, this.bubble, this.badge)
     this.container = scene.add.container(o.x, o.y, parts)
     this.container.setDepth(o.y)
     this.setAnim('idle')
@@ -169,9 +213,9 @@ export class Character {
   /** World rect of the speech bubble while it shows (station tags make way for it), else null. */
   get bubbleBounds(): { x: number; y: number; width: number; height: number } | null {
     if (this.phase === 'gone' || !this.bubble.visible) return null
-    const w = this.bubble.width
-    const h = this.bubble.height
-    return { x: this.container.x + this.bubble.x - w / 2, y: this.container.y + this.bubble.y - h, width: w, height: h }
+    const w = this.bubble.width + BUBBLE_PAD_X * 2
+    const h = this.bubble.height + BUBBLE_PAD_Y * 2
+    return { x: this.container.x + this.bubble.x - w / 2, y: this.container.y + this.bubble.y - h + BUBBLE_PAD_Y, width: w, height: h }
   }
 
   /** Standing somewhere (not on its way). */
@@ -226,6 +270,7 @@ export class Character {
 
   setName(name: string): void {
     this.label.setText(name)
+    this.drawLabel()
   }
 
   setTint(tint: number): void {
@@ -273,7 +318,7 @@ export class Character {
   say(text: string, ms = 3500, chars = 48): void {
     if (this.phase === 'gone') return
     this.sayTimer?.remove(false)
-    this.bubble.setText(truncate(text, chars)).setVisible(text.length > 0)
+    this.setBubble(truncate(text, chars))
     this.sayTimer = this.scene.time.delayedCall(ms, () => {
       this.sayTimer = null
       if (this.phase === 'gone') return
@@ -309,17 +354,28 @@ export class Character {
 
   tick(deltaMs: number): void {
     if (this.phase === 'gone') return
-    const period = this.anim === 'walk' || this.anim === 'carry' ? WALK_FRAME_MS : this.anim === 'work' ? WORK_FRAME_MS : 0
     if (this.skin.kind !== 'placeholder') return
-    if (period === 0) {
-      if (this.frame !== 0) this.setFrame(0)
-      return
+    const pose = POSES[this.pose] ?? POSES.idle
+    this.bobClock += deltaMs
+    if (pose.ms > 0) {
+      this.frameClock += deltaMs
+      if (this.frameClock >= pose.ms) {
+        this.frameClock -= pose.ms
+        if (this.frameClock >= pose.ms) this.frameClock = 0
+        this.setFrame(this.frame ^ 1)
+      }
     }
-    this.frameClock += deltaMs
-    if (this.frameClock >= period) {
-      this.frameClock = 0
-      this.setFrame(this.frame ^ 1)
-    }
+    // Walking: one soft bounce per step, the whole figure. Otherwise: breathing, mostly the head.
+    const s = this.skin.scale * RES
+    const walking = this.pose === 'walk' || this.pose === 'carry'
+    const up = walking
+      ? Math.sin((this.frameClock / pose.ms) * Math.PI) * WALK_BOB
+      : (0.5 + 0.5 * Math.sin((this.bobClock / IDLE_BOB_MS) * Math.PI * 2)) * IDLE_BOB * (pose.seated ? 0.6 : 1)
+    const base = pose.seated && !pose.back ? SEAT_PULL : 0
+    this.body.y = base - (walking ? up : up * 0.35) * s
+    if (this.overlay) this.overlay.y = base + ((pose.seated ? SEAT_DROP : 0) - up) * s
+    this.shadow.y = base - 1
+    if (this.prop.visible) this.prop.y = this.propY - up * s
   }
 
   destroy(): void {
@@ -474,11 +530,38 @@ export class Character {
 
   private showBubble(a: Action): void {
     const text = [a.verb ?? '', truncate(a.detail ?? '')].filter((s) => s.length > 0).join(' ')
-    this.bubble.setText(text).setVisible(text.length > 0)
+    this.setBubble(text)
   }
 
   private hideBubble(): void {
     this.bubble.setVisible(false)
+    this.bubbleBg.setVisible(false)
+  }
+
+  private setBubble(text: string): void {
+    const on = text.length > 0
+    this.bubble.setText(text).setVisible(on)
+    const g = this.bubbleBg.setVisible(on)
+    g.clear()
+    if (!on) return
+    const w = this.bubble.width + BUBBLE_PAD_X * 2
+    const h = this.bubble.height + BUBBLE_PAD_Y * 2
+    const x = -w / 2
+    const y = this.bubble.y - this.bubble.height - BUBBLE_PAD_Y
+    g.fillStyle(0x1c2238, 0.14)
+    g.fillRoundedRect(x + 0.5, y + 1.2, w, h, 4)
+    g.fillStyle(0xffffff, 1)
+    g.fillRoundedRect(x, y, w, h, 4)
+    g.fillTriangle(-2.6, y + h - 0.2, 2.6, y + h - 0.2, 0, y + h + 2.8)
+  }
+
+  private drawLabel(): void {
+    const g = this.labelBg
+    g.clear()
+    const w = this.label.width + 7
+    const h = this.label.height + 1
+    g.fillStyle(0x1b1e2c, 0.66)
+    g.fillRoundedRect(-w / 2, this.label.y - this.label.height - 0.5, w, h, h / 2)
   }
 
   private setCarry(kind: PropKind | null): void {
@@ -489,13 +572,22 @@ export class Character {
   private setAnim(name: string): void {
     this.anim = name
     this.frameClock = 0
+    // Sitting is a matter of where the character has stopped, not of the activity.
+    const seat = name === 'idle' || name === 'work' ? (this.seatAt?.(this.position) ?? null) : null
+    const pose = poseName(name, seat)
     if (this.skin.kind === 'placeholder') {
+      this.pose = POSES[pose] ? pose : 'idle'
+      this.overlay?.setFrame(POSES[this.pose].back ? 'back' : 'front')
       this.setFrame(0)
+      this.tick(0)
       return
     }
     const skin = this.skin
-    const pick = skin.anims.has(name) ? name : name === 'carry' && skin.anims.has('walk') ? 'walk' : 'idle'
-    if (!skin.anims.has(pick)) return
+    // type_back -> type -> work -> idle; sit_back -> sit -> idle; carry -> walk -> idle.
+    const chain = [pose, pose.replace('_back', ''), name, name === 'carry' ? 'walk' : 'idle', 'idle']
+    const pick = chain.find((n) => skin.anims.has(n))
+    if (!pick) return
+    this.pose = pick
     this.body.play(animKey(skin.body, pick), true)
     if (this.overlay && skin.overlay) this.overlay.play(animKey(skin.overlay, pick), true)
   }
@@ -503,7 +595,6 @@ export class Character {
   private setFrame(f: number): void {
     if (this.skin.kind !== 'placeholder') return
     this.frame = f
-    this.body.setTexture(this.skin.body[f])
-    this.overlay?.setTexture(this.skin.overlay[f])
+    this.body.setFrame((POSES[this.pose] ?? POSES.idle).frames[f])
   }
 }

@@ -236,13 +236,18 @@ export class WorldController {
       }
     })
 
+    const pixel = theme.manifest.art?.filter === 'pixel'
     this.game = new Phaser.Game({
       type: Phaser.AUTO,
       parent: host,
       width: Math.max(2, host.clientWidth),
       height: Math.max(2, host.clientHeight),
-      pixelArt: true,
-      roundPixels: true,
+      // Flat art drawn larger than the map wants filtering and mip-maps (they need power-of-two
+      // textures); a pixel-art theme (art.filter: "pixel") gets nearest-neighbour and whole pixels.
+      pixelArt: pixel,
+      roundPixels: pixel,
+      antialias: !pixel,
+      mipmapFilter: pixel ? '' : 'LINEAR_MIPMAP_LINEAR',
       transparent: s.overlay,
       backgroundColor: s.overlay ? undefined : theme.manifest.background,
       scale: { mode: Phaser.Scale.RESIZE, autoCenter: Phaser.Scale.NO_CENTER },

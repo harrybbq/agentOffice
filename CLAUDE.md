@@ -14,17 +14,27 @@ subagents are workers. See README.md for the full picture.
 
 ## Commands
 - `npm run dev` (hot reload), `npm run build` (what the desktop shortcut runs), `npm test`, `npm run typecheck`
-- `npm run simulate` sends fake teams to a running app; `node scripts/gen-office-map.cjs` regenerates the placeholder maps
+- `npm run simulate` sends fake teams to a running app
+- Office art, all generated: `node scripts/gen-office-map.cjs` (maps), then `npx electron scripts/gen-office-art.cjs`
+  (pictures in `themes/office/art/`), then `npx electron scripts/art-preview.cjs` (screenshots in `docs/art-preview/`)
 
 ## Art / textures (current state)
-- Everything is placeholder: maps are Tiled JSON with coloured rectangles (`furniture`/`walls` object layers),
-  characters are drawn procedurally in `src/scene/charTextures.ts` (Prison-Architect style: no legs, white body
-  tinted with the provider colour, head/outline/accessory untinted, team colour on collar/accessory).
-- Direction is settled in `docs/art-direction.md`: orthogonal top-down, Prison Architect / RimWorld look,
-  32 px tiles, body layer must stay white/grey so tinting works.
-- The theme format already supports real art (tile layers with embedded tilesets, `roles.*.sprite` sheets with
-  an untinted `overlay`), but **those code paths have never been exercised** — expect to fix `src/theme/loader.ts`,
-  `src/scene/blockView.ts`, `src/scene/charTextures.ts` when the first real tileset/sprite sheet lands.
+- Self-made art, drawn in code (no third-party assets): flat colour, rounded shapes, soft shadows, smooth
+  (not pixel) rendering. Style reference and research: `docs/art-direction.md`, `docs/art-shortlist.md` (option C).
+- **Only one room is drawn so far** (a preview, see `docs/art-preview/`): the branch's floor + walls picture, worker
+  desks, chairs, the manager's desk and chair, a plant, the entrance mat. The HQ and every other station
+  (printer, filing cabinet, server rack, whiteboard, sofa, water cooler, photo booth, kanban wall, vault) are still
+  coloured rectangles.
+- How art reaches the scene (format in the header of `shared/theme.ts`): an image layer in the map = floor and
+  walls in one picture; furniture objects name a frame of the theme's atlas with a `sprite` property
+  (`theme.json` `art.furniture`); location property `seat` makes a character sit. Without the pictures the
+  rectangles are drawn, so a theme without art still works.
+- Rendering is smooth: `pixelArt: false` + mip-maps (`src/worldController.ts`), pictures drawn 2x-4x the map's
+  size and **padded to powers of two** (mip-maps need that). A theme can ask for `art.filter: "pixel"`.
+- Characters stay procedural (`src/scene/charTextures.ts`, 2D canvas at 4x): white body tinted with the provider
+  colour; head, hair, face, team-colour collar and accessory on an untinted layer. Poses and the bob are in
+  `src/scene/Character.ts`. Don't bake colour into the body layer.
+- Still never exercised: tile layers with embedded tilesets and `roles.*.sprite` sheets.
 - Themes are read from disk at runtime (`theme://` protocol), so art changes show after switching theme in the
   tray or restarting; code changes need `npm run build` + restart.
 

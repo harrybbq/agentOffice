@@ -3,8 +3,9 @@
 // drops. Demolition runs the other way. Timings come from the scene.
 import Phaser from 'phaser'
 import type { Block } from '../world/layout'
-import { drawTileLayers } from '../theme/loader'
-import type { FurnitureRect, Rect, TileLayer, WallRect } from '../theme/loader'
+import { drawImageLayers, drawTileLayers, FURNITURE_ATLAS, furnitureScale } from '../theme/loader'
+import type { FloorImage, FurnitureRect, Rect, TileLayer, WallRect } from '../theme/loader'
+import { TEXT_RES, WORLD_FONT } from './charTextures'
 import { doorNormal } from './roster'
 import type { Point } from './roster'
 
@@ -43,6 +44,8 @@ export class BlockView {
   private scene: Phaser.Scene
   private depth: number
   private tiles: TileLayer[]
+  /** The map's floor pictures (image layers), when it has them and they loaded. */
+  private images: FloorImage[] = []
   private floor: Phaser.GameObjects.Graphics | null = null
   private areas: FurnitureRect[] = []
   private areaLabels: { text: Phaser.GameObjects.Text; at: Point }[] = []
@@ -69,34 +72,49 @@ export class BlockView {
     const d = o.depth
 
     this.tiles = drawTileLayers(scene, block, d)
-    if (this.tiles.length === 0) {
-      this.areas = block.furniture.filter((f) => !f.solid)
-      this.floor = scene.add.graphics().setDepth(d)
+    if (this.tiles.length === 0) this.images = drawImageLayers(scene, block, d)
+    // With a floor from the theme (tiles or pictures) the stand-in rectangles marked `fallback` go.
+    const art = this.tiles.length > 0 || this.images.length > 0
+    const atlas = furnitureScale(scene)
+    const frames = atlas > 0 ? scene.textures.get(FURNITURE_ATLAS) : null
+    const sprite = (f: FurnitureRect) => !!f.sprite && !!frames && frames.has(f.sprite)
+    {
+      const shown = block.furniture.filter((f) => !(art && f.fallback))
+      this.areas = shown.filter((f) => !f.solid && !sprite(f))
+      this.floor = scene.add.graphics().setDepth(d + 0.1)
       for (const f of this.areas) {
         if (!f.label) continue
         const at = { x: f.x + f.width / 2, y: f.y + 3 }
         const text = scene.add
-          .text(at.x, at.y, f.label, { fontFamily: 'monospace', fontSize: '10px', color: '#1d1d1d', resolution: 2 })
+          .text(at.x, at.y, f.label, { fontFamily: WORLD_FONT, fontSize: '10px', color: '#1d1d1d', resolution: TEXT_RES })
           .setOrigin(0.5, 0)
           .setAlpha(0.55)
           .setDepth(d + 2)
         this.areaLabels.push({ text, at })
       }
-      for (const f of block.furniture.filter((x) => x.solid)) this.items.push({ rect: f, obj: this.makeItem(f, d + 0.5) })
+      for (const f of shown) {
+        if (sprite(f)) {
+          // Flat things (a mat, a chair's seat) lie under the solid ones; `ysort` ones stand in front
+          // of whoever is behind their bottom edge.
+          const depth = f.ysort ? f.y + f.height : f.solid ? d + 0.5 : d + 0.3
+          this.items.push({ rect: f, obj: this.makeSprite(f, depth, atlas) })
+        } else if (f.solid) this.items.push({ rect: f, obj: this.makeItem(f, d + 0.5) })
+      }
     }
-    this.wallList = block.walls
+    // Walls painted on the floor picture are not drawn again (they still block walking).
+    this.wallList = this.images.some((i) => i.ref.walls) ? [] : block.walls
     this.walls = scene.add.graphics().setDepth(d + 1)
 
     const isHq = block.kind === 'hq'
     this.signY = block.offset.y - 6
     this.signText = scene.add
       .text(0, 0, '', {
-        fontFamily: 'monospace',
+        fontFamily: WORLD_FONT,
         fontSize: '13px',
         color: '#f4f1ea',
         backgroundColor: 'rgba(20, 22, 32, 0.85)',
         padding: { left: isHq ? 6 : 30, right: 6, top: 2, bottom: 2 },
-        resolution: 2
+        resolution: TEXT_RES
       })
       .setOrigin(0.5, 1)
     this.signSwatch = isHq ? null : scene.add.rectangle(0, 0, 10, 10, 0xffffff).setStrokeStyle(1, 0x000000, 0.6)
@@ -190,7 +208,7 @@ export class BlockView {
       this.wallsProgress = 1 - v
       this.redrawWalls()
     })
-    const fading: Phaser.GameObjects.GameObject[] = [...this.tiles, ...this.areaLabels.map((l) => l.text)]
+    const fading: Phaser.GameObjects.GameObject[] = [...this.tiles, ...this.images.map((i) => i.image), ...this.areaLabels.map((l) => l.text)]
     if (this.floor) fading.push(this.floor)
     await this.tween({ targets: fading, alpha: 0, duration: t.floorMs, ease: 'Sine.easeIn' })
     this.destroy()
@@ -198,6 +216,7 @@ export class BlockView {
 
   destroy(): void {
     for (const t of this.tiles) t.destroy()
+    for (const i of this.images) i.image.destroy()
     this.floor?.destroy()
     for (const l of this.areaLabels) l.text.destroy()
     for (const it of this.items) it.obj.destroy()
@@ -228,6 +247,21 @@ export class BlockView {
           tile.visible = has({ x: layer.x + tile.pixelX + tile.width / 2, y: layer.y + tile.pixelY + tile.height / 2 })
         }
       }
+    }
+    for (const { image, ref } of this.images) {
+      image.setVisible(!!shown)
+      if (!shown) continue
+      if (this.wipe >= 1) {
+        image.setCrop()
+        continue
+      }
+      // Cut at the wipe's leading edge only: the picture may stick out past the block on the others.
+      const n = this.from
+      const x0 = n.x > 0 ? (shown.x - image.x) * ref.scale : 0
+      const y0 = n.y > 0 ? (shown.y - image.y) * ref.scale : 0
+      const x1 = n.x < 0 || (n.x === 0 && n.y === 0) ? (shown.x + shown.width - image.x) * ref.scale : image.width
+      const y1 = n.y < 0 ? (shown.y + shown.height - image.y) * ref.scale : image.height
+      image.setCrop(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0))
     }
     for (const l of this.areaLabels) l.text.setVisible(has(l.at))
     const g = this.floor
@@ -293,22 +327,34 @@ export class BlockView {
     return { x: r.x + r.width * (0.5 + n.x * 0.5), y: r.y + r.height * (0.5 + n.y * 0.5) }
   }
 
+  /** A picture from the theme's furniture atlas; its pivot sits on the centre of the rectangle. */
+  private makeSprite(f: FurnitureRect, depth: number, atlasScale: number): Phaser.GameObjects.Container {
+    const img = this.scene.add.image(0, 0, FURNITURE_ATLAS, f.sprite)
+    const frame = img.frame
+    img.setOrigin(frame.customPivot ? frame.pivotX : 0.5, frame.customPivot ? frame.pivotY : 0.5).setScale(1 / atlasScale)
+    return this.scene.add.container(f.x + f.width / 2, f.y + f.height / 2, [img]).setDepth(depth)
+  }
+
   private makeItem(f: FurnitureRect, depth: number): Phaser.GameObjects.Container {
     const g = this.scene.add.graphics()
     const w = f.width
     const h = f.height
+    const rad = Math.min(3, w / 2, h / 2)
+    // A stand-in block: soft shadow, rounded body, a darker front so it reads as an object.
+    g.fillStyle(0x1c2238, 0.1)
+    g.fillRoundedRect(-w / 2 + 1, -h / 2 + 2, w + 1, h + 1.5, rad + 1)
+    g.fillRoundedRect(-w / 2 + 0.5, -h / 2 + 1, w + 0.5, h + 1, rad)
     g.fillStyle(f.color, f.alpha)
-    g.fillRect(-w / 2, -h / 2, w, h)
-    // Cheat a front face so props read as objects rather than floor patches.
+    g.fillRoundedRect(-w / 2, -h / 2, w, h, rad)
     if (w <= 128 && h <= 96 && h >= 12) {
       g.fillStyle(0x000000, 0.12)
-      g.fillRect(-w / 2, h / 2 - 3, w, 3)
+      g.fillRoundedRect(-w / 2, h / 2 - 3.5, w, 3.5, { tl: 0, tr: 0, bl: rad, br: rad })
     }
     const parts: Phaser.GameObjects.GameObject[] = [g]
     if (f.label) {
       parts.push(
         this.scene.add
-          .text(0, -h / 2 + 3, f.label, { fontFamily: 'monospace', fontSize: '10px', color: '#1d1d1d', resolution: 2 })
+          .text(0, -h / 2 + 3, f.label, { fontFamily: WORLD_FONT, fontSize: '10px', color: '#1d1d1d', resolution: TEXT_RES })
           .setOrigin(0.5, 0)
           .setAlpha(0.55)
       )

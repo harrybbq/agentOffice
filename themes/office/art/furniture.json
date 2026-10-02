@@ -1,0 +1,230 @@
+{
+ "frames": {
+  "desk": {
+   "frame": {
+    "x": 4,
+    "y": 4,
+    "w": 320,
+    "h": 212
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 320,
+    "h": 212
+   },
+   "sourceSize": {
+    "w": 320,
+    "h": 212
+   },
+   "pivot": {
+    "x": 0.5,
+    "y": 0.5283
+   }
+  },
+  "desk_b": {
+   "frame": {
+    "x": 328,
+    "y": 4,
+    "w": 320,
+    "h": 212
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 320,
+    "h": 212
+   },
+   "sourceSize": {
+    "w": 320,
+    "h": 212
+   },
+   "pivot": {
+    "x": 0.5,
+    "y": 0.5283
+   }
+  },
+  "desk_c": {
+   "frame": {
+    "x": 652,
+    "y": 4,
+    "w": 320,
+    "h": 212
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 320,
+    "h": 212
+   },
+   "sourceSize": {
+    "w": 320,
+    "h": 212
+   },
+   "pivot": {
+    "x": 0.5,
+    "y": 0.5283
+   }
+  },
+  "desk_manager": {
+   "frame": {
+    "x": 4,
+    "y": 220,
+    "w": 448,
+    "h": 220
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 448,
+    "h": 220
+   },
+   "sourceSize": {
+    "w": 448,
+    "h": 220
+   },
+   "pivot": {
+    "x": 0.5,
+    "y": 0.54545
+   }
+  },
+  "chair_seat": {
+   "frame": {
+    "x": 456,
+    "y": 220,
+    "w": 146,
+    "h": 141
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 146,
+    "h": 141
+   },
+   "sourceSize": {
+    "w": 146,
+    "h": 141
+   },
+   "pivot": {
+    "x": 0.49863,
+    "y": 0.47092
+   }
+  },
+  "chair_back": {
+   "frame": {
+    "x": 606,
+    "y": 220,
+    "w": 138,
+    "h": 95
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 138,
+    "h": 95
+   },
+   "sourceSize": {
+    "w": 138,
+    "h": 95
+   },
+   "pivot": {
+    "x": 0.49855,
+    "y": 0.45474
+   }
+  },
+  "chair_manager": {
+   "frame": {
+    "x": 748,
+    "y": 220,
+    "w": 159,
+    "h": 186
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 159,
+    "h": 186
+   },
+   "sourceSize": {
+    "w": 159,
+    "h": 186
+   },
+   "pivot": {
+    "x": 0.49811,
+    "y": 0.47742
+   }
+  },
+  "plant": {
+   "frame": {
+    "x": 4,
+    "y": 444,
+    "w": 162,
+    "h": 166
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 162,
+    "h": 166
+   },
+   "sourceSize": {
+    "w": 162,
+    "h": 166
+   },
+   "pivot": {
+    "x": 0.49877,
+    "y": 0.51084
+   }
+  },
+  "mat": {
+   "frame": {
+    "x": 170,
+    "y": 444,
+    "w": 288,
+    "h": 164
+   },
+   "rotated": false,
+   "trimmed": false,
+   "spriteSourceSize": {
+    "x": 0,
+    "y": 0,
+    "w": 288,
+    "h": 164
+   },
+   "sourceSize": {
+    "w": 288,
+    "h": 164
+   },
+   "pivot": {
+    "x": 0.5,
+    "y": 0.4878
+   }
+  }
+ },
+ "meta": {
+  "app": "scripts/gen-office-art.cjs",
+  "image": "furniture.png",
+  "format": "RGBA8888",
+  "size": {
+   "w": 1024,
+   "h": 1024
+  },
+  "scale": "4"
+ }
+}
