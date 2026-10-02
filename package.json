@@ -17,6 +17,7 @@
     "test": "tsx tests/roster.test.ts"
   },
   "dependencies": {
+    "node-pty": "1.2.0-beta.15",
     "ws": "^8.22.0"
   },
   "devDependencies": {
