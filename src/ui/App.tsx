@@ -7,6 +7,7 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { OrderBar } from './components/OrderBar'
 import { Inbox } from './components/Inbox'
 import { Panel, Splitter } from './components/Panel'
+import { PreviewPane, usePreviewFootprint } from './components/PreviewPane'
 import { Sidebar } from './components/Sidebar'
 import { StatusBar } from './components/StatusBar'
 import { WorldView } from './components/WorldView'
@@ -23,7 +24,8 @@ export function App() {
   const dialog = useAppState((s) => s.dialog)
   const layout = useAppState((s) => s.layout)
   const overlay = useAppState((s) => s.settings?.overlay ?? false)
-  const width = useWindowWidth()
+  // The preview pane (left of the office) takes its share of the window before the dock is chosen.
+  const width = useWindowWidth() - usePreviewFootprint()
   const workspace = useRef<HTMLDivElement>(null)
   const dock = layout.dock === 'auto' ? (width >= AUTO_DOCK_RIGHT_MIN ? 'right' : 'bottom') : layout.dock
   // Docked right, the inbox sits above the terminal; otherwise it floats over the world.
@@ -63,6 +65,7 @@ export function App() {
     <div className={cx('app', overlay && 'is-overlay')}>
       <div className="app-main">
         <Sidebar />
+        {!overlay && <PreviewPane />}
         <div className={cx('workspace', `dock-${dock}`)} ref={workspace}>
           <div className="stage">
             <WorldView floatingInbox={!inboxInSide} />

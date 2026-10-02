@@ -28,7 +28,9 @@ export class PtyHostClient implements PtyHost {
    */
   constructor(
     private readonly hostPath: string,
-    private readonly onData: (id: string, data: string) => void
+    private readonly onData: (id: string, data: string) => void,
+    /** Addresses of local web servers a terminal printed (for the preview pane). */
+    private readonly onAddresses?: (id: string, urls: string[]) => void
   ) {}
 
   private ensure(): Promise<void> {
@@ -86,6 +88,9 @@ export class PtyHostClient implements PtyHost {
     switch (m.t) {
       case 'data':
         this.onData(m.id, m.data)
+        break
+      case 'addresses':
+        if (this.entries.has(m.id) && Array.isArray(m.urls)) this.onAddresses?.(m.id, m.urls)
         break
       case 'title':
         this.entries.get(m.id)?.handlers.onTitle?.(m.title)

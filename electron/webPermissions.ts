@@ -4,9 +4,13 @@
 
 const ALLOWED: ReadonlySet<string> = new Set(['clipboard-sanitized-write', 'clipboard-read'])
 
-/** `ours`: the request comes from the app's own window (never a webview, popup or other page). */
-export function allowWebPermission(permission: string, ours: boolean): boolean {
-  return ours && ALLOWED.has(permission)
+/**
+ * `ours`: the request comes from the app's own window (never a webview, popup or other page).
+ * `mainFrame`: it comes from the window's own page, not from a frame inside it: the preview pane
+ * shows other pages in a frame of the same window, and those get nothing.
+ */
+export function allowWebPermission(permission: string, ours: boolean, mainFrame = true): boolean {
+  return ours && mainFrame === true && ALLOWED.has(permission)
 }
 
 /** Absolute http(s) URL without credentials: safe to hand to the system browser. */

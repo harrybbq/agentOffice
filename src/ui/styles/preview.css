@@ -1,0 +1,415 @@
+/* The live preview pane (components/PreviewPane.tsx): between the sidebar and the office. */
+
+/* ---- collapsed: a rail ------------------------------------------------------------------- */
+.preview-rail {
+  flex: none;
+  width: 30px;
+  display: flex;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.preview-rail-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+}
+.preview-rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.preview-rail-label {
+  writing-mode: vertical-rl;
+  font-size: 12px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+}
+
+/* ---- open -------------------------------------------------------------------------------- */
+.preview {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+}
+.preview-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.preview-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.preview-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.preview-page {
+  color: var(--text-3);
+  font-weight: 400;
+}
+.preview-updated {
+  flex: none;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.preview-tools {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+.preview .icon-btn.is-on {
+  background: var(--accent-weak);
+  color: var(--accent-text);
+}
+.preview .icon-btn:disabled {
+  opacity: 0.35;
+  background: none;
+  color: var(--text-3);
+}
+
+/* Status dot: starting (amber, breathing), live (green), unreachable (red). */
+.preview-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.preview-dot.is-starting {
+  background: var(--warn);
+  animation: preview-breathe 1.2s ease-in-out infinite;
+}
+.preview-dot.is-live {
+  background: var(--ok);
+}
+.preview-dot.is-unreachable {
+  background: var(--danger);
+}
+.preview-dot.is-found {
+  background: var(--accent);
+}
+/* The page just changed: one soft ring. */
+.preview-dot.is-live.is-pulse {
+  animation: preview-pulse 0.9s var(--ease) 1;
+}
+@keyframes preview-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 9px transparent;
+  }
+}
+@keyframes preview-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.preview-address {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 6px 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.preview-address-input {
+  flex: 1;
+  height: 26px;
+  margin-right: 4px;
+}
+.preview-devices {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.preview-device {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 550;
+}
+.preview-device:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.preview-device.is-active {
+  background: var(--surface-active);
+  color: var(--text);
+}
+.preview-device-px {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.preview-error {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 6px 7px 12px;
+  background: var(--danger-weak);
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+  user-select: text;
+}
+.preview-notice {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 6px 7px 12px;
+  background: var(--accent-weak);
+  color: var(--accent-text);
+  border-bottom: 1px solid var(--border);
+}
+.preview-notice .icon-btn,
+.preview-error .icon-btn {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: inherit;
+}
+
+.preview-body {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.preview-stage {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.preview-frame {
+  position: absolute;
+  top: 0;
+  border: 0;
+  /* A page without a background of its own is white, as in a browser. */
+  background: #fff;
+  color-scheme: light;
+  transform-origin: 0 0;
+}
+.preview-stage.is-device .preview-frame {
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.preview-scale {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--float);
+  box-shadow: var(--shadow-float);
+  color: var(--text-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+/* While a splitter is dragged the frame must not swallow the pointer. */
+body.resizing-x .preview-frame,
+body.resizing-y .preview-frame {
+  pointer-events: none;
+}
+
+.preview-quiet,
+.preview-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  color: var(--text-2);
+  text-align: center;
+}
+.preview-quiet {
+  flex: 1;
+}
+.preview-fallback {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  user-select: text;
+}
+.preview-quiet-title {
+  color: var(--text);
+  font-weight: 600;
+}
+.preview-fallback p {
+  max-width: 340px;
+}
+.preview-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.preview-spinner {
+  width: 18px;
+  height: 18px;
+  margin-bottom: 6px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: preview-spin 0.8s linear infinite;
+}
+@keyframes preview-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- empty state: how to get a preview --------------------------------------------------- */
+.preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 12px;
+  overflow-y: auto;
+}
+.preview-empty-title {
+  margin-bottom: 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.preview-empty-hint {
+  padding: 2px 2px 6px;
+  color: var(--text-3);
+}
+.preview-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.preview-option.is-found {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+  background: var(--ok-weak);
+}
+.preview-option.is-stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.preview-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.preview-option-title {
+  font-weight: 600;
+}
+.preview-option-title code {
+  font: 12px/1.3 var(--mono);
+  user-select: text;
+}
+.preview-option-note {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.preview-option .btn {
+  flex: none;
+}
+.preview-scripts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.preview-script {
+  font: 12px/1 var(--mono);
+}
+.preview-typed {
+  display: flex;
+  gap: 6px;
+}
+.preview-typed .input {
+  flex: 1;
+  height: 26px;
+}
+
+/* ---- the script's output ----------------------------------------------------------------- */
+.preview-log {
+  flex: none;
+  border-top: 1px solid var(--border);
+}
+.preview-log summary {
+  padding: 6px 12px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.preview-log summary:hover {
+  color: var(--text);
+}
+.preview-log-cmd {
+  margin-left: 6px;
+  color: var(--text-3);
+  font: 11.5px/1 var(--mono);
+  font-weight: 400;
+}
+.preview-log pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 8px 12px 10px;
+  overflow: auto;
+  background: var(--term-bg);
+  color: var(--text-2);
+  font: 11.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .preview-dot,
+  .preview-spinner {
+    animation: none !important;
+  }
+}

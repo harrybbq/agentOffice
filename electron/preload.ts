@@ -4,6 +4,7 @@ import type { AgentEvent } from '../shared/events'
 import { IPC, type AgentOfficeBridge, type RendererSettings } from '../shared/ipc'
 import type { BoardSettings, BoardSnapshot } from '../shared/board'
 import type { ChatEvent } from '../shared/chat'
+import { PREVIEW_IPC, type PreviewBlocked, type PreviewInfo } from '../shared/preview'
 import type { PermissionRequestInfo, ProviderInfo, SessionInfo } from '../shared/sessions'
 
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -75,6 +76,23 @@ const bridge: AgentOfficeBridge = {
     list: () => ipcRenderer.invoke(IPC.listPermissions),
     decide: (id, decision) => ipcRenderer.invoke(IPC.decidePermission, id, decision),
     onChanged: (cb) => subscribe<PermissionRequestInfo[]>(IPC.permissionsChanged, cb)
+  },
+
+  // The live preview pane (shared/preview.ts). The main process validates every argument.
+  preview: {
+    get: (id) => ipcRenderer.invoke(PREVIEW_IPC.get, id),
+    suggestions: (id) => ipcRenderer.invoke(PREVIEW_IPC.suggestions, id),
+    open: (id, url) => ipcRenderer.invoke(PREVIEW_IPC.open, id, url),
+    staticEntries: (id) => ipcRenderer.invoke(PREVIEW_IPC.staticEntries, id),
+    serveFolder: (id, entry) => ipcRenderer.invoke(PREVIEW_IPC.serveFolder, id, entry),
+    scripts: (id) => ipcRenderer.invoke(PREVIEW_IPC.scripts, id),
+    run: (id, name) => ipcRenderer.invoke(PREVIEW_IPC.run, id, name),
+    log: (id) => ipcRenderer.invoke(PREVIEW_IPC.log, id),
+    stop: (id) => ipcRenderer.invoke(PREVIEW_IPC.stop, id),
+    onChanged: (cb) => subscribe<PreviewInfo>(PREVIEW_IPC.changed, cb),
+    onReload: (cb) => subscribe<string>(PREVIEW_IPC.reload, cb),
+    onDetected: (cb) => subscribe<string>(PREVIEW_IPC.detected, cb),
+    onBlocked: (cb) => subscribe<PreviewBlocked>(PREVIEW_IPC.blocked, cb)
   }
 }
 

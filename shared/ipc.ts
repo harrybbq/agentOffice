@@ -5,6 +5,7 @@ import type { OrderRequest, OrderResult } from './orders'
 import type { BoardSettings, BoardSnapshot } from './board'
 import type { ChatEvent, ChatItem } from './chat'
 import type { RestoreSettings, SavedSession } from './restore'
+import type { PreviewBridge } from './preview'
 import type {
   PermissionDecision,
   PermissionOutcome,
@@ -226,6 +227,9 @@ export interface AgentOfficeBridge {
     decide(id: string, decision: PermissionDecision): Promise<PermissionOutcome>
     onChanged(cb: (pending: PermissionRequestInfo[]) => void): () => void
   }
+
+  /** The live preview pane (shared/preview.ts). Absent with a main process from before it existed. */
+  preview?: PreviewBridge
 }
 
 declare global {
