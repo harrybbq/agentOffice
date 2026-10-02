@@ -4,6 +4,8 @@ import { app } from 'electron'
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { BoardSettings } from '../shared/board'
+import { DEFAULT_BOARD_SETTINGS, normaliseBoardSettings } from './board'
 
 // Must run before app 'ready' and before anything reads userData. main.ts imports this module first.
 // AGENT_OFFICE_USER_DATA (testing): run a second, isolated instance with its own config/token/port.
@@ -19,6 +21,8 @@ export interface AppConfig {
   allowOrders: boolean
   /** Office-wide CEO orders end after this many minutes at the latest. */
   officeWideMinutes: number
+  /** The office board: the master switch and what happens on a conflicting edit (shared/board.ts). */
+  board: BoardSettings
 }
 
 export const DEFAULT_PORT = 47821
@@ -39,7 +43,8 @@ function defaults(): AppConfig {
     alwaysOnTop: false,
     overlay: false,
     allowOrders: true,
-    officeWideMinutes: 10
+    officeWideMinutes: 10,
+    board: { ...DEFAULT_BOARD_SETTINGS }
   }
 }
 
@@ -66,8 +71,11 @@ function normalise(raw: unknown): { cfg: AppConfig; changed: boolean } {
       typeof o.officeWideMinutes === 'number' && o.officeWideMinutes >= 1 && o.officeWideMinutes <= 240,
       o.officeWideMinutes,
       d.officeWideMinutes
-    )
+    ),
+    board: normaliseBoardSettings(o.board)
   }
+  // A missing or half-valid board section is written back in full.
+  if (JSON.stringify(cfg.board) !== JSON.stringify(o.board)) changed = true
   return { cfg, changed }
 }
 

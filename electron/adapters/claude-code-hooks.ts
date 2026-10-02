@@ -11,6 +11,7 @@
 import type { Activity, AgentEvent } from '../../shared/events'
 import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { subagentId } from '../../shared/sessions'
+import { isClaudeBoardTool } from '../boardMcp'
 import type { EventSink, HttpAdapter, RequestContext } from './types'
 
 export const CLAUDE_PROVIDER = 'claude-code'
@@ -54,7 +55,13 @@ export const DEFAULT_TOOL_ACTIVITY: Activity = 'exec'
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
 
+/** What a character is shown doing while its agent uses an office-board tool (any provider). */
+export const BOARD_ACTIVITY: Activity = 'read'
+export const BOARD_ACTIVITY_DETAIL = 'checking the board'
+
 export function activityForTool(toolName: string, toolInput?: unknown): Activity {
+  // The app's own board tools: looking something up, not a trip to the server room.
+  if (isClaudeBoardTool(toolName)) return BOARD_ACTIVITY
   if (CAPTURE_TOOL_PATTERN.test(toolName)) return 'capture'
   // Computer-use / browser MCP tools take the action as an argument: { action: "screenshot" }.
   if (toolName.startsWith('mcp__') && isRecord(toolInput)) {
@@ -72,6 +79,7 @@ const oneLine = (s: string, max = DETAIL_MAX): string => {
 /** The file path / command / URL of a tool call, on one line, truncated. */
 export function toolDetail(toolName: string, toolInput: unknown): string {
   if (DELEGATING_TOOLS.includes(toolName)) return 'delegating'
+  if (isClaudeBoardTool(toolName)) return BOARD_ACTIVITY_DETAIL
   if (!isRecord(toolInput)) return ''
   for (const key of ['file_path', 'notebook_path', 'path', 'command', 'url', 'query', 'pattern']) {
     const v = toolInput[key]

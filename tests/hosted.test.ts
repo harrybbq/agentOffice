@@ -615,8 +615,9 @@ await t('claude driver: settings file, args, env scrub, typed-prompt fallback', 
     assert.equal(h.url, 'http://127.0.0.1:4321/hooks/claude-code')
     assert.deepEqual(h.headers, { 'X-Agent-Office-Token': '$AO_TOKEN', 'X-Agent-Office-Session': '$AO_SESSION' })
     assert.deepEqual(h.allowedEnvVars, ['AO_TOKEN', 'AO_SESSION'])
-    // The user may take an hour over a permission; nothing else may stall Claude.
-    assert.equal(h.timeout, event === 'PermissionRequest' ? 3600 : 5)
+    // The user may take an hour over a permission; nothing else may stall Claude. A prompt waits
+    // for its hook (the office board's digest rides on the answer), so that one gets 2 s.
+    assert.equal(h.timeout, event === 'PermissionRequest' ? 3600 : event === 'UserPromptSubmit' ? 2 : 5)
     assert.equal(entries[0].matcher, ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'].includes(event) ? '*' : undefined)
   }
   // A hosted session can't list or message the user's other Claude Code sessions.
@@ -634,6 +635,10 @@ await t('claude driver: settings file, args, env scrub, typed-prompt fallback', 
   ])
   assert.deepEqual(claudeArgs(start, 'f', 'C:\\s\\x.briefing.md'), [
     '--settings', 'f', '--permission-mode', 'acceptEdits', '--append-system-prompt-file', 'C:\\s\\x.briefing.md'
+  ])
+  // The office board's MCP server is added to the user's own: never `--strict-mcp-config`.
+  assert.deepEqual(claudeArgs({ ...start, model: 'opus' }, 'f', 'b.md', 'C:\\s\\x.mcp.json'), [
+    '--settings', 'f', '--permission-mode', 'acceptEdits', '--append-system-prompt-file', 'b.md', '--mcp-config', 'C:\\s\\x.mcp.json', '--model', 'opus'
   ])
 
   // The briefing: short, names the team, explains the order tag once, carries no secret and no orders to obey.
@@ -682,6 +687,7 @@ await t('claude driver: settings file, args, env scrub, typed-prompt fallback', 
   const stale = mkdtempSync(join(tmpdir(), 'agent-office-sweep-'))
   writeFileSync(join(stale, 's-dead.settings.json'), '{}')
   writeFileSync(join(stale, 's-dead.briefing.md'), 'x')
+  writeFileSync(join(stale, 's-dead.mcp.json'), '{}')
   writeFileSync(join(stale, 'keep.txt'), 'x')
   sweepSessionFiles(stale)
   assert.deepEqual(readdirSync(stale), ['keep.txt'])

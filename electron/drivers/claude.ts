@@ -20,8 +20,9 @@ import {
   type HostedHookTarget
 } from '../adapters/claude-code-hooks'
 import type { RequestContext } from '../adapters/types'
+import { BOARD_SERVER_CLAUDE, CLAUDE_BOARD_ALLOW } from '../boardMcp'
 import { DEFAULT_DENY_MESSAGE, describeToolInput } from '../permissions'
-import { plainPermission } from '../../shared/permissionText'
+import { plainPermission, type PlainPermission } from '../../shared/permissionText'
 import { claudeBriefing, taggedOrder } from './claudeBriefing'
 import type { SessionInbox } from '../sessionInbox'
 import { SessionStateMachine, titleHint, type Scheduler } from './sessionState'
@@ -42,7 +43,16 @@ export const CLAUDE_LABEL = 'Claude Code'
 export const PERMISSION_HOOK_TIMEOUT_S = 3600
 /** Seconds. Observation hooks must never stall Claude when the app is gone or slow. */
 export const OBSERVE_HOOK_TIMEOUT_S = 5
+/**
+ * Seconds. The prompt waits for this hook (it carries the office board's digest), and Claude prints
+ * a notice when it times out: the digest is built from memory, so 2 s is already generous.
+ */
+export const PROMPT_HOOK_TIMEOUT_S = 2
 export const SESSION_START_HOOK_TIMEOUT_S = 10
+/** The env var a hosted session's board token is in; `--mcp-config` expands it into a header. */
+export const BOARD_TOKEN_ENV = 'AO_BOARD_TOKEN'
+/** The tools that change a file: what the office board records, and what a conflict warning stops once. */
+export const EDIT_TOOLS: readonly string[] = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit']
 /** How long an order sent to an idle session may take to show up as a UserPromptSubmit. */
 export const PROMPT_CONFIRM_MS = 6000
 /** Bracketed paste collapses into a "[Pasted text]" attachment at 4+ lines or somewhere past 400 chars. */
@@ -88,7 +98,7 @@ export function scrubbedEnv(base: NodeJS.ProcessEnv): Record<string, string> {
 export const DENIED_TOOLS: readonly string[] = ['ListAgents', 'SendMessage']
 
 export interface ClaudeSettings {
-  permissions: { deny: string[] }
+  permissions: { deny: string[]; allow?: string[] }
   /** No discovery of sessions on other machines either. */
   isolatePeerMachines: true
   hooks: Record<string, unknown[]>
@@ -98,8 +108,10 @@ export interface ClaudeSettings {
  * The settings passed with `--settings`. Hooks and deny rules from this file are ADDED to the
  * user's own. It holds the app's port and a script path, but no secret: the token is read from the
  * env var `AO_TOKEN`.
+ * `boardTools`: the session has the office board's MCP server, and may use its five tools without
+ * a permission prompt (they only read and write the board).
  */
-export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string }): ClaudeSettings {
+export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string; boardTools?: boolean }): ClaudeSettings {
   const hooks: Record<string, unknown[]> = {}
   // SessionStart can't be an http hook, and only a command hook sees the inbox socket + token.
   hooks.SessionStart = [
@@ -117,7 +129,8 @@ export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string
     const hook = {
       type: 'http',
       url: opts.hooksUrl,
-      timeout: event === 'PermissionRequest' ? PERMISSION_HOOK_TIMEOUT_S : OBSERVE_HOOK_TIMEOUT_S,
+      timeout:
+        event === 'PermissionRequest' ? PERMISSION_HOOK_TIMEOUT_S : event === 'UserPromptSubmit' ? PROMPT_HOOK_TIMEOUT_S : OBSERVE_HOOK_TIMEOUT_S,
       headers: { 'X-Agent-Office-Token': '$AO_TOKEN', 'X-Agent-Office-Session': '$AO_SESSION' },
       allowedEnvVars: ['AO_TOKEN', 'AO_SESSION']
     }
@@ -125,15 +138,28 @@ export function buildClaudeSettings(opts: { hooksUrl: string; hookScript: string
   }
   // `crossSessionInbound` is left unset on purpose: "refuse" keeps the inbox socket bound but drops
   // every message, which would also drop the app's own orders.
-  return { permissions: { deny: [...DENIED_TOOLS] }, isolatePeerMachines: true, hooks }
+  const permissions: ClaudeSettings['permissions'] = { deny: [...DENIED_TOOLS] }
+  if (opts.boardTools) permissions.allow = [...CLAUDE_BOARD_ALLOW]
+  return { permissions, isolatePeerMachines: true, hooks }
+}
+
+/**
+ * The file passed with `--mcp-config`: the office board as an MCP server over http. No secret in
+ * it: Claude Code expands `${AO_BOARD_TOKEN}` from the session's environment. The server is ADDED
+ * to the user's own (never pass `--strict-mcp-config`).
+ */
+export function buildClaudeMcpConfig(url: string): unknown {
+  return { mcpServers: { [BOARD_SERVER_CLAUDE]: { type: 'http', url, headers: { Authorization: `Bearer \${${BOARD_TOKEN_ENV}}` } } } }
 }
 
 /** The command line. Only values the main process validated end up here. */
-export function claudeArgs(start: ValidatedStart, settingsFile: string, briefingFile?: string): string[] {
+export function claudeArgs(start: ValidatedStart, settingsFile: string, briefingFile?: string, mcpConfigFile?: string): string[] {
   // Always pass the mode: without the flag a session ran in `auto` on this machine (spikes).
   const args = ['--settings', settingsFile, '--permission-mode', start.permissionMode]
   // Where the session runs (drivers/claudeBriefing.ts), added to Claude's own system prompt.
   if (briefingFile) args.push('--append-system-prompt-file', briefingFile)
+  // The office board's tools, next to whatever MCP servers the user has.
+  if (mcpConfigFile) args.push('--mcp-config', mcpConfigFile)
   if (start.model) args.push('--model', start.model)
   if (start.resume) args.push('--resume', start.resume)
   return args
@@ -234,7 +260,7 @@ export function sweepSessionFiles(sessionsDir: string): void {
     return
   }
   for (const name of names) {
-    if (!name.endsWith('.settings.json') && !name.endsWith('.briefing.md')) continue
+    if (!name.endsWith('.settings.json') && !name.endsWith('.briefing.md') && !name.endsWith('.mcp.json')) continue
     try {
       rmSync(join(sessionsDir, name), { force: true })
     } catch {
@@ -273,7 +299,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
   private readonly id: string
   private readonly mapper: ClaudeHookMapper
   private machine: SessionStateMachine | null = null
-  /** Temp files of this session: its settings and its briefing. */
+  /** Temp files of this session: its settings, its briefing and its MCP config. */
   private tempFiles: string[] = []
   private providerSession: string | undefined
   private model: string | undefined
@@ -316,29 +342,39 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     const hooksUrl = `${base}${CLAUDE_HOOKS_ROUTE}`
 
     mkdirSync(this.opts.sessionsDir, { recursive: true, mode: 0o700 })
+    // The office board's tools: a fresh board token (memory + this process's environment only), or
+    // null when the board is switched off. It reaches the board route and nothing else.
+    const board = this.ctx.board?.mcp() ?? null
     const settingsFile = join(this.opts.sessionsDir, `${this.id}.settings.json`)
     // mode is honoured on POSIX; on Windows the file sits in the per-user profile.
-    writeFileSync(settingsFile, JSON.stringify(buildClaudeSettings({ hooksUrl, hookScript: this.opts.hookScript }), null, 2), {
+    writeFileSync(settingsFile, JSON.stringify(buildClaudeSettings({ hooksUrl, hookScript: this.opts.hookScript, boardTools: !!board }), null, 2), {
       encoding: 'utf8',
       mode: 0o600
     })
     // What the session is told about Agent Office. No secret in it either.
     const briefingFile = join(this.opts.sessionsDir, `${this.id}.briefing.md`)
-    writeFileSync(briefingFile, claudeBriefing({ title: this.ctx.start.title }), { encoding: 'utf8', mode: 0o600 })
+    writeFileSync(briefingFile, claudeBriefing({ title: this.ctx.start.title, board: !!board }), { encoding: 'utf8', mode: 0o600 })
     this.tempFiles = [settingsFile, briefingFile]
+    let mcpConfigFile: string | undefined
+    if (board) {
+      mcpConfigFile = join(this.opts.sessionsDir, `${this.id}.mcp.json`)
+      writeFileSync(mcpConfigFile, JSON.stringify(buildClaudeMcpConfig(board.url), null, 2), { encoding: 'utf8', mode: 0o600 })
+      this.tempFiles.push(mcpConfigFile)
+    }
 
     const env = scrubbedEnv(process.env)
     // A token of this session only: it reaches the hooks route and nothing else (ingest/auth.ts).
     env.AO_TOKEN = this.opts.ingest.tokens.issue(this.id)
     env.AO_URL = hooksUrl
     env.AO_SESSION = this.id
+    if (board) env[BOARD_TOKEN_ENV] = board.token
 
     const machine = new SessionStateMachine((state) => this.ctx.events.onState(state), this.opts.schedule)
     this.machine = machine
     try {
       await this.ctx.pty.spawn(
         this.id,
-        { file: exe, args: claudeArgs(this.ctx.start, settingsFile, briefingFile), cwd: this.ctx.start.cwd, env, cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
+        { file: exe, args: claudeArgs(this.ctx.start, settingsFile, briefingFile, mcpConfigFile), cwd: this.ctx.start.cwd, env, cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
         { onExit: (code) => this.onExit(code), onTitle: (title) => this.machine?.title(titleHint(title)) }
       )
     } catch (err) {
@@ -388,14 +424,20 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       case 'prompt':
         machine.activity()
         for (const w of this.promptWaiters.splice(0)) w(true)
-        break
+        // A real prompt (typed, or an order) gets the office board's digest, when there is news.
+        return this.promptDigest()
       case 'synthetic-prompt':
+        // A hand-back or a task notification: no digest.
         machine.activity()
         break
       case 'pre-tool':
-      case 'post-tool':
         // A background subagent's tools don't make the session's own turn busy.
         if (mainThread) machine.activity()
+        // Main thread and subagents alike: an edit of a file another team just changed is stopped once.
+        return this.editWarning(body) ?? {}
+      case 'post-tool':
+        if (mainThread) machine.activity()
+        this.reportEdit(body)
         break
       case 'permission':
         return this.holdPermission(body, mapped.agentId, mapped.displayName, req)
@@ -410,12 +452,83 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     return {}
   }
 
+  // -- office board (electron/board.ts). A failure here must never get in the way of a hook. --
+
+  /** The UserPromptSubmit answer: the board's digest as `additionalContext`, or `{}`. Synchronous, from memory. */
+  private promptDigest(): unknown {
+    try {
+      const digest = this.ctx.board?.digest()
+      if (!digest) return {}
+      // Whether Claude took it can't be observed (a hook that timed out is silent to us).
+      this.ctx.board?.digestSent(digest.hash)
+      return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: digest.text } }
+    } catch {
+      return {}
+    }
+  }
+
+  /**
+   * The PreToolUse answer for an edit of a file another team changed recently, or null. `block-once`:
+   * a `deny` whose reason is the warning (the only variant the model reads before the file changes);
+   * the board remembers it, so the retry passes. `note`: the edit runs and the model is told next to
+   * its result.
+   */
+  private editWarning(body: Record<string, unknown>): unknown | null {
+    try {
+      const board = this.ctx.board
+      const mode = board?.conflictMode ?? 'off'
+      if (!board || mode === 'off' || body.hook_event_name !== 'PreToolUse') return null
+      const conflict = board.conflict(editedPath(body))
+      if (!conflict || conflict.warned) return null
+      const text = board.warn(conflict, mode)
+      return mode === 'block-once'
+        ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: text } }
+        : { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: text } }
+    } catch {
+      return null
+    }
+  }
+
+  /** PostToolUse of an edit tool: the file is on the board as changed by this team. */
+  private reportEdit(body: Record<string, unknown>): void {
+    try {
+      if (body.hook_event_name !== 'PostToolUse') return // not a failed edit
+      const path = editedPath(body)
+      if (!path) return
+      const created = body.tool_name === 'Write' && isRecord(body.tool_response) && body.tool_response.type === 'create'
+      this.ctx.board?.fileChanged(path, created ? 'create' : 'edit')
+    } catch {
+      // the board is a convenience
+    }
+  }
+
+  /** What the user's card says when the edit it asks about touches a file another team changed. */
+  private cardConflict(body: Record<string, unknown>, plain: PlainPermission): { plain: PlainPermission; line: string } | null {
+    try {
+      const conflict = this.ctx.board?.conflict(editedPath(body))
+      if (!conflict) return null
+      const text = this.ctx.board!.cardText(conflict)
+      // A danger badge keeps its own reason; anything less becomes "caution" with ours.
+      if (plain.risk === 'danger') return { plain, line: text.line }
+      return { plain: { ...plain, risk: 'caution', riskNote: text.riskNote }, line: text.line }
+    } catch {
+      return null
+    }
+  }
+
   /** Keeps the PermissionRequest hook open until the CEO office decides or Claude hangs up. */
   private holdPermission(body: Record<string, unknown>, agentId: string, displayName: string, req: RequestContext): Promise<unknown> {
     const toolName = typeof body.tool_name === 'string' ? body.tool_name : 'tool'
     // One plain sentence for the card. A subagent is named with the team it works for.
     const who = agentId === this.id ? displayName : `${displayName} (${this.title}'s team)`
-    const plain = plainPermission({ who, tool: toolName, input: body.tool_input, cwd: this.ctx.start.cwd })
+    let plain = plainPermission({ who, tool: toolName, input: body.tool_input, cwd: this.ctx.start.cwd })
+    let detail = describeToolInput(body.tool_input)
+    // Another team changed this file a moment ago: the user sees it on the card.
+    const conflict = this.cardConflict(body, plain)
+    if (conflict) {
+      plain = conflict.plain
+      detail = `${conflict.line}\n\n${detail}`
+    }
     // The `waiting` world event was emitted by the mapper already.
     return new Promise<unknown>((resolve) => {
       const id = this.ctx.permissions.add(
@@ -426,7 +539,7 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
           provider: 'claude-code',
           toolName,
           summary: summarise(toolName, body.tool_input),
-          detail: describeToolInput(body.tool_input),
+          detail,
           ...plain
         },
         {
@@ -534,9 +647,10 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
     this.ctx.events.onExit(exitCode)
   }
 
-  /** Token, inbox endpoint, pending cards and the temp files all die with the session. */
+  /** Tokens, inbox endpoint, pending cards and the temp files all die with the session. */
   private cleanup(): void {
     this.opts.ingest.tokens.revoke(this.id)
+    this.ctx.board?.revoke()
     this.opts.inbox.unregister(this.id)
     this.ctx.permissions.clearSession(this.id)
     for (const file of this.tempFiles.splice(0)) {
@@ -547,6 +661,13 @@ export class ClaudeDriver implements AgentDriver, HostedHookTarget {
       }
     }
   }
+}
+
+/** The file an edit tool's hook payload is about, or '' (another tool, or no path). */
+export function editedPath(body: Record<string, unknown>): string {
+  if (typeof body.tool_name !== 'string' || !EDIT_TOOLS.includes(body.tool_name) || !isRecord(body.tool_input)) return ''
+  const path = body.tool_input.file_path ?? body.tool_input.notebook_path
+  return typeof path === 'string' ? path : ''
 }
 
 function summarise(toolName: string, toolInput: unknown): string {

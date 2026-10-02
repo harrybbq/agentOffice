@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useApp, useAppState } from '../controller'
 import type { AppState } from '../controller'
+import { overlapBadge } from '../board'
 import { ago } from '../format'
 import { cx, useNow } from '../hooks'
-import { IconInbox, IconMegaphone, IconMoon, IconPower, IconSun, IconTerminal } from '../icons'
+import { IconInbox, IconMegaphone, IconMoon, IconOverlap, IconPower, IconSun, IconTerminal } from '../icons'
 
 const CONNECTION: Record<AppState['connection'], { label: string; tone: string; title: string }> = {
   connecting: { label: 'Connecting', tone: 'warn', title: 'Waiting for the app' },
@@ -19,6 +20,7 @@ export function StatusBar() {
   const lastEventAt = useAppState((s) => s.lastEventAt)
   const sessions = useAppState((s) => s.sessions)
   const pending = useAppState((s) => s.permissions.length)
+  const overlaps = useAppState((s) => s.boardOverlaps)
   const themeName = useAppState((s) => s.themeName)
   const layout = useAppState((s) => s.layout)
   const allowOrders = useAppState((s) => s.settings?.allowOrders ?? false)
@@ -53,6 +55,17 @@ export function StatusBar() {
         <IconInbox size={14} />
         {pending} pending
       </button>
+      {overlaps > 0 && (
+        <button
+          type="button"
+          className="status-item status-btn is-attn"
+          onClick={() => app.openBoard()}
+          title={`${overlaps} ${overlaps === 1 ? 'file was' : 'files were'} touched by more than one team. Open the office board.`}
+        >
+          <IconOverlap size={14} />
+          {overlapBadge(overlaps)}
+        </button>
+      )}
       <span className="status-item">
         {eventCount} {eventCount === 1 ? 'event' : 'events'}{lastEventAt ? ` · last ${ago(now - lastEventAt)} ago` : ''}
       </span>

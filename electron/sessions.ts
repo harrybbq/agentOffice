@@ -24,6 +24,9 @@ import type {
 } from '../shared/sessions'
 import type { HostedHookTarget, HostedSessions } from './adapters/claude-code-hooks'
 import type { EventSink } from './adapters/types'
+import { boardAccess, boardStatus, parseBoardSettingsPatch, type Board, type BoardAccess, type BoardEndpoint } from './board'
+import { resolveBoardProject, type BoardProject } from './boardProject'
+import type { BoardSettings, BoardSnapshot } from '../shared/board'
 import type { AgentDriver, ProviderDefinition, PtyHost, ValidatedStart } from './drivers/types'
 import { parsePermissionDecision, PermissionRegistry } from './permissions'
 import { PTY_MAX_WRITE_CHARS } from './ptyProtocol'
@@ -61,6 +64,18 @@ export interface SessionManagerOptions {
   onChatEvent?(e: ChatEvent): void
   /** A provider's login state or usage changed: the full list again. */
   onProvidersChanged?(providers: ProviderInfo[]): void
+  /** The office board. Absent = sessions run without one (no digest, no board tools, no warnings). */
+  board?: SessionBoardOptions
+}
+
+export interface SessionBoardOptions {
+  model: Board
+  /** Where a session's agent reaches the board tools, and the tokens for that route only. */
+  endpoint?: BoardEndpoint
+  /** Which repository a folder belongs to. Default: ask git (boardProject.ts). */
+  resolveProject?: (cwd: string) => Promise<BoardProject>
+  /** Stores a settings change (config.json) and returns what now applies. */
+  saveSettings?: (patch: Partial<BoardSettings>) => BoardSettings
 }
 
 interface Session {
@@ -232,18 +247,31 @@ export class SessionManager implements HostedSessions {
   async start(input: unknown): Promise<SessionInfo> {
     if (this.closing) throw new Error('the app is shutting down')
     const { start, def } = await this.validate(input)
+    // Which repository the folder belongs to (asks git once, with a short timeout): the project
+    // that scopes the office board. Nothing may be awaited between the count below and the
+    // session being listed, or two starts could both pass it.
+    const boardOpts = this.opts.board
+    const project = boardOpts ? await (boardOpts.resolveProject ?? resolveBoardProject)(start.cwd) : null
+    if (this.closing) throw new Error('the app is shutting down')
     const live = [...this.sessions.values()].filter((s) => s.driver.state !== 'exited').length
     if (live >= MAX_LIVE_SESSIONS) throw new Error(`too many sessions (at most ${MAX_LIVE_SESSIONS} at a time)`)
 
     const id = `s-${randomBytes(6).toString('hex')}`
+    // The session's row on the board before the agent starts: its driver may ask for the board's
+    // endpoint right away.
+    const board = project ? this.joinBoard(id, start, project) : undefined
     const driver = def.createDriver!({
       sessionId: id,
       start,
       pty: this.opts.pty,
       sink: this.opts.sink,
       permissions: this.permissions,
+      board,
       events: {
-        onState: () => this.changed(),
+        onState: (state) => {
+          this.opts.board?.model.setStatus(id, boardStatus(state))
+          this.changed()
+        },
         onProviderSession: () => this.changed(),
         onModel: (model) => this.onModel(id, model),
         onChanged: () => this.changed(),
@@ -260,11 +288,54 @@ export class SessionManager implements HostedSessions {
       await driver.start()
     } catch (err) {
       this.sessions.delete(id)
+      this.leaveBoard(id, board, true)
       this.retitle()
       throw err instanceof Error ? err : new Error('could not start the session')
     }
+    this.opts.board?.model.setStatus(id, boardStatus(driver.state))
     this.changed()
     return this.info(session)
+  }
+
+  // ---- office board ----
+
+  /** Puts a starting session on the board and returns its own view of it (what its driver gets). */
+  private joinBoard(id: string, start: ValidatedStart, project: BoardProject): BoardAccess | undefined {
+    const board = this.opts.board
+    if (!board) return undefined
+    board.model.addBranch({ sessionId: id, team: start.title, provider: start.provider, ...project })
+    return boardAccess(board.model, id, board.endpoint)
+  }
+
+  /** The session is over (its row stays for a while as "ended") or never started (`drop`). Its board token dies. */
+  private leaveBoard(id: string, access: BoardAccess | undefined, drop = false): void {
+    access?.revoke()
+    this.opts.board?.endpoint?.tokens.revoke(id)
+    if (drop) this.opts.board?.model.dropBranch(id)
+    else this.opts.board?.model.end(id)
+  }
+
+  /** What the board panel shows. Empty without a board. */
+  board(): { snapshot: BoardSnapshot; settings: BoardSettings } {
+    const model = this.opts.board?.model
+    if (!model) return { snapshot: { branches: [], claims: [], notes: [], warnings: [] }, settings: { enabled: false, conflictMode: 'off' } }
+    return { snapshot: model.snapshot(), settings: model.settings }
+  }
+
+  /** The user deleted a claim or a note in the panel. False if it was already gone (or the arguments are not valid). */
+  boardRemove(kind: unknown, id: unknown): boolean {
+    if (kind !== 'claim' && kind !== 'note') throw new Error('invalid board item kind')
+    if (typeof id !== 'string' || id.length === 0 || id.length > 100) throw new Error('invalid board item id')
+    return this.opts.board?.model.remove(kind, id) ?? false
+  }
+
+  /** The board's switches. Throws on anything that is not a valid patch. Applies to live sessions at once. */
+  boardSetSettings(input: unknown): BoardSettings {
+    const patch = parseBoardSettingsPatch(input)
+    if (!patch) throw new Error('invalid board settings')
+    const board = this.opts.board
+    if (!board) throw new Error('the office board is not available')
+    return board.saveSettings ? board.saveSettings(patch) : board.model.settings
   }
 
   private onModel(id: string, model: string): void {
@@ -295,6 +366,8 @@ export class SessionManager implements HostedSessions {
       if (!title || title === s.title) continue
       s.title = title
       s.driver.setTitle(title)
+      // Its team goes by the new name on the board too.
+      this.opts.board?.model.rename(s.id, title)
     }
   }
 
@@ -302,6 +375,7 @@ export class SessionManager implements HostedSessions {
     const s = this.sessions.get(id)
     if (!s) return
     s.exitCode = exitCode
+    this.leaveBoard(id, undefined)
     s.removeTimer = setTimeout(() => this.remove(id), EXITED_RETENTION_MS)
     s.removeTimer.unref?.()
     this.changed()

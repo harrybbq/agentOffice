@@ -14,6 +14,7 @@
 // (the thread with the recorded HISTORY).
 // Environment: FAKE_CODEX_LOGGED_OUT=1, FAKE_CODEX_AUTH_URL=<url>, FAKE_CODEX_READONLY=1 (downgrade
 // workspace-write, as an unconfigured Windows sandbox does), FAKE_CODEX_MARK=<file> (append a line per start).
+// FAKE_CODEX_INJECT_FAILS=1 makes `thread/inject_items` (the office board's digest) fail.
 // Extra methods for the tests: fake/log (everything received), fake/login/complete, fake/notify.
 'use strict'
 const fs = require('node:fs')
@@ -202,7 +203,14 @@ async function runTurn(threadId, turnId, params) {
     notify('item/started', { item, threadId, turnId, startedAtMs: Date.now() })
     const answer = await ask('item/fileChange/requestApproval', { threadId, turnId, itemId: id, startedAtMs: Date.now(), reason: null, grantRoot: null })
     if (!t.turn || t.turn.id !== turnId) return
-    notify('item/completed', { item: { ...item, status: answer && answer.decision === 'accept' ? 'completed' : 'declined' }, threadId, turnId, completedAtMs: Date.now() })
+    const accepted = answer && answer.decision === 'accept'
+    notify('item/completed', { item: { ...item, status: accepted ? 'completed' : 'declined' }, threadId, turnId, completedAtMs: Date.now() })
+    if (!accepted) {
+      // Give the reason (a steer right after the decline) the chance to arrive, as "approve" does.
+      await new Promise((r) => setTimeout(r, 150))
+      const steer = t.turn && t.turn.steers.shift()
+      if (steer) userEcho(threadId, turnId, steer.input, steer.clientUserMessageId)
+    }
     say(threadId, turnId, 'Done.', 'final_answer')
     return endTurn(threadId, turnId)
   }
@@ -300,6 +308,10 @@ function handle(msg) {
       const data = params.threadId === 'thr-old' ? HISTORY : []
       return reply(id, { data: params.sortDirection === 'desc' ? [...data].reverse() : data, nextCursor: null, backwardsCursor: null })
     }
+    case 'thread/inject_items':
+      if (!threads.has(params.threadId)) return fail(id, `thread not found: ${params.threadId}`)
+      if (process.env.FAKE_CODEX_INJECT_FAILS === '1') return fail(id, 'inject failed')
+      return reply(id, {})
     case 'thread/unsubscribe':
       return reply(id, { status: threads.has(params.threadId) ? 'unsubscribed' : 'notLoaded' })
     case 'turn/start': {

@@ -6,6 +6,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { createClaudeCodeHooksAdapter } from '../adapters/claude-code-hooks'
 import { genericAdapter, ingestEvents } from '../adapters/generic'
 import type { EventSink, HttpAdapter } from '../adapters/types'
+import type { BoardMcpRoute } from '../boardMcp'
 import { authenticate, authorise, type Auth, type SessionTokens } from './auth'
 
 export const HOST = '127.0.0.1'
@@ -20,6 +21,11 @@ export interface IngestServerOptions {
   sessionTokens?: SessionTokens
   /** The `/hooks/claude-code` adapter. Default: a stand-alone one that only knows external sessions. */
   claudeHooks?: HttpAdapter
+  /**
+   * The office board's MCP tools (electron/boardMcp.ts) and the tokens that reach them: one per
+   * hosted session, valid for this route only. Absent = no such route.
+   */
+  board?: { route: BoardMcpRoute; tokens: SessionTokens }
 }
 
 export interface IngestServer {
@@ -41,16 +47,17 @@ type Verdict = { ok: true; auth: Auth } | { ok: false; status: number; message: 
 
 /**
  * Shared gate for HTTP requests and WebSocket upgrades. Order: Origin, OPTIONS, Host, token, then
- * what that token may reach (a per-session token only POSTs to the Claude Code hooks route).
+ * what that token may reach (a per-session token only POSTs to the Claude Code hooks route, a
+ * board token only reaches the board route).
  */
-function gate(req: IncomingMessage, port: number, token: string, sessionTokens?: SessionTokens): Verdict {
+function gate(req: IncomingMessage, port: number, token: string, sessionTokens?: SessionTokens, boardTokens?: SessionTokens): Verdict {
   if (req.headers.origin !== undefined) return { ok: false, status: 403, message: 'browser requests are not allowed' }
   if (req.method === 'OPTIONS') return { ok: false, status: 403, message: 'forbidden' }
   const host = typeof req.headers.host === 'string' ? req.headers.host.toLowerCase() : ''
   if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) {
     return { ok: false, status: 403, message: 'bad host' }
   }
-  const auth = authenticate(req, token, sessionTokens)
+  const auth = authenticate(req, token, sessionTokens, boardTokens)
   if (!auth) return { ok: false, status: 401, message: 'unauthorized' }
   if (!authorise(auth, req, pathOf(req))) return { ok: false, status: 403, message: 'not allowed for this token' }
   return { ok: true, auth }
@@ -64,15 +71,22 @@ function pathOf(req: IncomingMessage): string {
   }
 }
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
+function sendJson(res: ServerResponse, status: number, body: unknown, extra: Record<string, string> = {}): void {
   const data = JSON.stringify(body ?? {})
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(data),
     'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff'
+    'X-Content-Type-Options': 'nosniff',
+    ...extra
   })
   res.end(data)
+}
+
+/** An answer without a body (MCP: a notification was accepted). */
+function sendEmpty(res: ServerResponse, status: number): void {
+  res.writeHead(status, { 'Content-Length': 0, 'Cache-Control': 'no-store' })
+  res.end()
 }
 
 class HttpError extends Error {
@@ -136,13 +150,15 @@ function rejectUpgrade(socket: Duplex, status: number, message: string): void {
 }
 
 export function startIngestServer(opts: IngestServerOptions): Promise<IngestServer> {
-  const { port, getToken, sink, sessionTokens } = opts
+  const { port, getToken, sink, sessionTokens, board } = opts
   const adapters: HttpAdapter[] = [genericAdapter, opts.claudeHooks ?? createClaudeCodeHooksAdapter()]
 
   const onRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const v = gate(req, port, getToken(), sessionTokens)
+    const v = gate(req, port, getToken(), sessionTokens, board?.tokens)
     if (!v.ok) {
-      sendJson(res, v.status, { error: v.message })
+      // An MCP client told "401" looks for the scheme to use.
+      const extra: Record<string, string> = v.status === 401 && board && pathOf(req) === board.route.route ? { 'WWW-Authenticate': 'Bearer' } : {}
+      sendJson(res, v.status, { error: v.message }, extra)
       return
     }
     // A client that hangs up before we answer (Claude Code abandoning a pending hook) aborts this.
@@ -155,6 +171,24 @@ export function startIngestServer(opts: IngestServerOptions): Promise<IngestServ
       if (req.method === 'GET' && path === '/health') {
         sendJson(res, 200, { ok: true })
         return
+      }
+      // The office board's MCP tools. Only a board token gets here (auth.ts), and the caller is the
+      // session that token belongs to. The route answers JSON-RPC about the board and nothing else:
+      // there is no way from here to a permission decision, a prompt or an order.
+      if (board && path === board.route.route && v.auth.kind === 'board') {
+        if (req.method === 'DELETE') return sendJson(res, 200, {})
+        // No server-initiated stream (GET), and nothing else either.
+        if (req.method !== 'POST') return sendJson(res, 405, { error: 'POST only' }, { Allow: 'POST' })
+        let message: unknown
+        try {
+          message = JSON.parse(await readBody(req, board.route.maxBody))
+        } catch (err) {
+          if (err instanceof HttpError) throw err // too large
+          return sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
+        }
+        const out = board.route.handle(v.auth.sessionId, message)
+        if (gone.signal.aborted || res.destroyed) return
+        return out.body === null ? sendEmpty(res, out.status) : sendJson(res, out.status, out.body)
       }
       const adapter = req.method === 'POST' ? adapters.find((a) => a.route === path) : undefined
       if (!adapter) {
@@ -191,7 +225,7 @@ export function startIngestServer(opts: IngestServerOptions): Promise<IngestServ
 
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     socket.on('error', () => socket.destroy())
-    const v = gate(req, port, getToken(), sessionTokens)
+    const v = gate(req, port, getToken(), sessionTokens, board?.tokens)
     if (!v.ok) return rejectUpgrade(socket, v.status, v.message)
     if (pathOf(req) !== '/ws') return rejectUpgrade(socket, 404, 'not found')
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req))

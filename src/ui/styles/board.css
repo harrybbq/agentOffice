@@ -1,0 +1,568 @@
+/* The Board tab (components/BoardView.tsx) and its badges. Amber (--warn) means one thing here:
+   two teams touched the same file. */
+
+.tab-count.is-warn {
+  background: var(--warn-weak);
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.board {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  container: board / size;
+}
+.board[hidden] {
+  display: none;
+}
+.board-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  user-select: text;
+}
+.board-off {
+  margin: 10px 12px 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* ---- project ---- */
+.board-project {
+  padding: 10px 12px 4px;
+}
+.board-project:last-of-type {
+  padding-bottom: 14px;
+}
+.board-project + .board-project {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.board-project-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  font: 600 13px/1.4 var(--font);
+  color: var(--text);
+}
+.board-project-head .group-count {
+  font: 500 11px/1.4 var(--font);
+}
+
+/* ---- overlaps: the summary on top of a project ---- */
+.board-overlaps {
+  margin-bottom: 10px;
+  padding: 7px 10px 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--warn-weak);
+}
+.board-overlaps-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--warn);
+  font-weight: 650;
+}
+.board-overlaps ul {
+  list-style: none;
+  margin: 5px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.board-overlaps li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  padding-left: 22px;
+  min-width: 0;
+}
+.board-overlaps .board-path {
+  flex: 0 1 auto;
+}
+.board-overlap-teams {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* ---- two columns when the panel is wide (docked at the bottom) ---- */
+.board-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px 20px;
+}
+@container board (min-width: 880px) {
+  .board-cols {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  }
+  .board-cols > .board-col:only-child {
+    grid-column: 1 / -1;
+  }
+  .board-col + .board-col .board-sub:first-child {
+    margin-top: 2px;
+  }
+}
+.board-col {
+  min-width: 0;
+}
+
+/* ---- team rows ---- */
+.board-teams {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.board-team {
+  position: relative;
+  padding: 7px 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+.board-team:hover {
+  border-color: var(--border-strong);
+}
+.board-team.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.board-team.is-ended {
+  background: transparent;
+}
+.board-team.is-ended .board-team-name,
+.board-team.is-ended .swatch,
+.board-team.is-ended .provider-dot {
+  opacity: 0.55;
+}
+.board-team-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+  min-width: 0;
+}
+.board-ident {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+}
+.board-ident .swatch {
+  width: 11px;
+  height: 11px;
+}
+/* The provider, as a small badge on the team colour. */
+.provider-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--surface-2);
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.board-team-name {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-team-name:hover {
+  text-decoration: underline;
+}
+.board-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px 0 6px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font: 500 11px/18px var(--font);
+  white-space: nowrap;
+}
+.board-status .state-dot {
+  width: 7px;
+  height: 7px;
+}
+.board-status.status-busy {
+  background: var(--ok-weak);
+  color: var(--ok);
+}
+.board-status.status-waiting {
+  background: var(--warn-weak);
+  color: var(--warn);
+}
+.board-status.status-waiting .state-dot {
+  box-shadow: none;
+}
+.board-status.status-ended,
+.board-status.status-idle {
+  color: var(--text-3);
+}
+.board-task {
+  flex: 1 1 200px;
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board-task.is-none {
+  color: var(--text-3);
+}
+.board-nofiles {
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* ---- changed files ---- */
+.board-files {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.board-file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  min-height: 21px;
+  margin: 0 -5px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.board-file.is-overlap {
+  background: var(--warn-weak);
+  box-shadow: inset 2px 0 0 var(--warn);
+}
+.board-file-kind {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  color: var(--text-3);
+}
+.kind-create .board-file-kind {
+  color: var(--ok);
+}
+.kind-delete .board-file-kind {
+  color: var(--danger);
+}
+.board-path {
+  flex: 1 1 120px;
+  display: flex;
+  min-width: 0;
+  font: 11.5px/21px var(--mono);
+  white-space: nowrap;
+}
+.board-path-dir {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.board-path-base {
+  flex: none;
+  color: var(--text);
+}
+.kind-delete .board-path-base {
+  text-decoration: line-through;
+  color: var(--text-2);
+}
+.overlap-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warn);
+  font: 600 11px/21px var(--font);
+  white-space: nowrap;
+}
+.overlap-tag .board-who {
+  color: var(--text);
+  font-weight: 550;
+}
+.board-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.board-who .swatch {
+  width: 8px;
+  height: 8px;
+}
+.board-age {
+  flex: none;
+  min-width: 62px;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+  white-space: nowrap;
+}
+.board-more {
+  margin: 2px 0 0 17px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.board-more:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+}
+.board-hint {
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* ---- claims, notes, warnings ---- */
+.board-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 3px;
+  font: 600 11px/1.4 var(--font);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.board-none {
+  color: var(--text-3);
+  font-size: 12px;
+}
+.board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.board-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.board-list > .board-item {
+  animation: card-in 0.22s var(--ease);
+}
+.board-item:last-child {
+  border-bottom: 0;
+}
+.board-item > .icon {
+  margin-top: 2px;
+  color: var(--warn);
+}
+.board-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.board-item-text {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.board-item.is-warning .board-item-text {
+  color: var(--text-2);
+}
+.board-item-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 1px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.board-item-meta .board-who {
+  color: var(--text-2);
+}
+.board-item-meta .board-age {
+  min-width: 0;
+  margin-left: 0;
+  font-size: 12px;
+}
+.board-item-files {
+  flex: 1 1 100%;
+  min-width: 0;
+  font: 11px/1.5 var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.handover-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px 0 5px;
+  border-radius: 9px;
+  background: var(--accent-weak);
+  color: var(--accent-text);
+  font: 550 11px/17px var(--font);
+  white-space: nowrap;
+}
+.board-remove {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -1px -4px 0 0;
+  opacity: 0.55;
+}
+.board-item:hover .board-remove,
+.board-remove:focus-visible {
+  opacity: 1;
+}
+.board-remove:hover {
+  background: var(--danger-weak);
+  color: var(--danger);
+}
+
+/* ---- settings ---- */
+.board-settings {
+  position: sticky;
+  bottom: 0;
+  flex: none;
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px 20px;
+  padding: 8px 12px 9px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.board-setting {
+  min-width: 0;
+}
+/* A small panel: the settings scroll with the board instead of taking a third of it. */
+@container board (max-width: 520px) or (max-height: 440px) {
+  .board-settings {
+    position: static;
+  }
+}
+/* A narrow panel: path and age on one line, "also edited by" under them. */
+@container board (max-width: 520px) {
+  .board-file .overlap-tag {
+    order: 3;
+    flex-basis: 100%;
+    padding-left: 22px;
+  }
+  .board-file .board-age {
+    min-width: 0;
+  }
+}
+.board-setting.is-disabled {
+  opacity: 0.5;
+}
+.board-help {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-weight: 550;
+}
+.switch-track {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--border-strong);
+  transition: background 0.15s;
+}
+.switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s var(--ease);
+}
+:root:not([data-ui-theme='light']) .switch-thumb {
+  background: var(--text);
+}
+.switch.is-on .switch-track {
+  background: var(--accent);
+}
+.switch.is-on .switch-thumb {
+  transform: translateX(12px);
+}
+.switch:focus-visible .switch-track {
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+.board-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+.board-select select {
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 500;
+  outline: none;
+}
+.board-select select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+.board-select select option {
+  background: var(--surface-2);
+  color: var(--text);
+}

@@ -19,8 +19,11 @@ import { release } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { IPC, type RendererSettings } from '../shared/ipc'
+import type { BoardSettings } from '../shared/board'
 import { parseAllowOrders } from '../shared/orders'
 import { createClaudeCodeHooksAdapter } from './adapters/claude-code-hooks'
+import { Board } from './board'
+import { BOARD_MCP_ROUTE, boardMcpRoute } from './boardMcp'
 import { EventBus } from './bus'
 import { claudeProvider, sweepSessionFiles } from './drivers/claude'
 import { codexProvider, type CodexProvider } from './drivers/codex'
@@ -57,6 +60,18 @@ const bus = new EventBus()
 const inbox = new SessionInbox()
 /** Ingest tokens of hosted sessions (memory only). Each only reaches the hooks route, for its session. */
 const sessionTokens = new SessionTokens()
+/**
+ * Board tokens of hosted sessions (memory only): a separate scope that reaches the board's MCP
+ * route and nothing else. One per session, replaced on every start/resume, gone when it ends.
+ */
+const boardTokens = new SessionTokens()
+/** The office board (electron/board.ts): in memory, fed by the sessions, shown in the board panel. */
+const board = new Board({
+  settings: () => getConfig().board,
+  onChanged: (snapshot) => toRenderer(IPC.boardChanged, snapshot)
+})
+/** Claims, notes and "ended" rows expire on their own: look every so often, so the panel follows. */
+const BOARD_SWEEP_MS = 30_000
 let ptyHost: PtyHostClient | null = null
 let sessions: SessionManager | null = null
 /** Owns the shared `codex app-server` child (started on the first Codex need). */
@@ -122,8 +137,10 @@ async function onReady(): Promise<void> {
       getToken: () => getConfig().token,
       sink: bus,
       sessionTokens,
-      claudeHooks: createClaudeCodeHooksAdapter(sessions ?? undefined)
+      claudeHooks: createClaudeCodeHooksAdapter(sessions ?? undefined),
+      board: { route: boardMcpRoute(board), tokens: boardTokens }
     })
+    setInterval(() => board.sweep(), BOARD_SWEEP_MS).unref()
     serverStatus = `listening on 127.0.0.1:${server.port}`
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -198,7 +215,12 @@ function createSessions(): void {
     onPermissionsChanged: (pending) => toRenderer(IPC.permissionsChanged, pending),
     onTerminalData: (id, data) => toRenderer(IPC.termData, { id, data }),
     onChatEvent: (e) => toRenderer(IPC.chatEvent, e),
-    onProvidersChanged: (list) => toRenderer(IPC.providersChanged, list)
+    onProvidersChanged: (list) => toRenderer(IPC.providersChanged, list),
+    board: {
+      model: board,
+      endpoint: { url: () => (server ? `http://${HOST}:${server.port}${BOARD_MCP_ROUTE}` : null), tokens: boardTokens },
+      saveSettings: (patch) => setBoardSettings(patch)
+    }
   })
 }
 
@@ -378,6 +400,18 @@ function setAllowOrders(on: boolean): void {
   rebuildTrayMenu()
 }
 
+/**
+ * The office board's switches (the panel and the tray both end up here). Stored in config.json;
+ * live sessions follow at once because the board reads the settings on every use.
+ */
+function setBoardSettings(patch: Partial<BoardSettings>): BoardSettings {
+  const next = saveConfig({ board: { ...getConfig().board, ...patch } }).board
+  toRenderer(IPC.boardSettingsChanged, next)
+  toRenderer(IPC.boardChanged, board.snapshot())
+  rebuildTrayMenu()
+  return next
+}
+
 function setTheme(name: string): void {
   if (!isValidThemeName(name) || name === getConfig().theme) return
   saveConfig({ theme: name })
@@ -479,6 +513,12 @@ function rebuildTrayMenu(): void {
           type: 'checkbox',
           checked: cfg.allowOrders,
           click: (item) => setAllowOrders(item.checked)
+        },
+        {
+          label: 'Office board (teams see each other)',
+          type: 'checkbox',
+          checked: cfg.board.enabled,
+          click: (item) => void setBoardSettings({ enabled: item.checked })
         },
         { type: 'separator' },
         { label: 'Copy token', click: () => clipboard.writeText(getConfig().token) },

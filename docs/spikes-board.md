@@ -605,3 +605,20 @@ About 130 words more than today.
   and after a resume; decline-then-steer end to end for a file change (each half is verified, here and in
   phase B); whether the model acts on a steered warning (this run's model declined to quote it).
 - Both: more than two sessions on one board in the real app; a packaged build; macOS and Linux.
+
+## Follow-up from the build (2026-10-02)
+
+- **Is a thread's `config` (the board token) persisted by Codex? No.** `scripts/spikes/board/codex-persist-probe.cjs`
+  starts a non-ephemeral thread with a marker in `mcp_servers.agent_office.http_headers`, with no model turn. The
+  rollout file is written at once (31 KB after `thread/inject_items`), and it holds the injected developer message,
+  but the marker is in no file under `~/.codex` that changed (rollout, `*.sqlite`, logs), neither after
+  `thread/start`, after the inject, nor after the app-server stopped; `thread/read` does not return it either.
+  `scripts/e2e-board.cjs` repeats the search for the real board token after a real turn with a `board_read` call:
+  15 changed files, no hit. The token is made harmless at rest anyway: memory only, replaced on every start,
+  resume and reload, dead when the session ends.
+- The digest text **is** stored in the thread's history (rollout and `thread_history_1.sqlite`), like any
+  developer message. It holds team names, file paths, claims and notes of the same user's other sessions.
+- `thread/inject_items` then `turn/start`, `config` on `thread/start`, and an annotated MCP tool running unasked in
+  `untrusted` mode were all confirmed in the real run (see the README's "Office board").
+- Seen on the way: when the Claude account's usage limit is reached, Claude Code ends the turn with "You've hit
+  your session limit" and **no `Stop` hook**, so a hosted session stays `busy` in the app until the limit resets.

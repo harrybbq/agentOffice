@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { AgentEvent } from '../shared/events'
 import { IPC, type AgentOfficeBridge, type RendererSettings } from '../shared/ipc'
+import type { BoardSettings, BoardSnapshot } from '../shared/board'
 import type { ChatEvent } from '../shared/chat'
 import type { PermissionRequestInfo, ProviderInfo, SessionInfo } from '../shared/sessions'
 
@@ -51,6 +52,14 @@ const bridge: AgentOfficeBridge = {
     detach: (id) => ipcRenderer.send(IPC.chatDetach, id),
     send: (id, text) => ipcRenderer.invoke(IPC.chatSend, id, text),
     onEvent: (cb) => subscribe<ChatEvent>(IPC.chatEvent, cb)
+  },
+
+  board: {
+    get: () => ipcRenderer.invoke(IPC.boardGet),
+    remove: (kind, id) => ipcRenderer.invoke(IPC.boardDelete, kind, id),
+    setSettings: (patch) => ipcRenderer.invoke(IPC.boardSetSettings, patch),
+    onChanged: (cb) => subscribe<BoardSnapshot>(IPC.boardChanged, cb),
+    onSettingsChanged: (cb) => subscribe<BoardSettings>(IPC.boardSettingsChanged, cb)
   },
 
   permissions: {

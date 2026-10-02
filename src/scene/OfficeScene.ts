@@ -395,10 +395,46 @@ export class OfficeScene extends Phaser.Scene {
     const boss = this.chars.get(BOSS_ID)
     const mc = this.chars.get(managerId)
     if (!boss || !mc || this.leaving.has(managerId)) return
-    const start = { x: boss.position.x, y: boss.position.y - 24 }
-    const img = this.add.image(start.x, start.y, propKey('order')).setDepth(ORDER_DEPTH)
-    const end0 = mc.position
+    this.flyProp(propKey('order'), { x: boss.position.x, y: boss.position.y - 24 }, () => ({ x: mc.position.x, y: mc.position.y - 22 }), {
+      onArrive: () => {
+        if (this.chars.get(managerId) === mc && !this.leaving.has(managerId)) mc.say(`Order: ${text}`, 3500)
+      }
+    })
+  }
+
+  /**
+   * A team posted on the office board: a small note flies from its manager to the HQ's notice
+   * area (a `noticeboard` location of the HQ map if the theme has one, else the HQ door), or, for
+   * a hand-over meant for a team, to that team's manager. Quieter than an order: lower arc, no bubble.
+   */
+  showNote(fromTeam: string, toTeam: string | null, kind: 'note' | 'handover' = 'note'): void {
+    if (!this.roster) return
+    const from = this.chars.get(fromTeam)
+    if (!from || this.leaving.has(fromTeam)) return
+    const to = toTeam && toTeam !== fromTeam && !this.leaving.has(toTeam) ? this.chars.get(toTeam) : undefined
+    const start = { x: from.position.x, y: from.position.y - 22 }
+    const board = nearest(this.layout.hq.locations, 'noticeboard', start) ?? this.roster.hqDoor
+    this.flyProp(propKey(kind === 'handover' ? 'handoff' : 'memo'), start, () => (to ? { x: to.position.x, y: to.position.y - 22 } : { x: board.x, y: board.y - 10 }), {
+      arc: 0.55,
+      fadeMs: 320,
+      minScreenPx: 13
+    })
+  }
+
+  /** A prop travelling along an arc from `start` to wherever `end()` is at that moment. */
+  private flyProp(
+    key: string,
+    start: Point,
+    end: () => Point,
+    opts: { arc?: number; fadeMs?: number; minScreenPx?: number; onArrive?: () => void } = {}
+  ): void {
+    const img = this.add.image(start.x, start.y, key).setDepth(ORDER_DEPTH)
+    // Zoomed out to the whole office a prop of a few pixels would vanish: keep it this wide on screen.
+    const base = opts.minScreenPx ? Math.max(1, opts.minScreenPx / (img.width * this.cameras.main.zoom)) : 1
+    img.setScale(base)
+    const end0 = end()
     const dist = Math.hypot(end0.x - start.x, end0.y - start.y)
+    const arc = opts.arc ?? 1
     this.tweens.addCounter({
       from: 0,
       to: 1,
@@ -406,18 +442,20 @@ export class OfficeScene extends Phaser.Scene {
       ease: 'Sine.easeInOut',
       onUpdate: (tw) => {
         const t = tw.getValue() ?? 0
-        const end = { x: mc.position.x, y: mc.position.y - 22 }
-        const mid = { x: (start.x + end.x) / 2, y: Math.min(start.y, end.y) - 60 - dist * 0.15 }
+        const to = end()
+        const mid = { x: (start.x + to.x) / 2, y: Math.min(start.y, to.y) - (60 + dist * 0.15) * arc }
         const u = 1 - t
-        img.setPosition(
-          u * u * start.x + 2 * u * t * mid.x + t * t * end.x,
-          u * u * start.y + 2 * u * t * mid.y + t * t * end.y
-        )
-        img.setAngle(Math.sin(t * Math.PI) * 18)
+        img.setPosition(u * u * start.x + 2 * u * t * mid.x + t * t * to.x, u * u * start.y + 2 * u * t * mid.y + t * t * to.y)
+        img.setAngle(Math.sin(t * Math.PI) * 18 * arc)
       },
       onComplete: () => {
-        img.destroy()
-        if (this.chars.get(managerId) === mc && !this.leaving.has(managerId)) mc.say(`Order: ${text}`, 3500)
+        opts.onArrive?.()
+        if (!opts.fadeMs) {
+          img.destroy()
+          return
+        }
+        // Settles where it landed for a moment, then fades.
+        this.tweens.add({ targets: img, alpha: 0, scale: base * 1.5, duration: opts.fadeMs, delay: 220, onComplete: () => img.destroy() })
       }
     })
   }

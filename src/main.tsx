@@ -9,6 +9,7 @@ import type { AppState } from './ui/controller'
 import './ui/styles/tokens.css'
 import './ui/styles/app.css'
 import './ui/styles/chat.css'
+import './ui/styles/board.css'
 
 const UNSUPPORTED = "This build's main process can't host sessions yet"
 

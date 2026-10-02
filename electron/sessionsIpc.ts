@@ -1,4 +1,4 @@
-// IPC for hosted sessions, terminals, chats, provider logins and permissions (channels: shared/ipc.ts).
+// IPC for hosted sessions, terminals, chats, provider logins, the office board and permissions (channels: shared/ipc.ts).
 // Every handler checks that the sender is the app's own window, and the session manager validates
 // every argument. This is the ONLY way a permission is approved or an order is sent.
 import { dialog, ipcMain, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from 'electron'
@@ -55,6 +55,12 @@ export function registerSessionIpc(opts: SessionIpcOptions): void {
   handle(IPC.chatAttach, (id) => manager.chatAttach(id))
   on(IPC.chatDetach, (id) => manager.chatDetach(id))
   handle(IPC.chatSend, (id, text) => manager.chatSend(id, text))
+
+  // The office board panel: read, delete a claim or note, change the switches. Agents write the
+  // board through its own HTTP route (boardMcp.ts), never through these.
+  handle(IPC.boardGet, () => manager.board())
+  handle(IPC.boardDelete, (kind, id) => manager.boardRemove(kind, id))
+  handle(IPC.boardSetSettings, (patch) => manager.boardSetSettings(patch))
 
   handle(IPC.listPermissions, () => manager.listPermissions())
   handle(IPC.decidePermission, (id, decision) => manager.decide(id, decision))

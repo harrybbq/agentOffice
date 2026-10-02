@@ -17,6 +17,7 @@ import type {
   TerminalSnapshot
 } from '../../shared/sessions'
 import type { EventSink } from '../adapters/types'
+import type { BoardAccess } from '../board'
 import type { SessionTokens } from '../ingest/auth'
 import type { PermissionRegistry } from '../permissions'
 import type { PtySpawnOptions } from '../ptyProtocol'
@@ -92,6 +93,12 @@ export interface DriverContext {
   sink: EventSink
   permissions: PermissionRegistry
   events: DriverEvents
+  /**
+   * The office board as this session sees it (electron/board.ts): where the driver reports changed
+   * files, gets the digest for a prompt and looks up conflicts. Absent = no board (tests, or a
+   * manager built without one): the driver then behaves as before the board existed.
+   */
+  board?: BoardAccess
 }
 
 export interface AgentDriver {

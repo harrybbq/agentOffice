@@ -22,6 +22,9 @@ import {
 } from '../../shared/sessions'
 import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { ClaudeHookMapper } from '../adapters/claude-code-hooks'
+import type { BoardConflict } from '../board'
+import { BOARD_SERVER_CODEX } from '../boardMcp'
+import type { BoardFile } from '../../shared/board'
 import { officeBriefing } from './briefing'
 import { approvalResult, describeServerRequest } from './codexApproval'
 import { clientMessageId, CodexChat, type ChatContext, type UserOrigin } from './codexChat'
@@ -70,7 +73,44 @@ const PROBE_ACCOUNT_WAIT_MS = 5000
 const HISTORY_LIST_LIMIT = 50
 const HISTORY_SHOWN = 12
 
+/** The digest is context for the turn, not a reason to hold it up. */
+const DIGEST_INJECT_TIMEOUT_MS = 5000
+/** At most this many conflict warnings are put into one message to the model. */
+const MAX_WARNINGS_PER_MESSAGE = 3
+
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** The files of a `fileChange` item: absolute paths, and what happens to each. */
+export function fileChangesOf(item: unknown): Array<{ path: string; kind: BoardFile['kind'] }> {
+  if (!isRecord(item)) return []
+  return arr(item.changes)
+    .map((c) => {
+      if (!isRecord(c)) return null
+      const type = isRecord(c.kind) ? c.kind.type : c.kind
+      return { path: str(c.path, 2000), kind: (type === 'add' ? 'create' : type === 'delete' ? 'delete' : 'edit') as BoardFile['kind'] }
+    })
+    .filter((c): c is { path: string; kind: BoardFile['kind'] } => !!c && c.path.length > 0)
+}
+
+/**
+ * The office board as an MCP server of ONE thread (`config` of thread/start and thread/resume).
+ * The key is dotted on purpose: a nested `{mcp_servers: {…}}` object replaced the whole table of
+ * another config layer in the spikes; a dotted key merges. The token is a literal here (it travels
+ * over the app-server's stdin and is in no process environment); the app-server does not write a
+ * thread's `config` to its rollout (checked: scripts/spikes/board/codex-persist-probe.cjs), and the
+ * token is replaced on every start, resume and reload and dies with the session.
+ */
+export function codexBoardConfig(mcp: { url: string; token: string }): Record<string, unknown> {
+  return { [`mcp_servers.${BOARD_SERVER_CODEX}`]: { url: mcp.url, http_headers: { Authorization: `Bearer ${mcp.token}` } } }
+}
+
+/** Is this server request Codex asking before it runs one of the office board's own tools? */
+export function isBoardToolApproval(params: Record<string, unknown>): boolean {
+  if (params.serverName !== BOARD_SERVER_CODEX || params.mode === 'url') return false
+  const schema = isRecord(params.requestedSchema) ? params.requestedSchema : {}
+  if (isRecord(schema.properties) && Object.keys(schema.properties).length > 0) return false
+  return isRecord(params._meta) && params._meta.codex_approval_kind === 'mcp_tool_call'
+}
 
 // ---- account ----------------------------------------------------------------------------------------
 
@@ -250,6 +290,8 @@ export class CodexDriver implements AgentDriver {
   /** Prompts are sent one at a time, so the second of two sees the turn the first one started. */
   private sendQueue: Promise<unknown> = Promise.resolve()
   private turnWaiters: Array<() => void> = []
+  /** The thread was given the office board's MCP server. */
+  private boardTools = false
 
   constructor(
     private readonly ctx: DriverContext,
@@ -295,13 +337,17 @@ export class CodexDriver implements AgentDriver {
     if (!account.loggedIn) throw new Error(NOT_LOGGED_IN)
 
     const start = this.ctx.start
+    // The office board's tools for this thread only, with a fresh token; null when the board is off.
+    const board = this.ctx.board?.mcp() ?? null
+    this.boardTools = !!board
     const params: Record<string, unknown> = {
       cwd: start.cwd,
       approvalPolicy: this.policy.approvalPolicy,
       sandbox: this.policy.sandbox,
       // What the session is told about Agent Office (drivers/briefing.ts). No secret in it.
-      developerInstructions: officeBriefing('codex', { title: start.title })
+      developerInstructions: officeBriefing('codex', { title: start.title, board: !!board })
     }
+    if (board) params.config = codexBoardConfig(board)
     if (start.model) params.model = start.model
     let response: unknown
     if (start.resume) {
@@ -424,6 +470,7 @@ export class CodexDriver implements AgentDriver {
           const activity = worldActivityForItem(item, this.ctx.start.cwd)
           if (activity) this.emitWorld(this.world.activity(agentId, activity.activity, activity.detail, now))
         }
+        if (isRecord(item) && item.type === 'fileChange') this.onFileChange(item, method === 'item/completed')
         break
       }
       case 'serverRequest/resolved': {
@@ -536,16 +583,120 @@ export class CodexDriver implements AgentDriver {
     if (e.type === 'up' && this.disconnected) void this.reconnect()
   }
 
-  /** Loads the thread into the server again, with the session's policy and sandbox (resume restores neither). */
+  /**
+   * Loads the thread into the server again, with the session's policy and sandbox (resume restores
+   * neither) and, if it had them, the office board's tools under a NEW token.
+   */
   private async reload(threadId: string): Promise<void> {
-    const response = await this.deps.conn.request('thread/resume', {
+    const params: Record<string, unknown> = {
       threadId,
       excludeTurns: true,
       cwd: this.ctx.start.cwd,
       approvalPolicy: this.policy.approvalPolicy,
       sandbox: this.policy.sandbox
-    })
+    }
+    const board = this.boardTools ? (this.ctx.board?.mcp(true) ?? null) : null
+    if (board) params.config = codexBoardConfig(board)
+    const response = await this.deps.conn.request('thread/resume', params)
     this.checkSandbox(response)
+  }
+
+  // -- office board (electron/board.ts). A failure here must never get in the way of a turn. --
+
+  /**
+   * Before a new turn: the board's digest as a developer message in the thread's history (not the
+   * user's words, and no chat item). Skipped when there is no news; a failure is ignored.
+   */
+  private async injectDigest(threadId: string): Promise<void> {
+    let digest: ReturnType<NonNullable<DriverContext['board']>['digest']> = null
+    try {
+      digest = this.ctx.board?.digest() ?? null
+    } catch {
+      return
+    }
+    if (!digest) return
+    try {
+      await this.deps.conn.request(
+        'thread/inject_items',
+        { threadId, items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: digest.text }] }] },
+        DIGEST_INJECT_TIMEOUT_MS
+      )
+      this.ctx.board?.digestSent(digest.hash)
+    } catch {
+      // The turn starts without the digest; the next one tries again.
+    }
+  }
+
+  /** The conflicts of these files this session was not warned about yet. */
+  private freshConflicts(paths: string[]): BoardConflict[] {
+    const board = this.ctx.board
+    if (!board) return []
+    const out: BoardConflict[] = []
+    for (const path of paths) {
+      const c = board.conflict(path)
+      if (c && !c.warned && !out.some((o) => o.path === c.path)) out.push(c)
+    }
+    return out
+  }
+
+  /** Records the warnings and returns what the model is told (one message). */
+  private warnAbout(conflicts: BoardConflict[], mode: 'block-once' | 'note'): string {
+    const texts = conflicts.map((c) => this.ctx.board!.warn(c, mode))
+    return texts.slice(0, MAX_WARNINGS_PER_MESSAGE).join('\n')
+  }
+
+  /**
+   * A file change of the thread. Started: where no approval will be asked (acceptEdits), or the
+   * setting says `note`, the model is told about a conflict after the fact, as a message into the
+   * running turn. Completed: the files are on the board as changed by this team.
+   */
+  private onFileChange(item: Record<string, unknown>, completed: boolean): void {
+    const board = this.ctx.board
+    if (!board) return
+    try {
+      const changes = fileChangesOf(item)
+      const mode = board.conflictMode
+      // In `default` mode with block-once the approval request is where the change is stopped. A
+      // change that went through without one is noted when it completes.
+      const stoppedAtApproval = mode === 'block-once' && this.policy.approvalPolicy === 'untrusted'
+      if (mode !== 'off' && (completed ? item.status === 'completed' : !stoppedAtApproval)) {
+        const fresh = this.freshConflicts(changes.map((c) => c.path))
+        if (fresh.length > 0) void this.enqueue(this.warnAbout(fresh, 'note'), 'steer')
+      }
+      if (completed && item.status === 'completed') for (const c of changes) board.fileChanged(c.path, c.kind)
+    } catch {
+      // the board is a convenience
+    }
+  }
+
+  /**
+   * `block-once` for a file change that asks for approval: decline it once and tell the model why
+   * (the same path as a denial with a message). True when the request was answered here.
+   */
+  private stopForConflict(rpcId: JsonRpcId, method: string, params: Record<string, unknown>, agentId: string): boolean {
+    const board = this.ctx.board
+    if (!board || method !== 'item/fileChange/requestApproval') return false
+    try {
+      if (board.conflictMode !== 'block-once') return false
+      const subject = this.chat.get(str(params.itemId, 200))
+      const fresh = this.freshConflicts(subject?.kind === 'file-change' ? subject.changes.map((c) => c.path) : [])
+      if (fresh.length === 0) return false
+      const text = this.warnAbout(fresh, 'block-once')
+      this.deps.conn.respond(rpcId, approvalResult(method, params, { behavior: 'deny' }))
+      const first = fresh[0]
+      this.emitChat(
+        this.chat.notice(
+          'warning',
+          `Office board: this change was stopped once, because team "${first.otherTeam}" changed ${first.path} a moment ago. The agent was told and may make the change again.`,
+          this.at(agentId),
+          { turnId: str(params.turnId, 100) || undefined }
+        )
+      )
+      void this.enqueue(text, 'steer')
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** The server is back after a crash: load the thread again. A thread that can't be loaded ends the session. */
@@ -586,7 +737,15 @@ export class CodexDriver implements AgentDriver {
     if (this.exited) return conn.respond(rpcId, approvalResult(method, params, null))
     const agentId = this.agentFor(threadId)
     const itemId = str(params.itemId, 200)
-    const handling = describeServerRequest(method, params, itemId ? this.chat.get(itemId) : undefined, this.ctx.start.cwd)
+    // The office board's own tools never need a card (they only read and write the board). Their
+    // annotations already make Codex run them unasked; this is the safety net if it asks anyway.
+    if (method === 'mcpServer/elicitation/request' && this.boardTools && isBoardToolApproval(params)) {
+      return conn.respond(rpcId, approvalResult(method, params, { behavior: 'allow' }))
+    }
+    // A file another team just changed: stopped once, with the reason, before any card.
+    if (this.stopForConflict(rpcId, method, params, agentId)) return
+    const subject = itemId ? this.chat.get(itemId) : undefined
+    const handling = describeServerRequest(method, params, subject, this.ctx.start.cwd)
     if (handling.kind === 'unknown') return conn.respondError(rpcId, -32601, 'not handled by Agent Office')
     if (handling.kind === 'auto') {
       conn.respond(rpcId, handling.result)
@@ -599,9 +758,16 @@ export class CodexDriver implements AgentDriver {
     const displayName = agentId === this.id ? this.title : 'Sub-agent'
     // One plain sentence for the card. A sub-agent is named with the team it works for.
     const who = agentId === this.id ? this.title : `Sub-agent (${this.title}'s team)`
-    const plain = plainPermission({ who, tool: card.plain.tool, input: card.plain.input, cwd: this.ctx.start.cwd })
+    let plain = plainPermission({ who, tool: card.plain.tool, input: card.plain.input, cwd: this.ctx.start.cwd })
+    let detail = card.detail
+    // The agent was warned and asks again (or the setting only notes): the user sees the conflict on the card.
+    const conflict = method === 'item/fileChange/requestApproval' && subject?.kind === 'file-change' ? this.liveConflict(subject.changes.map((c) => c.path)) : null
+    if (conflict) {
+      if (plain.risk !== 'danger') plain = { ...plain, risk: 'caution', riskNote: conflict.riskNote }
+      detail = `${conflict.line}\n\n${detail}`
+    }
     const permissionId = this.ctx.permissions.add(
-      { sessionId: this.id, agentId, displayName, provider: 'codex', toolName: card.toolName, summary: card.summary, detail: card.detail, ...plain },
+      { sessionId: this.id, agentId, displayName, provider: 'codex', toolName: card.toolName, summary: card.summary, detail, ...plain },
       { onResolved: (outcome, decision) => this.onApprovalResolved(pending, outcome, decision) }
     )
     if (!permissionId) return // too many pending: onResolved already declined it
@@ -616,7 +782,7 @@ export class CodexDriver implements AgentDriver {
           requestId: permissionId,
           subjectId: card.itemId || undefined,
           summary: card.summary,
-          detail: card.detail,
+          detail,
           question: held?.question ?? plain.question,
           risk: held?.risk ?? plain.risk,
           riskNote: held?.riskNote,
@@ -626,6 +792,21 @@ export class CodexDriver implements AgentDriver {
       )
     )
     this.refresh()
+  }
+
+  /** The first of these files another team changed recently, as the user's card says it. */
+  private liveConflict(paths: string[]): { riskNote: string; line: string } | null {
+    try {
+      const board = this.ctx.board
+      if (!board) return null
+      for (const path of paths) {
+        const c = board.conflict(path)
+        if (c) return board.cardText(c)
+      }
+    } catch {
+      // the board is a convenience
+    }
+    return null
   }
 
   private onApprovalResolved(pending: PendingApproval, outcome: PermissionOutcome, decision: PermissionDecision | null): void {
@@ -704,6 +885,10 @@ export class CodexDriver implements AgentDriver {
     }
     if (origin === 'steer') return { ok: false, reason: 'the turn has already ended' }
 
+    // A new turn (never a steer): what the other teams did since this session's last digest.
+    await this.injectDigest(threadId)
+    if (this.exited) return { ok: false, reason: 'the session has ended' }
+
     const clientId = clientMessageId(origin, randomBytes(8).toString('hex'))
     this.chat.expectUser(clientId, text, origin)
     const params: Record<string, unknown> = {
@@ -760,6 +945,7 @@ export class CodexDriver implements AgentDriver {
     this.activeTurnId = null
     // Requests still pending are answered with `cancel` (onApprovalResolved sees `exited`).
     this.ctx.permissions.clearSession(this.id)
+    this.ctx.board?.revoke()
     this.unsubscribeAll()
     this.emitChat(this.chat.closeOpen(null, 'interrupted'))
     this.emitWorld(this.world.end(this.now()))

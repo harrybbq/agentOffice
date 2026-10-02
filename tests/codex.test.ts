@@ -2,7 +2,7 @@
 // Pure mappings are tested with the JSON recorded in docs/spikes-phase-b.md; the JSON-RPC client, the
 // driver and the session manager run against tests/fixtures/fake-codex-server.cjs (same protocol over
 // stdio). No real Codex and no model turn is used here: see scripts/e2e-phase-b.cjs for that.
-// Run: npm test   (chained from hosted.test.ts)
+// Run: npm test   (chained from hosted.test.ts; the office board's tests follow: board.test.ts)
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -1478,4 +1478,5 @@ await t('codex: history lists the folder\'s earlier conversations for "Resume pr
 
 console.log(`\n${pass} codex tests passed`)
 
+await import('./board.test.ts')
 await import('./ui.test.ts')

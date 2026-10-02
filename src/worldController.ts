@@ -88,6 +88,14 @@ export class WorldController {
     this.scene?.showOrder(targets, text)
   }
 
+  /**
+   * A team put a note on the office board: a small note travels from its manager to the HQ, or to
+   * the manager of the team a hand-over is meant for. Nothing happens if either is not in the world.
+   */
+  showNote(fromTeam: string, toTeam: string | null, kind: 'note' | 'handover' = 'note'): void {
+    this.scene?.showNote(fromTeam, toTeam, kind)
+  }
+
   /** Office-wide mode on (tracking the teams that got the order; null = until timeout) or off. */
   setOfficeWide(on: boolean, teams: string[] | null = null): void {
     if (on) this.officeWide.start(teams)

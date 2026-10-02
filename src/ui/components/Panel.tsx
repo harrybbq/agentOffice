@@ -1,11 +1,13 @@
 // The resizable panel next to (or under) the world: the session's Terminal (or Chat, for sessions
-// without a terminal UI) and the Events tab.
+// without a terminal UI), the Events tab and the office Board (when the main process has one).
 import type { PointerEvent as ReactPointerEvent, ReactNode, RefObject } from 'react'
 import { DEFAULT_LAYOUT, useApp, useAppState } from '../controller'
 import type { PanelTab } from '../controller'
 import { clampSplit } from '../format'
 import { cx } from '../hooks'
-import { IconChat, IconClose, IconDockBottom, IconDockRight, IconList, IconTerminal } from '../icons'
+import { overlapBadge } from '../board'
+import { IconBoard, IconChat, IconClose, IconDockBottom, IconDockRight, IconList, IconTerminal } from '../icons'
+import { BoardView } from './BoardView'
 import { ChatView } from './ChatView'
 import { EventLog } from './EventLog'
 import { TerminalView } from './TerminalView'
@@ -77,13 +79,16 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   const eventCount = useAppState((s) => s.eventCount)
   // The first tab keeps its stored id ('terminal'); only its label and content follow the session.
   const chat = useAppState((s) => s.sessions.find((x) => x.id === s.selectedId)?.surface === 'chat')
+  const overlaps = useAppState((s) => s.boardOverlaps)
+  // A stored 'board' tab with a main process that has no board falls back to the first tab.
+  const current: PanelTab = layout.tab === 'board' && !app.hasBoard ? 'terminal' : layout.tab
 
   const tab = (id: PanelTab, label: string, icon: ReactNode, extra?: ReactNode) => (
     <button
       type="button"
       role="tab"
-      aria-selected={layout.tab === id}
-      className={cx('tab', layout.tab === id && 'is-active')}
+      aria-selected={current === id}
+      className={cx('tab', current === id && 'is-active')}
       onClick={() => app.setLayout({ tab: id })}
     >
       {icon}
@@ -93,11 +98,23 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
   )
 
   return (
-    <section className="panel" aria-label={chat ? 'Chat and events' : 'Terminal and events'}>
+    <section className="panel" aria-label={chat ? 'Chat, events and board' : 'Terminal, events and board'}>
       <header className="panel-head">
         <div className="tabs" role="tablist">
           {chat ? tab('terminal', 'Chat', <IconChat />) : tab('terminal', 'Terminal', <IconTerminal />)}
           {tab('events', 'Events', <IconList />, eventCount > 0 && <span className="tab-count">{eventCount > 999 ? '999+' : eventCount}</span>)}
+          {app.hasBoard &&
+            tab(
+              'board',
+              'Board',
+              <IconBoard />,
+              overlaps > 0 && (
+                <span className="tab-count is-warn" title={`${overlapBadge(overlaps)}: files touched by more than one team`}>
+                  {overlaps}
+                  <span className="visually-hidden"> {overlaps === 1 ? 'overlap' : 'overlaps'}</span>
+                </span>
+              )
+            )}
         </div>
         <div className="panel-tools">
           <button
@@ -115,9 +132,10 @@ export function Panel({ dock }: { dock: 'right' | 'bottom' }) {
         </div>
       </header>
       <div className="panel-body">
-        <TerminalView hidden={layout.tab !== 'terminal' || chat} />
-        <ChatView hidden={layout.tab !== 'terminal' || !chat || !layout.panelOpen} />
-        <EventLog hidden={layout.tab !== 'events' || !layout.panelOpen} />
+        <TerminalView hidden={current !== 'terminal' || chat} />
+        <ChatView hidden={current !== 'terminal' || !chat || !layout.panelOpen} />
+        <EventLog hidden={current !== 'events' || !layout.panelOpen} />
+        {app.hasBoard && <BoardView hidden={current !== 'board' || !layout.panelOpen} />}
       </div>
     </section>
   )

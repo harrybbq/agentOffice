@@ -266,6 +266,73 @@ in a scratch folder, with four short turns: approval allowed, approval denied wi
 order in the middle of a turn, an interrupt, then a restart and resume. It also watches for console
 windows while Codex and its commands run.
 
+## Office board
+
+Teams that work in the same repository tell each other what they are doing, so no work is done
+twice. The app keeps an **office board** in memory: for every hosted session (team) its status, the
+files it changed in the last two hours, its claims ("I am doing X") and its notes. The board panel
+in the window shows all of it, with author and age, and lets you delete any claim or note.
+
+Sessions share a board only when they share a **project**: the git repository their folder belongs
+to (`git rev-parse --git-common-dir`, so branches and worktrees of one repository count as one), or
+the folder itself outside git. Teams in unrelated folders never see each other.
+
+**How the board is fed.** By the app, not by what agents say: status from the session state; changed
+files from Claude Code's `PostToolUse` of `Write` / `Edit` / `MultiEdit` / `NotebookEdit` and from
+Codex's completed file changes. Files changed by a shell command are not seen. The user's prompt
+never goes on the board: a team's task is whatever it claimed.
+
+**How agents see it**, three ways:
+
+| | Claude Code | Codex |
+|---|---|---|
+| A **digest** with each new prompt (at most 1,500 characters; only when something changed since the last one; only when another live team shares the project) | the `UserPromptSubmit` hook's `additionalContext` (that hook gets a 2 s timeout) | a developer message added to the thread (`thread/inject_items`) before the turn starts; if that fails the turn starts without it |
+| A **warning** before changing a file another team changed in the last 30 minutes | the edit is denied once with the warning as the reason; the retry goes through (main thread and subagents) | `default` mode: the change is declined once and the warning follows as a message; `acceptEdits`: no approval exists to decline, so the warning arrives right after the change started |
+| **Tools** to read and write the board | MCP server `agent-office` (`--mcp-config`, added to your own servers), pre-allowed, so no permission prompt | MCP server `agent_office` in that thread's own config; no approval needed |
+
+The tools: `board_read`, `board_claim {task, files?}`, `board_post {note}`, `board_release {task}`,
+`board_handover {task, note, to?}`. A hand-over is passive: it releases the claim and leaves a note.
+It never starts a turn in another session and never sends an order; the other team reads it with its
+next prompt or `board_read`. The warning also shows on your approval card ("Backend changed this
+file 3 min ago") when the agent tries again and the edit needs your approval.
+
+**Limits.** A claim lasts 30 minutes after its holder was last active and is released when the
+session ends. A note lasts an hour, a hand-over until another team claims the task (a day at most).
+An ended session stays on the board for 10 minutes. Notes are one line of at most 400 characters,
+tasks 120, 50 notes per project. Nothing is stored on disk: the board is empty after a restart.
+
+**Settings** (the switches in the board panel, the tray's "Office board", or `board` in
+config.json): `enabled` (default on) and `conflictMode`: `block-once` (default), `note` (never
+block; the agent is told next to the result of its edit) or `off`. Switching the board off stops
+digests and warnings for running sessions at once and their board tools answer "switched off";
+sessions started while it is off get no board tools at all. The panel keeps showing who changed what.
+
+**Safety.**
+- Board text is information, never an instruction and never permission. The digest, `board_read` and
+  every warning start with a fixed line written by the app, and each note is shown quoted with its
+  author. Notes and tasks are reduced to one printable line (control characters, line breaks,
+  zero-width and direction-override characters are removed) before they are stored.
+- Warnings are built only from what the app observed (who changed which file when), never from
+  what an agent wrote.
+- The board's HTTP route (`POST /mcp` on the ingest server, same `Host` / `Origin` checks) can read
+  the caller's own project's board and write the caller's own claims and notes. It cannot answer a
+  permission request, send a prompt or an order, change settings, or remove anything but the
+  caller's own claim: those stay on renderer IPC.
+- Each session gets its own **board token**, a separate scope from its hook token: it only reaches
+  `/mcp` (as `Authorization: Bearer`), the hook token and the global token do not. Tools take no
+  identity argument, so an agent can only write as itself. The token lives in memory, is replaced
+  on every start and resume and dies with the session. For Claude Code it is in the session's
+  environment (`AO_BOARD_TOKEN`; the temp MCP config file names the variable only). For Codex it is
+  part of the thread's config sent over the app-server's stdin; Codex does not write that config to
+  its rollout file or databases (checked with `scripts/spikes/board/codex-persist-probe.cjs` and
+  again after a real turn by `scripts/e2e-board.cjs`). The digest text itself is part of the
+  thread's history, like any message.
+- It is a coordination aid between your own agents, not a security boundary: an agent with a shell
+  can read its own token and call the route directly, and then still only acts as itself.
+
+`npx electron scripts/e2e-board.cjs` checks all of this against the real agents in a scratch git
+repository: two Claude Code sessions on `haiku` (four short turns) and one Codex turn.
+
 ## Setup
 
 Requires **Node 22.12+** (Electron 44).
@@ -274,13 +341,13 @@ Requires **Node 22.12+** (Electron 44).
 npm install
 npm run dev          # starts the app; first run creates the config + token
 npm run simulate     # in another terminal: fake teams so you can watch without a real agent
-npm test             # roster, world/pathfinding, corridors, movement rules, orders, session inbox, hosted sessions
+npm test             # roster, world/pathfinding, corridors, movement rules, orders, session inbox, hosted sessions, office board
 ```
 
 `npm run simulate -- --teams 3 --speed 2 --once` changes the number of teams, the speed, and whether it loops.
 
 ### Tray menu
-Show/hide, always on top, overlay mode (transparent and click-through), theme, **Allow CEO orders**, copy/regenerate token, open config folder, quit.
+Show/hide, always on top, overlay mode (transparent and click-through), theme, **Allow CEO orders**, **Office board**, copy/regenerate token, open config folder, quit.
 
 **Ctrl+Shift+O** toggles overlay mode at any time.
 
@@ -290,7 +357,7 @@ Config file:
 - macOS: `~/Library/Application Support/agent-office/config.json`
 - Linux: `~/.config/agent-office/config.json`
 
-It holds `{ token, port, theme, alwaysOnTop, overlay, allowOrders, officeWideMinutes }`.
+It holds `{ token, port, theme, alwaysOnTop, overlay, allowOrders, officeWideMinutes, board }` (`board`: see [Office board](#office-board)).
 
 For testing, `AGENT_OFFICE_USER_DATA=<dir>` runs a second, isolated instance with its own config, and
 `AGENT_OFFICE_SHOW_INACTIVE=1` shows the window without taking focus. In dev builds,
@@ -300,7 +367,7 @@ packaged, `AGENT_OFFICE_CODEX_SPAWN=<script.cjs>` runs that script with `node` i
 without a model or quota.
 
 - The ingest server listens on **127.0.0.1 only** (default port 47821).
-- Every request must carry a token in the **`X-Agent-Office-Token` header**: the global one from the config file, or a hosted session's own (which only reaches `/hooks/claude-code`, see [Hosted sessions](#hosted-sessions)). A token is never accepted in the URL.
+- Every request must carry a token in the **`X-Agent-Office-Token` header**: the global one from the config file, or a hosted session's own (which only reaches `/hooks/claude-code`, see [Hosted sessions](#hosted-sessions)). The one exception is `/mcp`, the [office board](#office-board)'s tools, which takes a session's board token as `Authorization: Bearer` and nothing else. A token is never accepted in the URL.
 - Requests with a browser `Origin` header or an unexpected `Host` are rejected. This protects against malicious web pages and DNS rebinding.
 - The token is 32 random bytes, generated on first run. Replace it any time from the tray (**Regenerate token**) or by editing the config file.
 
@@ -394,13 +461,15 @@ See `themes/office/` (generated by `scripts/gen-office-map.cjs`) and `docs/art-d
 
 ```
 electron/   main process: window, tray, config, ingest server, adapters, theme protocol,
-            hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process)
+            hosted sessions (sessions.ts, drivers/, permissions.ts, ptyHost.ts = terminal host process),
+            the office board (board.ts = model, boardMcp.ts = its MCP tools, boardProject.ts = which repository)
 hook/       the SessionStart command hook injected into hosted Claude Code sessions
 shared/     event format, theme format, IPC contract
 src/        renderer: the React shell (src/ui: sessions, terminal, CEO inbox, order bar) and the
             Phaser world (scene, characters, roster)
 themes/     bundled themes
-scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI)
+scripts/    simulate.ts, map generator, e2e-phase-a.cjs (hosted-session check against the real CLI),
+            e2e-board.cjs (office board check against real Claude Code and Codex sessions)
 docs/       research notes (hooks, art direction)
 ```
 

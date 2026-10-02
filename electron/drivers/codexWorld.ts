@@ -5,7 +5,8 @@
 // Sub-agents were not exercised in the spikes, so everything about them is parsed defensively.
 import type { Activity } from '../../shared/events'
 import { relativeTo } from '../../shared/paths'
-import { CAPTURE_TOOL_PATTERN } from '../adapters/claude-code-hooks'
+import { BOARD_ACTIVITY, BOARD_ACTIVITY_DETAIL, CAPTURE_TOOL_PATTERN } from '../adapters/claude-code-hooks'
+import { BOARD_SERVER_CODEX } from '../boardMcp'
 import { arr, commandIntent, innerCommand, isRecord, str } from './codexProtocol'
 
 export const CODEX_PROVIDER = 'codex'
@@ -45,6 +46,8 @@ export function worldActivityForItem(item: unknown, cwd?: string): WorldActivity
     case 'dynamicToolCall': {
       const tool = str(item.tool, 200)
       const server = str(item.server, 200) || str(item.namespace, 200)
+      // The app's own board tools (also the writing ones): looking something up, not the server room.
+      if (item.type === 'mcpToolCall' && server === BOARD_SERVER_CODEX) return { activity: BOARD_ACTIVITY, detail: BOARD_ACTIVITY_DETAIL }
       const detail = server ? `${server}.${tool}` : tool
       const args = isRecord(item.arguments) ? item.arguments : {}
       // Screenshot / computer-use tools: by name, or by an `action` argument as browser tools take it.

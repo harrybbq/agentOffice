@@ -2,6 +2,7 @@
 import type { AgentEvent } from './events'
 import type { ThemeManifest } from './theme'
 import type { OrderRequest, OrderResult } from './orders'
+import type { BoardSettings, BoardSnapshot } from './board'
 import type { ChatEvent, ChatItem } from './chat'
 import type {
   PermissionDecision,
@@ -70,6 +71,18 @@ export const IPC = {
   providerLogin: 'agent-office:providers:login',
   /** main -> renderer: ProviderInfo[] changed (login state, usage) */
   providersChanged: 'agent-office:providers:changed',
+
+  // ---- office board (shared/board.ts) ----
+  /** invoke */
+  boardGet: 'agent-office:board:get',
+  /** invoke: delete one claim or note by id (the user cleaning up) */
+  boardDelete: 'agent-office:board:delete',
+  /** invoke: BoardSettings patch -> BoardSettings */
+  boardSetSettings: 'agent-office:board:settings',
+  /** main -> renderer: full BoardSnapshot (coalesced) */
+  boardChanged: 'agent-office:board:changed',
+  /** main -> renderer: the BoardSettings that now apply (changed from the panel or the tray) */
+  boardSettingsChanged: 'agent-office:board:settings-changed',
 
   // ---- permissions ----
   /** invoke */
@@ -163,6 +176,16 @@ export interface AgentOfficeBridge {
      *  Rejects with a readable message if the session can't take input (exited, not logged in). */
     send(id: string, text: string): Promise<void>
     onEvent(cb: (e: ChatEvent) => void): () => void
+  }
+
+  board: {
+    get(): Promise<{ snapshot: BoardSnapshot; settings: BoardSettings }>
+    /** Removes a claim or note (kind + id). Resolves false if it was already gone. */
+    remove(kind: 'claim' | 'note', id: string): Promise<boolean>
+    setSettings(patch: Partial<BoardSettings>): Promise<BoardSettings>
+    onChanged(cb: (snapshot: BoardSnapshot) => void): () => void
+    /** The settings changed, here or in the tray. Absent in the browser stub. */
+    onSettingsChanged?(cb: (settings: BoardSettings) => void): () => void
   }
 
   permissions: {

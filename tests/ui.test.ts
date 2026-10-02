@@ -286,3 +286,4 @@ t('store notifies only on real changes and keeps untouched slices', () => {
 console.log(`\n${pass} ui tests passed`)
 
 await import('./chat.test.ts')
+await import('./boardui.test.ts')

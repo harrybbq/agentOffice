@@ -7,11 +7,19 @@ export const SESSION_HEADER = 'x-agent-office-session'
 /** The one route a per-session token may use. */
 export const SESSION_TOKEN_ROUTE = '/hooks/claude-code'
 
+/** The one route a board token may use (the office board's MCP tools, electron/boardMcp.ts). */
+export const BOARD_TOKEN_ROUTE = '/mcp'
+
 /**
- * Who a request is: the user's own tools (global token from config.json), or an agent the app
- * launched (per-session token, which only reaches SESSION_TOKEN_ROUTE and only for its session).
+ * Who a request is:
+ * - `global`: the user's own tools (the token from config.json);
+ * - `session`: an agent the app launched, reporting its hooks (per-session token in the token
+ *   header; it only reaches SESSION_TOKEN_ROUTE, and only for its session);
+ * - `board`: the same agent using the office board (a SEPARATE per-session token, sent as
+ *   `Authorization: Bearer`; it only reaches BOARD_TOKEN_ROUTE). "Can post events" and "can use the
+ *   board" are different scopes: neither token works on the other's route.
  */
-export type Auth = { kind: 'global' } | { kind: 'session'; sessionId: string }
+export type Auth = { kind: 'global' } | { kind: 'session'; sessionId: string } | { kind: 'board'; sessionId: string }
 
 function equalConstantTime(got: string, expected: string): boolean {
   const a = Buffer.from(got, 'utf8')
@@ -72,21 +80,41 @@ export class SessionTokens {
   }
 }
 
-/** Resolves the token header to an identity, or null when it matches nothing. */
-export function authenticate(req: IncomingMessage, globalToken: string, sessions?: SessionTokens): Auth | null {
-  const got = req.headers[TOKEN_HEADER]
-  if (typeof got !== 'string' || got.length === 0) return null
-  if (globalToken.length > 0 && equalConstantTime(got, globalToken)) return { kind: 'global' }
-  const sessionId = sessions?.sessionOf(got)
-  return sessionId ? { kind: 'session', sessionId } : null
+/** The bearer token of an `Authorization` header, or ''. */
+function bearerOf(req: IncomingMessage): string {
+  const header = req.headers.authorization
+  if (typeof header !== 'string') return ''
+  const m = /^Bearer ([!-~]{1,512})$/.exec(header)
+  return m ? m[1] : ''
 }
 
 /**
- * What an identity may do. The global token may use everything. A session token may only POST to
- * SESSION_TOKEN_ROUTE, and if it names a session in the session header, it must be its own.
+ * Resolves a request's credentials to an identity, or null when they match nothing. The token
+ * header is looked up as the global token or a session's hook token; a bearer token only as a board
+ * token (and only when no token header was sent). Tokens are never read from the URL.
+ */
+export function authenticate(req: IncomingMessage, globalToken: string, sessions?: SessionTokens, boards?: SessionTokens): Auth | null {
+  const got = req.headers[TOKEN_HEADER]
+  if (typeof got === 'string' && got.length > 0) {
+    if (globalToken.length > 0 && equalConstantTime(got, globalToken)) return { kind: 'global' }
+    const sessionId = sessions?.sessionOf(got)
+    return sessionId ? { kind: 'session', sessionId } : null
+  }
+  if (got !== undefined) return null
+  const bearer = bearerOf(req)
+  const boardSession = bearer ? boards?.sessionOf(bearer) : null
+  return boardSession ? { kind: 'board', sessionId: boardSession } : null
+}
+
+/**
+ * What an identity may do. The global token may use everything except the board route (the board
+ * needs to know which session is calling). A session token may only POST to SESSION_TOKEN_ROUTE,
+ * and if it names a session in the session header, it must be its own. A board token only reaches
+ * BOARD_TOKEN_ROUTE.
  */
 export function authorise(auth: Auth, req: IncomingMessage, path: string): boolean {
-  if (auth.kind === 'global') return true
+  if (auth.kind === 'global') return path !== BOARD_TOKEN_ROUTE
+  if (auth.kind === 'board') return path === BOARD_TOKEN_ROUTE
   if (req.method !== 'POST' || path !== SESSION_TOKEN_ROUTE) return false
   const claimed = req.headers[SESSION_HEADER]
   return typeof claimed !== 'string' || claimed.length === 0 || claimed === auth.sessionId

@@ -3,13 +3,15 @@
 // Electron. Nothing here talks to a real agent. It is loaded only when the real bridge is missing
 // (see src/main.tsx) and is code-split out of the main bundle.
 //
-// URL parameters: ?stub=demo (default: two Claude sessions, a Codex chat session, permission
-// requests, a simulated external team) | ?stub=empty (nothing running) · ?orders=off · ?overlay=1
+// URL parameters: ?stub=demo (default: three Claude sessions, a Codex chat session, permission
+// requests, a simulated external team, an office board) | ?stub=empty (nothing running, an empty
+// board) · ?orders=off · ?overlay=1 · ?board=none (no office board, as an older main process)
 // · ?codex=loggedout (Codex needs a sign-in; "Log in" succeeds after a few seconds)
 // · ?play=0 (the Codex session does not start its scripted turn by itself) · ?speed=0.5 (script speed)
 // Console handle: window.__stub (permission(), exit(id, code), attention(id), resolveElsewhere(id),
-// codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout()).
-// The Codex side (chat sessions, the scripted turn) lives in ./stubCodex.ts.
+// codex.play(id) / codex.fill(id, n) / codex.failNextSend(), codexId(), logout(), board.note(text) ...).
+// The Codex side (chat sessions, the scripted turn) lives in ./stubCodex.ts, the office board in
+// ./stubBoard.ts.
 import { permissionAction, plainPermission } from '../../shared/permissionText'
 import { parseAgentEvent } from '../../shared/events'
 import type { Activity, AgentEvent } from '../../shared/events'
@@ -25,6 +27,7 @@ import type {
   StartSessionRequest
 } from '../../shared/sessions'
 import { subagentId } from '../../shared/sessions'
+import { createBoardStub } from './stubBoard'
 import { createCodexStub } from './stubCodex'
 
 const ESC = '\x1b'
@@ -93,6 +96,7 @@ export function createStubBridge(): AgentOfficeBridge {
   const sessions = new Map<string, FakeSession>()
   let pending: PermissionRequestInfo[] = []
   let counter = 0
+  const board = createBoardStub(() => [...sessions.values()].map((s) => s.info))
 
   const emit = (input: Partial<AgentEvent> & { agentId: string; activity: Activity }) => {
     const e = parseAgentEvent({ provider: 'claude-code', ts: Date.now(), ...input })
@@ -101,6 +105,7 @@ export function createStubBridge(): AgentOfficeBridge {
   const pushSessions = () => {
     const list = [...sessions.values()].map((s) => ({ ...s.info }))
     sessionCbs.forEach((cb) => cb(list))
+    board.sync()
   }
   const pushPerms = () => {
     const list = [...pending]
@@ -329,16 +334,20 @@ export function createStubBridge(): AgentOfficeBridge {
   // ---- demo scenario -----------------------------------------------------------------------
   if (mode === 'demo') {
     window.setTimeout(() => {
-      const a = create({ provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'agent-office' }, 'busy')
+      const a = create({ provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'frontend' }, 'busy')
       const b = create(
         { provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\storefront', permissionMode: 'acceptEdits', model: 'opus' },
         'idle'
       )
-      a.info.canReceiveOrders = b.info.canReceiveOrders = true
+      // A third team in the first repository: the office board has something to coordinate.
+      const d = create({ provider: 'claude-code', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'test-suite' }, 'idle')
+      a.info.canReceiveOrders = b.info.canReceiveOrders = d.info.canReceiveOrders = true
       welcome(a)
       welcome(b)
+      welcome(d)
+      let codexId: string | undefined
       out(a, `refactor the session list into a store\r\n\r\n${fg(42, '●')} I'll split this across two subagents.\r\n`)
-      emit({ agentId: a.info.id, parentId: null, displayName: 'agent-office', activity: 'write', detail: 'src/ui/store.ts' })
+      emit({ agentId: a.info.id, parentId: null, displayName: a.info.title, activity: 'write', detail: 'src/ui/store.ts' })
       const w1 = addWorker(a, 'Explore', 'read', 'src/scene/roster.ts')
       addWorker(a, 'Tests', 'exec', 'npm test')
       addWorker(b, 'Docs', 'web', 'vite.dev/guide')
@@ -348,7 +357,9 @@ export function createStubBridge(): AgentOfficeBridge {
         const c = create({ provider: 'codex', cwd: 'C:\\Users\\Harry\\source\\repos\\agent-office', title: 'gpt-6-luna', model: 'gpt-6-luna' }, 'idle')
         c.info.canReceiveOrders = true
         codex.add(c.info.id, { history: true, autoplay: params.get('play') !== '0' })
+        codexId = c.info.id
       }
+      board.seed({ main: a.info.id, codex: codexId, tests: d.info.id, other: b.info.id })
       pushSessions()
 
       // A simulated external team the app can't answer (shows as "answer in its own terminal").
@@ -360,7 +371,7 @@ export function createStubBridge(): AgentOfficeBridge {
       )
 
       later(a, 2500, () =>
-        requestPermission(a, a.info.id, 'agent-office', 'Bash', 'Bash: npm test -- --runInBand', JSON.stringify({ command: 'npm test -- --runInBand', description: 'Run the test suite', timeout: 120000 }, null, 2))
+        requestPermission(a, a.info.id, a.info.title, 'Bash', 'Bash: npm test -- --runInBand', JSON.stringify({ command: 'npm test -- --runInBand', description: 'Run the test suite', timeout: 120000 }, null, 2))
       )
       later(a, 4500, () =>
         requestPermission(
@@ -427,6 +438,7 @@ export function createStubBridge(): AgentOfficeBridge {
     emit,
     codex,
     codexId: () => [...sessions.values()].find((s) => s.info.surface === 'chat' && s.info.state !== 'exited')?.info.id ?? null,
+    board: board.handle,
     logout: () => setCodexAccount(false)
   }
   ;(window as unknown as Record<string, unknown>).__stub = stubHandle
@@ -589,6 +601,9 @@ export function createStubBridge(): AgentOfficeBridge {
     },
 
     chat: codex.chat,
+
+    // ?board=none: a main process from before the office board.
+    board: params.get('board') === 'none' ? (undefined as unknown as AgentOfficeBridge['board']) : board.bridge,
 
     permissions: {
       list: async () => [...pending],

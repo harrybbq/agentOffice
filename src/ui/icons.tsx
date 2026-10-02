@@ -213,3 +213,30 @@ export const IconLogin = (p: P) => (
     <path d="M9.5 2.75h2.25a1.5 1.5 0 011.5 1.5v7.5a1.5 1.5 0 01-1.5 1.5H9.5M2.5 8h7M7 5.25L9.75 8 7 10.75" />
   </Svg>
 )
+export const IconBoard = (p: P) => (
+  <Svg {...p}>
+    <rect x="2.25" y="2.75" width="11.5" height="10.5" rx="1.25" />
+    <path d="M5 6h2.5v2.5H5zM10 5.75h1.25M10 8h1.25M5 10.75h6.25" />
+  </Svg>
+)
+export const IconOverlap = (p: P) => (
+  <Svg {...p}>
+    <circle cx="6" cy="8" r="3.75" />
+    <circle cx="10" cy="8" r="3.75" />
+  </Svg>
+)
+export const IconTrash = (p: P) => (
+  <Svg {...p}>
+    <path d="M3 4.5h10M6.25 4.5V3.25a.75.75 0 01.75-.75h2a.75.75 0 01.75.75V4.5M4.25 4.5l.5 8a1 1 0 001 .95h4.5a1 1 0 001-.95l.5-8M6.75 7v4M9.25 7v4" />
+  </Svg>
+)
+export const IconMinus = (p: P) => (
+  <Svg {...p}>
+    <path d="M3.25 8h9.5" />
+  </Svg>
+)
+export const IconArrowRight = (p: P) => (
+  <Svg {...p}>
+    <path d="M3 8h10M9 4l4 4-4 4" />
+  </Svg>
+)
