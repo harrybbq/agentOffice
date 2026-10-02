@@ -1,7 +1,7 @@
 // Electron glue for the preview: the IPC handlers (channels: shared/preview.ts) and the rules for
 // frames inside the app's window. Everything the renderer sends is validated by the PreviewManager;
 // here only the sender is checked: the app's own window, and its main frame (never the previewed page).
-import { ipcMain, shell, webFrameMain, type BrowserWindow, type IpcMainInvokeEvent, type WebContents } from 'electron'
+import { app, ipcMain, shell, webFrameMain, type BrowserWindow, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { PREVIEW_IPC, type PreviewBlocked } from '../../shared/preview'
 import { isExternalWebUrl } from '../webPermissions'
 import { ERR_ABORTED, ERR_BLOCKED_BY_CSP, ERR_BLOCKED_BY_RESPONSE, ExternalGate, subFrameNavigation } from './guard'
@@ -39,8 +39,8 @@ export function registerPreviewIpc(opts: PreviewIpcOptions): void {
 
 /** One gate for everything a page in the window sends to the system browser by itself. */
 const gate = new ExternalGate()
-/** Testing (AGENT_OFFICE_PREVIEW_NO_BROWSER=1): log what would open in the browser instead of opening it. */
-const dryRun = (): boolean => process.env.AGENT_OFFICE_PREVIEW_NO_BROWSER === '1'
+/** Development only (AGENT_OFFICE_PREVIEW_NO_BROWSER=1): log what would open in the browser instead of opening it. */
+const dryRun = (): boolean => !app.isPackaged && process.env.AGENT_OFFICE_PREVIEW_NO_BROWSER === '1'
 
 /**
  * Hands a plain web address to the system browser, at most one every few seconds: a link followed
