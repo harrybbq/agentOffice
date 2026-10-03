@@ -207,6 +207,10 @@ function ensureShadow(scene: Phaser.Scene): string {
 const BODY_RIM = '#c6c6c6'
 const LIMB = '#ececec'
 const FOOT = '#c2c2c2'
+// The far arm and foot of a profile: a shade darker, so they read as behind the body.
+const FAR_RIM = '#aeaeae'
+const FAR_LIMB = '#d0d0d0'
+const FAR_FOOT = '#acacac'
 
 /** The torso: narrow shoulders, a wider rounded bottom. */
 function torso(ctx: Ctx, top: number, bottom: number): void {
@@ -221,6 +225,11 @@ function torso(ctx: Ctx, top: number, bottom: number): void {
   ctx.quadraticCurveTo(cx - 7.6, bottom, cx - 8.2, top + h * 0.8)
   ctx.bezierCurveTo(cx - 8.6, top + h * 0.62, cx - 7.6, top + h * 0.45, cx - 6, top + h * 0.22)
   ctx.closePath()
+  paintTorso(ctx, top, bottom)
+}
+
+/** Fills and rims the current path as a torso (every view shares the shading and the line weight). */
+function paintTorso(ctx: Ctx, top: number, bottom: number): void {
   const g = ctx.createLinearGradient(0, top, 0, bottom)
   g.addColorStop(0, '#ffffff')
   g.addColorStop(0.55, '#f4f4f4')
@@ -232,18 +241,57 @@ function torso(ctx: Ctx, top: number, bottom: number): void {
   ctx.stroke()
 }
 
-/** A stubby arm: a capsule from the shoulder to the hand. */
-function arm(ctx: Ctx, x0: number, y0: number, x1: number, y1: number): void {
+/**
+ * The torso in profile, facing right: the back nearly straight, the chest and belly forward, the
+ * bottom tucked under. As tall as the front one and about as deep as that one is wide at the waist.
+ */
+function sideTorso(ctx: Ctx, top: number, bottom: number): void {
+  const cx = FOOT_X
+  const h = bottom - top
+  ctx.beginPath()
+  ctx.moveTo(cx - 5.1, top + h * 0.24)
+  ctx.quadraticCurveTo(cx - 5, top, cx - 0.2, top) // nape and shoulder
+  ctx.quadraticCurveTo(cx + 4.4, top, cx + 5, top + h * 0.2) // chest
+  ctx.bezierCurveTo(cx + 5.9, top + h * 0.4, cx + 8, top + h * 0.54, cx + 7.5, top + h * 0.76) // belly
+  ctx.quadraticCurveTo(cx + 6.5, bottom, cx + 0.6, bottom)
+  ctx.quadraticCurveTo(cx - 5.2, bottom, cx - 5.7, top + h * 0.82) // bottom
+  ctx.bezierCurveTo(cx - 5.9, top + h * 0.62, cx - 5.3, top + h * 0.42, cx - 5.1, top + h * 0.24) // back
+  ctx.closePath()
+  paintTorso(ctx, top, bottom)
+}
+
+/** A stubby arm: a capsule from the shoulder to the hand. `far`: the one behind the body, in its shade. */
+function arm(ctx: Ctx, x0: number, y0: number, x1: number, y1: number, far = false): void {
   ctx.lineCap = 'round'
   ctx.beginPath()
   ctx.moveTo(x0, y0)
   ctx.lineTo(x1, y1)
   ctx.lineWidth = 4.7
-  ctx.strokeStyle = BODY_RIM
+  ctx.strokeStyle = far ? FAR_RIM : BODY_RIM
   ctx.stroke()
   ctx.lineWidth = 3.7
-  ctx.strokeStyle = LIMB
+  ctx.strokeStyle = far ? FAR_LIMB : LIMB
   ctx.stroke()
+}
+
+/** A shoe seen from the side, pointing right: round heel at `x`, a longer, lower toe. */
+function shoe(ctx: Ctx, x: number, y: number, far = false): void {
+  const shape = (g: number) => {
+    ctx.beginPath()
+    ctx.moveTo(x - 2.3 - g, y + 0.1)
+    ctx.quadraticCurveTo(x - 2.3 - g, y - 1.5 - g, x - 0.5, y - 1.5 - g)
+    ctx.bezierCurveTo(x + 1.6, y - 1.5 - g, x + 4.6 + g, y - 0.7 - g, x + 4.6 + g, y + 0.7)
+    ctx.quadraticCurveTo(x + 4.6 + g, y + 1.5 + g, x + 3.6, y + 1.5 + g)
+    ctx.lineTo(x - 1.1, y + 1.5 + g)
+    ctx.quadraticCurveTo(x - 2.3 - g, y + 1.5 + g, x - 2.3 - g, y + 0.1)
+    ctx.closePath()
+  }
+  shape(0.45)
+  ctx.fillStyle = far ? FAR_RIM : BODY_RIM
+  ctx.fill()
+  shape(0)
+  ctx.fillStyle = far ? FAR_FOOT : FOOT
+  ctx.fill()
 }
 
 function foot(ctx: Ctx, x: number, y: number): void {
@@ -321,21 +369,32 @@ function drawBody(ctx: Ctx, f: BodyFrame): void {
     case 'workSideA':
     case 'workSideB': {
       const step = f.endsWith('A') ? 1 : f.endsWith('B') ? -1 : 0
-      const moving = f.startsWith('walk') || f.startsWith('carry')
-      // Feet one behind the other; walking swaps them.
-      foot(ctx, moving ? 16 - 3.4 * step : 13.6, moving && step < 0 ? 35.5 : 34.8)
-      foot(ctx, moving ? 16 + 3.4 * step : 18.6, moving && step > 0 ? 35.5 : 35.2)
-      ctx.save()
-      ctx.translate(FOOT_X, 0)
-      ctx.scale(0.84, 1)
-      ctx.translate(-FOOT_X, 0)
-      torso(ctx, 18.6, 34.6)
-      ctx.restore()
-      const sx = 17
-      if (f === 'sideStand') arm(ctx, sx, 23.6, 17.6, 28.8)
-      else if (f.startsWith('walk')) arm(ctx, sx, 23.6, 17 + 2.6 * step, 28.6)
-      else if (f.startsWith('carry')) arm(ctx, sx, 23.4, 22.6, 26.6)
-      else arm(ctx, sx, 23, 23.6, step > 0 ? 20.6 : 22.8)
+      const walk = f.startsWith('walk')
+      const carry = f.startsWith('carry')
+      const stride = walk || carry ? step : 0
+      // Shoulders: the far one a little behind the near one. Hands: [x, y] of the far and the near arm.
+      const fs = 14.6
+      const ns = 16.2
+      let farHand: [number, number] = [14.4, 28.4]
+      let nearHand: [number, number] = [16.6, 28.9]
+      if (walk) {
+        // Arms swing against the legs: near foot forward (A) = near arm back.
+        farHand = step > 0 ? [21.9, 26.4] : [11.4, 27.9]
+        nearHand = [16.4 - 3.7 * step, 28.7 - (step < 0 ? 0.5 : 0)]
+      } else if (carry) {
+        farHand = [23.6, 26.2]
+        nearHand = [22.8, 27.2]
+      } else if (f !== 'sideStand') {
+        farHand = [24.2, step > 0 ? 23.4 : 21.2]
+        nearHand = [24.4, step > 0 ? 20.4 : 22.6]
+      }
+      // Far side first: its foot and arm show from behind the body.
+      // Near foot forward on A, back on B; the foot behind is lifted, pushing off.
+      shoe(ctx, stride ? 15.3 - 3.9 * stride : 16.4, stride < 0 ? 35.2 : stride > 0 ? 34.5 : 35, true)
+      arm(ctx, fs, 23.2, farHand[0], farHand[1], true)
+      shoe(ctx, stride ? 15.3 + 3.9 * stride : 14.2, stride > 0 ? 35.2 : stride < 0 ? 34.5 : 35.2)
+      sideTorso(ctx, 18.6, 34.6)
+      arm(ctx, ns, 23.4, nearHand[0], nearHand[1])
       break
     }
     case 'sitFront':
