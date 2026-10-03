@@ -24,6 +24,8 @@ export interface FurnitureRect extends Rect {
   ysort: boolean
   /** Only drawn when the map's pictures can't be used. */
   fallback: boolean
+  /** Frames per second of an animated sprite (0 = default). */
+  fps: number
 }
 
 /** A Tiled image layer: one picture of the floor (and maybe the walls). */
@@ -37,6 +39,13 @@ export interface ImageLayerRef {
   scale: number
   /** The picture includes the walls: the wall rectangles are not drawn. */
   walls: boolean
+}
+
+/** A location where a character standing there looks a given way (at its station). */
+export interface FacingPoint {
+  x: number
+  y: number
+  facing: 'north' | 'south' | 'east' | 'west'
 }
 
 /** A location where a character sits. */
@@ -73,6 +82,7 @@ export interface ParsedMap {
   /** Image layers, bottom first. */
   images: ImageLayerRef[]
   seats: SeatPoint[]
+  facings: FacingPoint[]
   raw: Record<string, unknown>
   warnings: string[]
 }
@@ -144,6 +154,7 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
   const locations: Locations = new Map()
   const images: ImageLayerRef[] = []
   const seats: SeatPoint[] = []
+  const facings: FacingPoint[] = []
 
   for (const layer of layers) {
     if (layer.type === 'imagelayer' && typeof layer.image === 'string' && layer.image && layer.visible !== false) {
@@ -174,6 +185,8 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
         else locations.set(type, [p])
         const seat = prop(o, 'seat')
         if (seat === 'north' || seat === 'south') seats.push({ x: p.x, y: p.y, facing: seat })
+        const facing = prop(o, 'facing')
+        if (facing === 'north' || facing === 'south' || facing === 'east' || facing === 'west') facings.push({ x: p.x, y: p.y, facing })
         continue
       }
       const width = num(o.width)
@@ -196,7 +209,8 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
           solid: prop(o, 'solid') === true,
           sprite: str(prop(o, 'sprite')),
           ysort: prop(o, 'ysort') === true,
-          fallback: prop(o, 'fallback') === true
+          fallback: prop(o, 'fallback') === true,
+          fps: num(prop(o, 'fps'), 0)
         })
       }
     }
@@ -234,6 +248,7 @@ export function parseMap(input: unknown, label = 'Map'): ParsedMap {
     tileLayers,
     images,
     seats,
+    facings,
     raw: input,
     warnings
   }

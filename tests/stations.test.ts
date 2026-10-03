@@ -365,7 +365,7 @@ t('tags: one per station, pinned to its furniture; `once` types get a single tag
   for (const a of anchors) {
     assert.ok(inRect(a, r), `${a.type}: tag outside its block`)
     assert.ok(a.rect, `${a.type}: no furniture next to it`)
-    assert.ok(a.x >= a.rect!.x && a.x <= a.rect!.x + a.rect!.width && a.y === a.rect!.y, `${a.type}: not on its furniture's top edge`)
+    assert.ok(a.x >= a.rect!.x && a.x <= a.rect!.x + a.rect!.width && a.y === a.rect!.y - (a.label.offset ?? 0), `${a.type}: not on its furniture's top edge (lifted by its offset)`)
     assert.ok(a.color !== null)
   }
   // Tags of one block keep clear of each other at normal zoom (a title tag is about 90 x 20 px).
@@ -373,6 +373,15 @@ t('tags: one per station, pinned to its furniture; `once` types get a single tag
   // Priorities follow the order of stationLabels.
   const order = [...router.labels.keys()]
   for (const a of anchors) assert.equal(a.priority, order.indexOf(a.type))
+
+  // A seat behind its desk: the tag goes above the sitter instead of onto the desk; a station whose
+  // point is above its furniture but is no seat (the kanban wall) keeps its tag on the furniture.
+  const seat = b.locations.get('manager_seat')![0]
+  const seated = stationAnchors(b, router.labels, layout.tile, (p) => p.x === seat.x && p.y === seat.y)
+  const m = seated.find((a) => a.type === 'manager_seat')!
+  assert.deepEqual([m.x, m.y], [seat.x, seat.y - 1.4 * layout.tile])
+  const k = seated.find((a) => a.type === 'noticeboard')!
+  assert.equal(k.y, k.rect!.y - (k.label.offset ?? 0))
 
   const hq = stationAnchors(layout.hq, router.labels, layout.tile)
   assert.deepEqual(hq.map((a) => a.type).sort(), ['boss_seat', 'inbox', 'noticeboard'])

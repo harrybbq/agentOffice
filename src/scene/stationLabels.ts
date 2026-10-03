@@ -75,7 +75,10 @@ export class StationLabels {
   add(block: Block, animate: boolean): void {
     if (this.labels.size === 0) return
     this.drop(block.id)
-    const anchors = stationAnchors(block, this.labels, this.tile)
+    const { offset, template } = block
+    const anchors = stationAnchors(block, this.labels, this.tile, (p) =>
+      template.seats.some((s) => Math.abs(s.x + offset.x - p.x) < 1 && Math.abs(s.y + offset.y - p.y) < 1)
+    )
     anchors.forEach((anchor, i) => {
       const el = document.createElement('div')
       el.className = 'station-tag'

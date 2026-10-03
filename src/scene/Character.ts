@@ -23,23 +23,53 @@ const BUBBLE_PAD_Y = 1.5
 
 /** 'north': seated facing away from the viewer; 'south': facing the viewer. */
 export type SeatFacing = 'north' | 'south'
+/** Which way a character looks: at a station (a location's `facing`) or where it walks. */
+export type Facing = 'north' | 'south' | 'east' | 'west'
 
+type View = 'front' | 'back' | 'side'
+interface Pose {
+  frames: readonly [BodyFrame, BodyFrame]
+  view: View
+  seated: boolean
+  ms: number
+}
+const pose = (a: BodyFrame, b: BodyFrame, view: View, ms: number, seated = false): Pose => ({ frames: [a, b], view, seated, ms })
 /** The procedural character's poses: body frames (two alternate), which side of the head shows. */
-const POSES: Record<string, { frames: readonly [BodyFrame, BodyFrame]; back: boolean; seated: boolean; ms: number }> = {
-  idle: { frames: ['stand', 'stand'], back: false, seated: false, ms: 0 },
-  walk: { frames: ['walkA', 'walkB'], back: false, seated: false, ms: WALK_FRAME_MS },
-  carry: { frames: ['carryA', 'carryB'], back: false, seated: false, ms: WALK_FRAME_MS },
-  work: { frames: ['workA', 'workB'], back: false, seated: false, ms: WORK_FRAME_MS },
-  sit: { frames: ['sitFront', 'sitFront'], back: false, seated: true, ms: 0 },
-  type: { frames: ['typeFrontA', 'typeFrontB'], back: false, seated: true, ms: TYPE_FRAME_MS },
-  sit_back: { frames: ['sitBack', 'sitBack'], back: true, seated: true, ms: 0 },
-  type_back: { frames: ['typeBackA', 'typeBackB'], back: true, seated: true, ms: TYPE_FRAME_MS }
+const POSES: Record<string, Pose> = {
+  idle: pose('stand', 'stand', 'front', 0),
+  walk: pose('walkA', 'walkB', 'front', WALK_FRAME_MS),
+  carry: pose('carryA', 'carryB', 'front', WALK_FRAME_MS),
+  work: pose('workA', 'workB', 'front', WORK_FRAME_MS),
+  idle_back: pose('stand', 'stand', 'back', 0),
+  walk_back: pose('walkA', 'walkB', 'back', WALK_FRAME_MS),
+  carry_back: pose('walkA', 'walkB', 'back', WALK_FRAME_MS),
+  work_back: pose('workBackA', 'workBackB', 'back', WORK_FRAME_MS),
+  idle_side: pose('sideStand', 'sideStand', 'side', 0),
+  walk_side: pose('walkSideA', 'walkSideB', 'side', WALK_FRAME_MS),
+  carry_side: pose('carrySideA', 'carrySideB', 'side', WALK_FRAME_MS),
+  work_side: pose('workSideA', 'workSideB', 'side', WORK_FRAME_MS),
+  sit: pose('sitFront', 'sitFront', 'front', 0, true),
+  type: pose('typeFrontA', 'typeFrontB', 'front', TYPE_FRAME_MS, true),
+  sit_back: pose('sitBack', 'sitBack', 'back', 0, true),
+  type_back: pose('typeBackA', 'typeBackB', 'back', TYPE_FRAME_MS, true)
 }
 
-/** The pose for an animation on a seat (or not on one). */
-export function poseName(anim: string, seat: SeatFacing | null): string {
+/**
+ * The pose for an animation: on a seat the character sits; otherwise it looks the given way
+ * (north = seen from behind, east/west = in profile, south or none = facing the viewer).
+ */
+export function poseName(anim: string, seat: SeatFacing | null, facing: Facing | null = null): string {
   if (seat && (anim === 'idle' || anim === 'work')) return (anim === 'work' ? 'type' : 'sit') + (seat === 'north' ? '_back' : '')
+  if (!['idle', 'walk', 'carry', 'work'].includes(anim)) return anim
+  if (facing === 'north') return anim + '_back'
+  if (facing === 'east' || facing === 'west') return anim + '_side'
   return anim
+}
+
+/** The way a step from (dx, dy) goes; mostly sideways counts as sideways. */
+export function stepFacing(dx: number, dy: number): Facing {
+  if (Math.abs(dx) > Math.abs(dy) * 1.2) return dx > 0 ? 'east' : 'west'
+  return dy < 0 ? 'north' : 'south'
 }
 
 export type ActionKind = 'spawn' | 'activity' | 'waiting' | 'relay' | 'done' | 'handoff' | 'return' | 'leave' | 'home' | 'rest'
@@ -77,6 +107,8 @@ export interface CharacterOptions {
   teamColor?: number
   /** Is this spot a seat (a map location with `seat`)? Asked whenever the character stops. */
   seatAt?: (p: Point) => SeatFacing | null
+  /** Which way a character standing here looks (a map location with `facing`). */
+  facingAt?: (p: Point) => Facing | null
 }
 
 /** None, pointed at, or the one the inspector shows. */
@@ -115,8 +147,13 @@ export class Character {
   /** Runs on for the bob; starts at a per-character offset so a room doesn't breathe in step. */
   private bobClock: number
   private seatAt?: (p: Point) => SeatFacing | null
+  private facingAt?: (p: Point) => Facing | null
+  /** Where the current walk is heading. */
+  private heading: Facing = 'south'
   private shadow: Phaser.GameObjects.Image
   private propY = 0
+  private propX = 0
+  private carrying = false
   private tween: Phaser.Tweens.Tween | null = null
   private timer: Phaser.Time.TimerEvent | null = null
   private onIdle?: (c: Character) => void
@@ -129,6 +166,9 @@ export class Character {
   private ring: Phaser.GameObjects.Graphics
   private highlight: Highlight = 'none'
   private labelBg: Phaser.GameObjects.Graphics
+  private compact = false
+  /** The bubble is meant to show (it may be hidden by compact mode). */
+  private bubbleShown = false
   private bubbleBg: Phaser.GameObjects.Graphics
   private ringTween: Phaser.Tweens.Tween | null = null
 
@@ -139,6 +179,7 @@ export class Character {
     this.onIdle = o.onIdle
     this.findPath = o.findPath
     this.seatAt = o.seatAt
+    this.facingAt = o.facingAt
     let hash = 0
     for (let i = 0; i < o.id.length; i++) hash = (hash * 31 + o.id.charCodeAt(i)) | 0
     this.bobClock = Math.abs(hash) % IDLE_BOB_MS
@@ -167,6 +208,7 @@ export class Character {
       .setScale(o.skin.kind === 'placeholder' ? o.skin.scale : PROP_SCALE)
       .setVisible(false)
     this.propY = this.prop.y
+    this.propX = this.prop.x
 
     // Name: white on a small dark pill. Speech: dark on a white rounded bubble with a tail.
     this.labelBg = scene.add.graphics()
@@ -371,7 +413,7 @@ export class Character {
     const up = walking
       ? Math.sin((this.frameClock / pose.ms) * Math.PI) * WALK_BOB
       : (0.5 + 0.5 * Math.sin((this.bobClock / IDLE_BOB_MS) * Math.PI * 2)) * IDLE_BOB * (pose.seated ? 0.6 : 1)
-    const base = pose.seated && !pose.back ? SEAT_PULL : 0
+    const base = pose.seated && pose.view === 'front' ? SEAT_PULL : 0
     this.body.y = base - (walking ? up : up * 0.35) * s
     if (this.overlay) this.overlay.y = base + ((pose.seated ? SEAT_DROP : 0) - up) * s
     this.shadow.y = base - 1
@@ -488,6 +530,11 @@ export class Character {
       return
     }
     const d = Math.hypot(seg.x - this.container.x, seg.y - this.container.y)
+    const heading = d > 0.5 ? stepFacing(seg.x - this.container.x, seg.y - this.container.y) : this.heading
+    if (heading !== this.heading) {
+      this.heading = heading
+      if (this.anim === 'walk' || this.anim === 'carry') this.turn()
+    }
     this.tween = this.scene.tweens.add({
       targets: this.container,
       x: seg.x,
@@ -534,14 +581,30 @@ export class Character {
   }
 
   private hideBubble(): void {
+    this.bubbleShown = false
     this.bubble.setVisible(false)
     this.bubbleBg.setVisible(false)
   }
 
+  /**
+   * Zoomed far out the name and speech would be specks: they hide (the hover card still names
+   * whoever is under the pointer). The bubble keeps its text for when it shows again.
+   */
+  setCompact(on: boolean): void {
+    if (on === this.compact) return
+    this.compact = on
+    this.label.setVisible(!on)
+    this.labelBg.setVisible(!on)
+    const said = this.bubble.text.length > 0 && this.bubbleShown
+    this.bubble.setVisible(!on && said)
+    this.bubbleBg.setVisible(!on && said)
+  }
+
   private setBubble(text: string): void {
     const on = text.length > 0
-    this.bubble.setText(text).setVisible(on)
-    const g = this.bubbleBg.setVisible(on)
+    this.bubbleShown = on
+    this.bubble.setText(text).setVisible(on && !this.compact)
+    const g = this.bubbleBg.setVisible(on && !this.compact)
     g.clear()
     if (!on) return
     const w = this.bubble.width + BUBBLE_PAD_X * 2
@@ -565,6 +628,7 @@ export class Character {
   }
 
   private setCarry(kind: PropKind | null): void {
+    this.carrying = kind !== null
     if (kind) this.prop.setTexture(propKey(kind)).setVisible(true)
     else this.prop.setVisible(false)
   }
@@ -572,24 +636,45 @@ export class Character {
   private setAnim(name: string): void {
     this.anim = name
     this.frameClock = 0
-    // Sitting is a matter of where the character has stopped, not of the activity.
-    const seat = name === 'idle' || name === 'work' ? (this.seatAt?.(this.position) ?? null) : null
-    const pose = poseName(name, seat)
+    // Sitting and looking at a station are a matter of where the character has stopped; walking
+    // looks the way it goes.
+    const stopped = name === 'idle' || name === 'work'
+    const seat = stopped ? (this.seatAt?.(this.position) ?? null) : null
+    const facing = stopped ? (this.facingAt?.(this.position) ?? null) : this.heading
+    const pose = poseName(name, seat, seat ? null : facing)
     if (this.skin.kind === 'placeholder') {
       this.pose = POSES[pose] ? pose : 'idle'
-      this.overlay?.setFrame(POSES[this.pose].back ? 'back' : 'front')
+      const p = POSES[this.pose]
+      this.overlay?.setFrame(p.view)
+      const flip = p.view === 'side' && facing === 'west'
+      this.body.setFlipX(flip)
+      this.overlay?.setFlipX(flip)
+      // Something carried is in front of the body: hidden from behind, ahead in profile.
+      if (this.prop.visible || this.carrying) {
+        this.prop.setVisible(p.view !== 'back')
+        this.prop.x = p.view === 'side' ? (flip ? -1 : 1) * this.skin.height * 0.2 : this.propX
+      }
       this.setFrame(0)
       this.tick(0)
       return
     }
     const skin = this.skin
     // type_back -> type -> work -> idle; sit_back -> sit -> idle; carry -> walk -> idle.
-    const chain = [pose, pose.replace('_back', ''), name, name === 'carry' ? 'walk' : 'idle', 'idle']
+    const chain = [pose, pose.replace(/_(back|side)$/, ''), name, name === 'carry' ? 'walk' : 'idle', 'idle']
     const pick = chain.find((n) => skin.anims.has(n))
     if (!pick) return
     this.pose = pick
     this.body.play(animKey(skin.body, pick), true)
     if (this.overlay && skin.overlay) this.overlay.play(animKey(skin.overlay, pick), true)
+  }
+
+  /** A new walking direction: the same walk, seen from another side (the step keeps its rhythm). */
+  private turn(): void {
+    const clock = this.frameClock
+    const frame = this.frame
+    this.setAnim(this.anim)
+    this.frameClock = clock
+    if (this.skin.kind === 'placeholder') this.setFrame(frame)
   }
 
   private setFrame(f: number): void {

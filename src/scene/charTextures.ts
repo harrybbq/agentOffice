@@ -73,7 +73,18 @@ export const BODY_FRAMES = [
   'typeBackB',
   'sitFront',
   'typeFrontA',
-  'typeFrontB'
+  'typeFrontB',
+  // seen from behind, standing at a station above it on the map
+  'workBackA',
+  'workBackB',
+  // in profile, facing right (the Character mirrors them for left)
+  'sideStand',
+  'walkSideA',
+  'walkSideB',
+  'carrySideA',
+  'carrySideB',
+  'workSideA',
+  'workSideB'
 ] as const
 export type BodyFrame = (typeof BODY_FRAMES)[number]
 
@@ -84,7 +95,7 @@ export type Skin =
       shadow: string
       /** One texture for every character: frames are BODY_FRAMES. */
       body: string
-      /** Per look: frames 'front' and 'back'. */
+      /** Per look: frames 'front', 'back' and 'side' (profile facing right). */
       overlay: string
       /** Height of the figure on the map, px. */
       height: number
@@ -291,6 +302,40 @@ function drawBody(ctx: Ctx, f: BodyFrame): void {
       // Seen from behind: elbows out, hands on the keyboard beyond the head.
       both(24 + SEAT_DROP, 7.2, a ? 21.6 : 22.8, 24.8, a ? 22.8 : 21.6)
       torso(ctx, 18.6 + SEAT_DROP, 34)
+      break
+    }
+    case 'workBackA':
+    case 'workBackB': {
+      const a = f === 'workBackA'
+      foot(ctx, 12.4, 35)
+      foot(ctx, 19.6, 35)
+      both(23.4, 8.2, a ? 17.4 : 19.2, 23.8, a ? 19.2 : 17.4) // reaching up to the thing in front
+      torso(ctx, 18.6, 34.6)
+      break
+    }
+    case 'sideStand':
+    case 'walkSideA':
+    case 'walkSideB':
+    case 'carrySideA':
+    case 'carrySideB':
+    case 'workSideA':
+    case 'workSideB': {
+      const step = f.endsWith('A') ? 1 : f.endsWith('B') ? -1 : 0
+      const moving = f.startsWith('walk') || f.startsWith('carry')
+      // Feet one behind the other; walking swaps them.
+      foot(ctx, moving ? 16 - 3.4 * step : 13.6, moving && step < 0 ? 35.5 : 34.8)
+      foot(ctx, moving ? 16 + 3.4 * step : 18.6, moving && step > 0 ? 35.5 : 35.2)
+      ctx.save()
+      ctx.translate(FOOT_X, 0)
+      ctx.scale(0.84, 1)
+      ctx.translate(-FOOT_X, 0)
+      torso(ctx, 18.6, 34.6)
+      ctx.restore()
+      const sx = 17
+      if (f === 'sideStand') arm(ctx, sx, 23.6, 17.6, 28.8)
+      else if (f.startsWith('walk')) arm(ctx, sx, 23.6, 17 + 2.6 * step, 28.6)
+      else if (f.startsWith('carry')) arm(ctx, sx, 23.4, 22.6, 26.6)
+      else arm(ctx, sx, 23, 23.6, step > 0 ? 20.6 : 22.8)
       break
     }
     case 'sitFront':
@@ -515,6 +560,112 @@ function drawOverlay(ctx: Ctx, back: boolean, ph: Placeholder, tone: number, loo
   }
 }
 
+/** The head and collar in profile, facing right. Accessories worn in front don't show from the side. */
+function drawOverlaySide(ctx: Ctx, ph: Placeholder, tone: number, look: PlaceholderLook): void {
+  const base = TONES[tone % TONES.length]
+  const skin = look.head ? SKIN_TONES[look.head.skin % SKIN_TONES.length] : base.skin
+  const hairN = look.head ? HAIR_COLORS[look.head.hair % HAIR_COLORS.length] : base.hair
+  const hair = css(hairN)
+  const hairDark = css(darken(hairN, 0.78))
+  const accentN = look.accent ?? cssToInt(ph.accent, 0xffffff)
+  const cx = HEAD_X + 0.4
+  ellipse(ctx, cx - 0.6, 20, 4.8, 1.8, 'rgba(20,24,40,0.16)')
+  if (look.collar !== undefined) {
+    fillRound(ctx, cx - 5.4, 19.2, 10.2, 3.1, 1.55, css(darken(look.collar, 0.8)))
+    fillRound(ctx, cx - 5.4, 19.2, 10.2, 2.4, 1.2, css(look.collar))
+  }
+  if (ph.accessory === 'baton') {
+    ctx.fillStyle = css(darken(accentN, 0.78))
+    ctx.fillRect(cx - 6.6, 28.4, 12.6, 1.6)
+    fillRound(ctx, cx - 7.6, 23, 2.6, 10.5, 1.3, css(accentN))
+  }
+  // Nose first, so the head's edge runs over its root.
+  ellipse(ctx, cx + 7, 13.8, 1.25, 1.1, css(darken(skin, 0.93)))
+  ctx.beginPath()
+  ctx.arc(cx, HEAD_Y, HEAD_R, 0, Math.PI * 2)
+  const g = ctx.createRadialGradient(cx + 1.6, HEAD_Y - 2.8, 1, cx, HEAD_Y, HEAD_R + 1.5)
+  g.addColorStop(0, css(skin))
+  g.addColorStop(0.7, css(skin))
+  g.addColorStop(1, css(darken(skin, 0.84)))
+  ctx.fillStyle = g
+  ctx.fill()
+  const onHead = (paint: () => void) => {
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(cx, HEAD_Y, HEAD_R + 0.35, 0, Math.PI * 2)
+    ctx.clip()
+    paint()
+    ctx.restore()
+  }
+  /** Hair over the top and the back of the head, the face clear. */
+  const crown = (fill: string, low = 16.5) =>
+    onHead(() => {
+      ctx.fillStyle = fill
+      ctx.beginPath()
+      ctx.moveTo(cx + 9, 0)
+      ctx.lineTo(cx + 9, 8)
+      ctx.quadraticCurveTo(cx + 3.4, 6.4, cx - 0.6, 10.2)
+      ctx.quadraticCurveTo(cx - 2.6, 13.4, cx - 3.6, low)
+      ctx.lineTo(cx - 9, low)
+      ctx.lineTo(cx - 9, 0)
+      ctx.closePath()
+      ctx.fill()
+    })
+  const shaved = ph.accessory === 'number'
+  const style = look.head?.style ?? 'short'
+  const cap = (fill: number, peaked: boolean) => {
+    onHead(() => {
+      ctx.fillStyle = css(fill)
+      ctx.fillRect(cx - 9, 0, 18, peaked ? 9.4 : 9.2)
+    })
+    if (peaked) {
+      fillRound(ctx, cx - 7.6, 3.4, 15.2, 6.2, 2.6, css(fill))
+      fillRound(ctx, cx - 7, 8.2, 14, 1.9, 0.9, '#1c1f2a')
+      ellipse(ctx, cx + 7.6, 9.6, 3.4, 1.2, '#1c1f2a')
+    } else ellipse(ctx, cx + 7, 9.4, 4.4, 1.5, css(darken(fill, 0.75)))
+  }
+  if (ph.accessory === 'cap' || ph.accessory === 'peaked_cap') {
+    crown(hair, 15)
+    cap(accentN, ph.accessory === 'peaked_cap')
+  } else if (shaved) crown(css(darken(skin, 0.86)), 14)
+  else if (style === 'bald') onHead(() => ellipse(ctx, cx - 4.6, 13.2, 3, 3.4, hair))
+  else if (style === 'cap') {
+    crown(hair, 15)
+    cap(accentN, false)
+  } else {
+    if (style === 'long') fillRound(ctx, cx - 7.6, 8, 7.4, 13.6, 3.4, hairDark)
+    if (style === 'bun') {
+      ellipse(ctx, cx - 4.6, 5, 3, 3, hairDark)
+      ellipse(ctx, cx - 4.6, 4.8, 2.6, 2.6, hair)
+    }
+    if (style === 'spiky') {
+      ctx.fillStyle = hair
+      ctx.beginPath()
+      ctx.moveTo(cx + 5.6, 7)
+      for (const [x, y] of [[3.6, 2.4], [1.4, 5.4], [-1, 1.8], [-2.6, 5.2], [-5, 2.8], [-6, 6.4], [-7.4, 9]]) ctx.lineTo(cx + x, y)
+      ctx.closePath()
+      ctx.fill()
+    }
+    crown(hair)
+  }
+  // Face: one eye, a cheek, a small smile.
+  ellipse(ctx, cx + 4.2, 15.4, 1.4, 1, 'rgba(235,110,95,0.28)')
+  ellipse(ctx, cx + 3.9, 13.3, 0.9, 1.15, INK)
+  ctx.beginPath()
+  ctx.arc(cx + 5, 15.2, 1.2, Math.PI * 0.15, Math.PI * 0.65)
+  ctx.lineWidth = 0.55
+  ctx.lineCap = 'round'
+  ctx.strokeStyle = 'rgba(43,47,58,0.75)'
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.arc(cx, HEAD_Y, HEAD_R, 0, Math.PI * 2)
+  ctx.lineWidth = 0.6
+  ctx.strokeStyle = css(darken(skin, 0.72))
+  ctx.globalAlpha = 0.55
+  ctx.stroke()
+  ctx.globalAlpha = 1
+}
+
 /** Generates (once) the textures for a role + skin tone (+ look) and returns the skin. */
 export function placeholderSkin(
   scene: Phaser.Scene,
@@ -527,7 +678,9 @@ export function placeholderSkin(
   // Every look parameter is in the key: textures are reused by key.
   const hd = look.head ? `${look.head.style}.${look.head.hair}.${look.head.skin}` : '-'
   const overlay = `ph:over:${role}:${ph.accessory}:${look.accent ?? ph.accent}:${hd}:${look.collar ?? '-'}:${tone}`
-  bakeSheet(scene, overlay, FRAME_W, FRAME_H, ['front', 'back'], 2, (ctx, name) => drawOverlay(ctx, name === 'back', ph, tone, look, role))
+  bakeSheet(scene, overlay, FRAME_W, FRAME_H, ['front', 'back', 'side'], 3, (ctx, name) =>
+    name === 'side' ? drawOverlaySide(ctx, ph, tone, look) : drawOverlay(ctx, name === 'back', ph, tone, look, role)
+  )
   return { kind: 'placeholder', shadow: ensureShadow(scene), body: ensureBody(scene), overlay, height: Math.ceil(BASE_H * s), scale: s / RES }
 }
 

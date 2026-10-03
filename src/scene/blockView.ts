@@ -50,6 +50,8 @@ export class BlockView {
   private areas: FurnitureRect[] = []
   private areaLabels: { text: Phaser.GameObjects.Text; at: Point }[] = []
   private items: Item[] = []
+  /** Animated furniture. */
+  private timers: Phaser.Time.TimerEvent[] = []
   private walls: Phaser.GameObjects.Graphics
   private wallList: WallRect[]
   private lot: Phaser.GameObjects.Graphics | null = null
@@ -215,6 +217,8 @@ export class BlockView {
   }
 
   destroy(): void {
+    for (const t of this.timers) t.remove(false)
+    this.timers = []
     for (const t of this.tiles) t.destroy()
     for (const i of this.images) i.image.destroy()
     this.floor?.destroy()
@@ -332,6 +336,24 @@ export class BlockView {
     const img = this.scene.add.image(0, 0, FURNITURE_ATLAS, f.sprite)
     const frame = img.frame
     img.setOrigin(frame.customPivot ? frame.pivotX : 0.5, frame.customPivot ? frame.pivotY : 0.5).setScale(1 / atlasScale)
+    // Animated: the atlas has <sprite>@1, @2, ... after the first frame.
+    const atlas = this.scene.textures.get(FURNITURE_ATLAS)
+    const frames = [f.sprite]
+    while (atlas.has(`${f.sprite}@${frames.length}`)) frames.push(`${f.sprite}@${frames.length}`)
+    if (frames.length > 1) {
+      let i = 0
+      const fps = f.fps > 0 ? f.fps : 2
+      this.timers.push(
+        this.scene.time.addEvent({
+          delay: 1000 / fps,
+          loop: true,
+          callback: () => {
+            i = (i + 1) % frames.length
+            img.setFrame(frames[i], false, false)
+          }
+        })
+      )
+    }
     return this.scene.add.container(f.x + f.width / 2, f.y + f.height / 2, [img]).setDepth(depth)
   }
 

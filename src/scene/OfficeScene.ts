@@ -144,6 +144,8 @@ const GROUND_DEPTH = -2100
 /** Outside ground: the background mixed with a little of this green. */
 const GROUND_TINT = 0x4a6741
 const ORDER_DEPTH = 100_000
+/** Below this zoom characters drop their name pill and speech bubble (they'd be specks). */
+const COMPACT_ZOOM = 0.45
 /** A character can be clicked within at least this many screen px of it, however far zoomed out. */
 const HIT_MIN_HALF_W = 13
 const HIT_MIN_H = 30
@@ -202,6 +204,7 @@ export class OfficeScene extends Phaser.Scene {
   private fastUntil = 0
   private alive = true
   private autoFit = true
+  private compact = false
   /** Branch the camera was last asked to show; re-framed when the view is resized. */
   private focusedTeam: string | null = null
   private lastDown = 0
@@ -328,6 +331,11 @@ export class OfficeScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    const compact = this.cameras.main.zoom < COMPACT_ZOOM
+    if (compact !== this.compact) {
+      this.compact = compact
+      for (const c of this.chars.values()) c.setCompact(compact)
+    }
     for (const c of this.chars.values()) c.tick(delta)
     this.promoteClock += delta
     if (this.promoteClock >= 500) {
@@ -519,10 +527,12 @@ export class OfficeScene extends Phaser.Scene {
     })
     if (this.hoverStation && this.labels) this.labels.setHover(this.hoverStation, this.namesAt(this.hoverStation))
     if (this.labels) {
+      // A tag fades while something is said behind it, or while someone stands or sits behind it.
       const bubbles = []
       for (const c of this.chars.values()) {
         const b = c.bubbleBounds
         if (b) bubbles.push(b)
+        if (c.isSettled) bubbles.push({ x: c.position.x - 8, y: c.position.y - c.height, width: 16, height: c.height * 0.55 })
       }
       this.labels.layout(view, bubbles)
     }
@@ -914,9 +924,12 @@ export class OfficeScene extends Phaser.Scene {
     for (const c of this.chars.values()) c.repath()
   }
 
-  private corridorStyle(): { floor: number; edge: number } {
+  private corridorStyle(): { floor: number; edge: number; seam?: number } {
     const c = this.manifest.corridor
-    if (c && typeof c.floor === 'string' && typeof c.edge === 'string') return { floor: cssToInt(c.floor, 0xe9e4d8), edge: cssToInt(c.edge, 0x5c5470) }
+    if (c && typeof c.floor === 'string' && typeof c.edge === 'string') {
+      const floor = cssToInt(c.floor, 0xe9e4d8)
+      return { floor, edge: cssToInt(c.edge, 0x5c5470), seam: c.seam ? cssToInt(c.seam, floor) : undefined }
+    }
     const t = this.opts.branch
     const floor = t.furniture.find((f) => f.name === 'floor' && !f.solid)?.color ?? 0xe9e4d8
     const edge = t.walls[0]?.color ?? 0x5c5470
@@ -932,8 +945,21 @@ export class OfficeScene extends Phaser.Scene {
     const u = unionRects([this.layout.bounds(), ...taken])!
     const bounds = { x: 0, y: 0, width: u.x + u.width, height: u.y + u.height }
     const bg = cssToInt(this.manifest.background, 0x2b2d42)
-    g.fillStyle(mix(darken(bg, 0.9), GROUND_TINT, 0.18), 1)
+    const ground = this.manifest.ground
+    g.fillStyle(ground?.color ? cssToInt(ground.color, bg) : mix(darken(bg, 0.9), GROUND_TINT, 0.18), 1)
     g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height)
+    if (ground?.speckle) {
+      // Sparse dots on a jittered grid (the same everywhere: a hash of the cell, no randomness).
+      g.fillStyle(cssToInt(ground.speckle, 0xffffff), 1)
+      const step = 22
+      for (let y = 0; y < bounds.height; y += step) {
+        for (let x = 0; x < bounds.width; x += step) {
+          const h = Math.imul((x / step) * 73856093 ^ (y / step) * 19349663, 2654435761) >>> 0
+          if (h % 3 !== 0) continue
+          g.fillCircle(x + (h % 17), y + ((h >>> 8) % 17), 0.9 + ((h >>> 16) % 3) * 0.35)
+        }
+      }
+    }
     g.lineStyle(1, 0xffffff, 0.05)
     for (const f of this.layout.footprintsIn(bounds)) {
       if (taken.some((r) => r.x === f.x && r.y === f.y)) continue
@@ -1275,6 +1301,7 @@ export class OfficeScene extends Phaser.Scene {
   private spawn(entry: RosterEntry): void {
     const door = this.roster.entranceOf(entry.id)
     const c = this.makeCharacter(entry, door)
+    c.setCompact(this.compact)
     this.chars.set(entry.id, c)
     this.idle.touch(entry.id, Date.now())
     if (entry.id === this.selectedId) c.setHighlight('selected')
@@ -1494,8 +1521,23 @@ export class OfficeScene extends Phaser.Scene {
       onIdle: (c) => this.driftHome(entry.id, c),
       findPath: (from, to) => this.findPath(entry.id, from, to),
       teamColor: entry.role === 'boss' ? undefined : this.teamColor(entry.teamId) ?? undefined,
-      seatAt: (p) => this.seatAt(p)
+      seatAt: (p) => this.seatAt(p),
+      facingAt: (p) => this.facingAt(p)
     })
+  }
+
+  /** Which way a character standing here looks (a location with `facing`, or a spot next to one). */
+  private facingAt(p: Point): 'north' | 'south' | 'east' | 'west' | null {
+    const blocks = this.layout.all()
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i]
+      const x = p.x - b.offset.x
+      const y = p.y - b.offset.y
+      if (x < -32 || y < -32 || x > b.width + 32 || y > b.height + 32) continue
+      // Characters sharing a spot stand up to two places to its side (see offsetFor in roster.ts).
+      for (const f of b.template.facings) if (Math.abs(f.x - x) <= 25 && Math.abs(f.y - y) <= 13) return f.facing
+    }
+    return null
   }
 
   /** The seat at exactly this spot (a map location with `seat`), if any. */

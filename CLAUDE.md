@@ -21,19 +21,25 @@ subagents are workers. See README.md for the full picture.
 ## Art / textures (current state)
 - Self-made art, drawn in code (no third-party assets): flat colour, rounded shapes, soft shadows, smooth
   (not pixel) rendering. Style reference and research: `docs/art-direction.md`, `docs/art-shortlist.md` (option C).
-- **Only one room is drawn so far** (a preview, see `docs/art-preview/`): the branch's floor + walls picture, worker
-  desks, chairs, the manager's desk and chair, a plant, the entrance mat. The HQ and every other station
-  (printer, filing cabinet, server rack, whiteboard, sofa, water cooler, photo booth, kanban wall, vault) are still
-  coloured rectangles.
+- The whole office is drawn (renders in `docs/art-preview/`): HQ and branch floor + walls pictures, every station,
+  desk, chair and decoration in one atlas (`themes/office/art/`). Rugs are part of the floor pictures. A test
+  (`tests/world.test.ts`) fails if an office furniture rectangle has neither a `sprite` nor `fallback`.
 - How art reaches the scene (format in the header of `shared/theme.ts`): an image layer in the map = floor and
   walls in one picture; furniture objects name a frame of the theme's atlas with a `sprite` property
-  (`theme.json` `art.furniture`); location property `seat` makes a character sit. Without the pictures the
-  rectangles are drawn, so a theme without art still works.
+  (`theme.json` `art.furniture`; frames `<name>@1`, `@2` animate it); location property `seat` makes a character
+  sit, `facing` makes it look at its station (seen from behind, or in profile, mirrored for west). Walking
+  characters look where they walk. Station tags take a per-label `offset` for art taller than its footprint.
+  Without the pictures the rectangles are drawn, so a theme without art still works.
+- Walls in the pictures are drawn thicker than their collision rectangles (outwards) with a tall front, and big
+  desks are drawn deeper than their footprint and `ysort`ed so a sitter behind them is half hidden: art may
+  overhang, walking geometry never changes. `node scripts/gen-office-map.cjs` keeps the geometry; check it
+  with the world/corridor/stations tests.
 - Rendering is smooth: `pixelArt: false` + mip-maps (`src/worldController.ts`), pictures drawn 2x-4x the map's
   size and **padded to powers of two** (mip-maps need that). A theme can ask for `art.filter: "pixel"`.
 - Characters stay procedural (`src/scene/charTextures.ts`, 2D canvas at 4x): white body tinted with the provider
-  colour; head, hair, face, team-colour collar and accessory on an untinted layer. Poses and the bob are in
-  `src/scene/Character.ts`. Don't bake colour into the body layer.
+  colour; head, hair, face, team-colour collar and accessory on an untinted layer (front, back and profile).
+  Poses, walking direction and the bob are in `src/scene/Character.ts`. Don't bake colour into the body layer.
+  Below zoom 0.45 names and speech bubbles hide (they would be specks).
 - Still never exercised: tile layers with embedded tilesets and `roles.*.sprite` sheets.
 - Themes are read from disk at runtime (`theme://` protocol), so art changes show after switching theme in the
   tray or restarting; code changes need `npm run build` + restart.

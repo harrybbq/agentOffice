@@ -259,6 +259,81 @@ t('performance: corner-to-corner path in a ~120x90 tile world', () => {
   assert.ok(t2 - t1 < 250)
 })
 
+// ---- art in the maps (image layers, sprites, seats, facings) -------------------------------------
+
+t('a map without art parses as before: no image layers, seats or facings, plain furniture', () => {
+  const m = parseMap({ width: 2, height: 2, tilewidth: 32, tileheight: 32, layers: [
+    { type: 'objectgroup', name: 'furniture', objects: [{ name: 'box', x: 0, y: 0, width: 32, height: 32, properties: [{ name: 'solid', value: true }] }] },
+    { type: 'objectgroup', name: 'locations', objects: [{ name: 'a', type: 'desk', x: 40, y: 40 }] }
+  ] })
+  assert.deepEqual([m.images, m.seats, m.facings], [[], [], []])
+  for (const f of m.furniture) assert.deepEqual([f.sprite, f.ysort, f.fallback, f.fps], ['', false, false, 0])
+})
+
+t('image layers, furniture sprites, seats and facings are read from the map', () => {
+  const m = parseMap({
+    width: 4, height: 4, tilewidth: 32, tileheight: 32,
+    layers: [
+      { type: 'imagelayer', name: 'floor', image: 'art/floor.png', x: 0, y: 0, offsetx: -16, offsety: -8, properties: [{ name: 'scale', value: 2 }, { name: 'walls', value: true }] },
+      { type: 'imagelayer', name: 'hidden', image: 'art/x.png', visible: false },
+      { type: 'imagelayer', name: 'plain', image: 'art/rug.png', properties: [{ name: 'scale', value: -3 }] },
+      { type: 'objectgroup', name: 'furniture', objects: [
+        { name: 'desk', x: 0, y: 0, width: 64, height: 32, properties: [{ name: 'solid', value: true }, { name: 'sprite', value: 'desk' }] },
+        { name: 'back', x: 0, y: 40, width: 20, height: 8, properties: [{ name: 'sprite', value: 'chair_back' }, { name: 'ysort', value: true }] },
+        { name: 'rack', x: 70, y: 0, width: 20, height: 40, properties: [{ name: 'solid', value: true }, { name: 'sprite', value: 'rack' }, { name: 'fps', value: 3 }] },
+        { name: 'floor', x: 0, y: 0, width: 128, height: 128, properties: [{ name: 'fallback', value: true }] }
+      ] },
+      { type: 'objectgroup', name: 'locations', objects: [
+        { name: 'd1', type: 'desk', x: 32, y: 50, properties: [{ name: 'seat', value: 'north' }] },
+        { name: 'm', type: 'manager_seat', x: 90, y: 20, properties: [{ name: 'seat', value: 'south' }] },
+        { name: 'e', type: 'entrance', x: 60, y: 100, properties: [{ name: 'seat', value: 'sideways' }] },
+        { name: 'p', type: 'printer', x: 10, y: 70, properties: [{ name: 'facing', value: 'east' }] },
+        { name: 'q', type: 'printer', x: 12, y: 90, properties: [{ name: 'facing', value: 'up' }] }
+      ] }
+    ]
+  })
+  assert.deepEqual(m.images, [
+    { name: 'floor', image: 'art/floor.png', x: -16, y: -8, scale: 2, walls: true },
+    { name: 'plain', image: 'art/rug.png', x: 0, y: 0, scale: 1, walls: false }
+  ])
+  assert.deepEqual(m.furniture.map((f) => [f.name, f.solid, f.sprite, f.ysort, f.fallback, f.fps]), [
+    ['desk', true, 'desk', false, false, 0], ['back', false, 'chair_back', true, false, 0], ['rack', true, 'rack', false, false, 3], ['floor', false, '', false, true, 0]
+  ])
+  assert.deepEqual(m.seats, [{ x: 32, y: 50, facing: 'north' }, { x: 90, y: 20, facing: 'south' }])
+  assert.deepEqual(m.facings, [{ x: 10, y: 70, facing: 'east' }])
+  assert.equal(m.useTiles, false)
+  assert.deepEqual(m.warnings, [])
+})
+
+t('office maps: pictures cover floor and walls; every rectangle has a sprite or is a fallback; seats and facings', () => {
+  for (const m of [hqMap, branchMap]) {
+    assert.equal(m.images.length, 1)
+    assert.ok(m.images[0].walls && m.images[0].scale === 2)
+    for (const f of m.furniture) assert.ok(f.sprite || f.fallback, `${f.name}: neither a sprite nor a fallback (it would show as a coloured rectangle)`)
+  }
+  for (const d of branchMap.locations.get('desk')!) assert.ok(branchMap.seats.some((s) => s.x === d.x && s.y === d.y && s.facing === 'north'), `${d.name} is not a seat`)
+  for (const [m, type] of [[branchMap, 'manager_seat'], [hqMap, 'boss_seat']] as const) {
+    const p = m.locations.get(type)![0]
+    assert.ok(m.seats.some((s) => s.x === p.x && s.y === p.y && s.facing === 'south'), `${type} is not a seat facing the viewer`)
+  }
+  assert.equal(hqMap.facings.filter((f) => f.facing === 'north').length, hqMap.locations.get('inbox')!.length)
+  for (const type of ['printer', 'filing_cabinet', 'server_room', 'whiteboard', 'water_cooler', 'photo_booth', 'noticeboard', 'vault']) {
+    const p = branchMap.locations.get(type)![0]
+    assert.ok(branchMap.facings.some((f) => f.x === p.x && f.y === p.y), `${type} has no facing`)
+  }
+  // Every sprite the maps name is in the atlas the theme ships, inside the page.
+  const atlas = raw('art/furniture.json') as { frames: Record<string, { frame: { x: number; y: number; w: number; h: number }; pivot: { x: number; y: number } }>; meta: { scale: string; size: { w: number; h: number } } }
+  const named = new Set([...hqMap.furniture, ...branchMap.furniture].filter((f) => f.sprite).map((f) => f.sprite))
+  assert.ok(named.size >= 20)
+  for (const n of named) assert.ok(atlas.frames[n], `no frame "${n}" in art/furniture.json`)
+  assert.ok(atlas.frames['server_rack@1'], 'the server rack blinks: its second frame')
+  for (const f of Object.values(atlas.frames)) assert.ok(f.pivot.x > 0 && f.pivot.x < 1 && f.pivot.y > 0 && f.pivot.y < 1 && f.frame.x + f.frame.w <= atlas.meta.size.w && f.frame.y + f.frame.h <= atlas.meta.size.h)
+  // Decoration never blocks: only what was solid before the art is.
+  for (const f of [...hqMap.furniture, ...branchMap.furniture]) {
+    if (/^(chair|plant_|mgr_chair|mgr_plant|mgr_shelf|mat$|ceo_rug|ceo_chair|ceo_plant|ceo_armchair|reception_|lounge_rug)/.test(f.name)) assert.equal(f.solid, false, f.name)
+  }
+})
+
 console.log(`\n${pass} world tests passed`)
 
 await import('./corridors.test.ts')

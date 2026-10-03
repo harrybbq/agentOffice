@@ -100,7 +100,8 @@ export class StationRouter {
           title: l.title.trim(),
           subtitle: typeof l.subtitle === 'string' && l.subtitle.trim() ? l.subtitle.trim() : undefined,
           color: typeof l.color === 'string' && HEX.test(l.color) ? l.color : undefined,
-          once: l.once === true
+          once: l.once === true,
+          ...(typeof l.offset === 'number' && Number.isFinite(l.offset) && l.offset !== 0 ? { offset: l.offset } : {})
         })
       }
     }
@@ -211,7 +212,9 @@ export function stationAnchors(
     furniture: readonly (Box & { solid: boolean; color: number })[]
   },
   labels: ReadonlyMap<string, StationLabel>,
-  tile = 32
+  tile = 32,
+  /** Is this location a seat (map property `seat`)? Its tag then goes above the sitter. */
+  isSeat: (p: XY) => boolean = () => false
 ): LabelAnchor[] {
   const out: LabelAnchor[] = []
   const solid = block.furniture.filter((f) => f.solid)
@@ -239,12 +242,15 @@ export function stationAnchors(
         }
       }
       const r = rect as (Box & { color: number }) | null
+      // A seat behind its desk (above it on the map) has its tag above whoever sits there, not on
+      // the desk in front of them.
+      const behind = !!r && p.y < r.y && isSeat(p)
       out.push({
         type,
         key: `${type}#${i}`,
         label,
-        x: r ? r.x + r.width / 2 : p.x,
-        y: r ? r.y : p.y - FLOAT_TILES * tile,
+        x: r && !behind ? r.x + r.width / 2 : p.x,
+        y: r && !behind ? r.y - (label.offset ?? 0) : p.y - FLOAT_TILES * tile,
         point: { x: p.x, y: p.y },
         points: (label.once ? pts : [p]).map((q) => ({ x: q.x, y: q.y })),
         rect: r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null,

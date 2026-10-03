@@ -782,8 +782,17 @@ Both maps are orthogonal [Tiled](https://www.mapeditor.org/) JSON (embedded tile
 - With `"smooth"` (the default) pictures are filtered and mip-mapped: draw them larger than the map and
   **pad them to power-of-two sizes**. `"pixel"` is for pixel art drawn at the map's size.
 - A location with the property `seat` (`"north"`: the desk is above it, the character is seen from behind;
-  `"south"`: facing you) makes the character there sit and type instead of stand.
-- `"corridor": { "floor": "#rrggbb", "edge": "#rrggbb" }` in `theme.json` colours the corridors.
+  `"south"`: facing you) makes the character there sit and type instead of stand. Its station tag then
+  floats above the sitter instead of lying on the desk.
+- A location with the property `facing` (`"north"`, `"south"`, `"east"`, `"west"`) makes a character
+  standing there look at its station: from behind, facing you, or in profile. Walking characters always
+  look the way they walk.
+- Animated furniture: frames `<sprite>@1`, `<sprite>@2`, ... in the atlas after the first; the furniture
+  property `fps` sets the speed (default 2).
+- `stationLabels.<type>.offset` (map px) lifts a tag above art that is taller than its footprint.
+- `"corridor": { "floor": "#rrggbb", "edge": "#rrggbb", "seam": "#rrggbb" }` and
+  `"ground": { "color": "#rrggbb", "speckle": "#rrggbb" }` in `theme.json` colour the corridors and the
+  ground between buildings.
 
 **`theme.json`** (types in `shared/theme.ts`):
 - `roles.boss|manager|worker`: a label plus a `placeholder` (procedural Prison-Architect-style

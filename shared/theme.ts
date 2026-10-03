@@ -35,6 +35,11 @@
 //     without one, as the coloured rectangle.
 //   - location property `seat` ("north" | "south"): a character standing exactly there sits, facing
 //     away from the viewer (its desk is above it on the map) or towards the viewer.
+//   - location property `facing` ("north" | "south" | "east" | "west"): a character standing there
+//     (or next to it, when several share the spot) looks that way: seen from behind for north, in
+//     profile for east and west. Walking characters always look the way they walk.
+//   - animated furniture: when the atlas also has frames named `<sprite>@1`, `<sprite>@2`, ... the
+//     sprite cycles through them; furniture property `fps` (default 2) sets the speed.
 //
 // Required location types:
 //   hq.json:     boss_seat (1), inbox (1+ memo slots), door (1+, on the map edge, opens to corridor)
@@ -50,11 +55,15 @@
 // it to the HQ. During an office-wide CEO order, workers may use stations and the inbox anywhere.
 //
 // Stations (all optional, all in theme.json; a theme without them behaves as before):
-//   stationLabels  location type -> { title, subtitle?, color?, once? }: a small floating tag above
+//   stationLabels  location type -> { title, subtitle?, color?, once?, offset? }: a small floating tag above
 //                  every location of that type (`once`: one tag per block, at the middle of them:
 //                  use it for desks and inbox slots). The dot colour defaults to the colour of the
 //                  furniture next to the location. Key order = priority when tags would overlap.
-//                  The same titles name the stations in the agent inspector.
+//                  The same titles name the stations in the agent inspector. `offset` (map px) lifts
+//                  the tag above art taller than its furniture rectangle; a `seat` behind its desk has
+//                  its tag above the sitter.
+//   corridor, ground  colours of the corridors (floor, edge, seam?) and of the ground between
+//                  buildings (color, speckle?).
 //   stationRules   a more specific routing than `activities`: a list of { activity?, detail, location,
 //                  anim?, verb? }. `detail` is the source of a case-insensitive regular expression
 //                  (max 200 characters; an invalid one is ignored with a warning) tested against the
@@ -94,9 +103,11 @@ export interface SpriteSheet {
   overlay?: string
   frameWidth: number
   frameHeight: number
-  /** Animation name -> frames. Recognised names: idle, walk, work, carry, and for characters on a
-   *  `seat`: sit, type (facing the viewer), sit_back, type_back (facing away). Missing ones fall back
-   *  (type -> work, sit -> idle, anything -> idle). */
+  /** Animation name -> frames. Recognised names: idle, walk, work, carry; for characters on a `seat`:
+   *  sit, type (facing the viewer), sit_back, type_back (facing away); for looking away or sideways
+   *  (a location's `facing`, or the way a character walks): idle_back, walk_back, carry_back,
+   *  work_back, idle_side, walk_side, carry_side, work_side (drawn facing right; mirrored for left).
+   *  Missing ones fall back: x_back / x_side -> x, type -> work, sit -> idle, anything -> idle. */
   animations: Record<string, { frames: number[]; fps: number; repeat?: number }>
 }
 
@@ -143,6 +154,9 @@ export interface StationLabel {
   color?: string
   /** One tag per block for this type instead of one per location (desks, inbox slots). */
   once?: boolean
+  /** Map px to lift the tag above the furniture's top edge, for art that is taller than its
+   *  footprint (a monitor, a board on legs). Default 0. */
+  offset?: number
 }
 
 export interface IdleDef {
@@ -166,6 +180,15 @@ export interface ThemeArt {
 export interface CorridorColors {
   floor: string
   edge: string
+  /** Faint lines between the corridor's floor tiles (default: a little darker than the floor). */
+  seam?: string
+}
+
+/** The ground between buildings. */
+export interface GroundStyle {
+  color: string
+  /** Sparse dots in this colour, a calm texture (none when left out). */
+  speckle?: string
 }
 
 /** Longest `stationRules[].detail` pattern that is compiled. */
@@ -199,6 +222,8 @@ export interface ThemeManifest {
   art?: ThemeArt
   /** Corridor colours. Default: derived from the branch map's `floor` rectangle and first wall. */
   corridor?: CorridorColors
+  /** The ground between buildings. Default: the background colour with a hint of green. */
+  ground?: GroundStyle
 }
 
 /** Used when a theme has no `teams.colors`: 10 clearly distinct colours. */

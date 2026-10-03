@@ -1,6 +1,9 @@
 // Renders the art preview into docs/art-preview/ (one room of the office theme, for judging the look):
-//   room-1x.png, room-2x.png, room-3x.png   the room alone at camera zoom 1, 2 and 3
-//   room-in-app.png                         the same scene inside the app's shell
+//   office-full-1x.png                      the app as it opens: HQ + three teams at the default fit
+//   office-full-2x.png                      the HQ and the first branch, closer
+//   hq-2x.png, branch-2x.png                one building each at camera zoom 2
+//   stations.png                            every station of a branch with someone working at it
+//   office-6-teams.png                      six teams: the default zoom gets small
 //   sprites.png                             every sprite drawn so far, on a neutral background
 //   compare.png                             our room beside a crop of the reference (only when
 //                                           docs/reference/office-reference.png exists; local, not committed)
@@ -9,8 +12,8 @@
 //
 // It starts its own renderer dev server (Vite, port 5263, with the themes folder served) and opens
 // the app's browser stub in its own hidden window: no agents, no main process, nothing shared with a
-// running Agent Office. Three fake agents are staged: a manager at their desk (Claude), a worker
-// typing (Codex) and a worker walking to the printer (Antigravity).
+// running Agent Office. Fake agents are staged with the stub's event hook (managers at their desks,
+// workers at desks and stations, a manager queuing at the HQ's security gate).
 const { app, BrowserWindow } = require('electron')
 const fs = require('fs'), os = require('os'), path = require('path')
 
@@ -21,8 +24,6 @@ const OUT = process.env.AO_PREVIEW_OUT || path.join(REPO, 'docs', 'art-preview')
 const NO_ART = process.env.AO_PREVIEW_NO_ART === '1'
 const REFERENCE = path.join(REPO, 'docs', 'reference', 'office-reference.png')
 const PORT = 5263
-/** The corner of the branch that has art, in map px relative to the branch (x, y, width, height). */
-const ROOM = { x: -12, y: -30, width: 404, height: 462 }
 const MIME = { '.png': 'image/png', '.json': 'application/json', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml' }
 
 app.setPath('userData', path.join(os.tmpdir(), 'agent-office-art-preview'))
@@ -85,84 +86,136 @@ app.whenReady().then(async () => {
       return img
     }
 
-    await win.loadURL(`http://127.0.0.1:${PORT}/?stub=empty&restore=none&progress=quiet&board=none`)
-    await until('the scene', '__agentOfficeDev.scene()')
-    console.log('renderer:', await js(`(() => { const g = __agentOfficeDev.scene().game; return (g.renderer.gl ? 'WebGL' : 'Canvas') + ', pixelArt ' + g.config.pixelArt + ', mipmaps ' + g.config.mipmapFilter + ', furniture atlas ' + g.textures.exists('art:furniture') + ', floor picture ' + g.textures.exists('floor:branch:0') })()`))
-    await js(`window.sc = __agentOfficeDev.scene(); window.ev = (agentId, parentId, provider, displayName, activity, detail = '') => __agentOfficeEmit({ agentId, parentId, provider, displayName, activity, detail }); 0`)
-    const settled = (id, x, y) => `(() => { const c = sc.chars.get('${id}'); if (!c || !c.isSettled) return false; const b = sc.layout.branch('m1'); return Math.abs(c.position.x - b.offset.x - ${x}) < 2 && Math.abs(c.position.y - b.offset.y - ${y}) < 2 })()`
-
-    // A manager (Claude) moves in; two workers get their desks (the manager walks over with a folder).
-    await js(`ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md')`)
-    await until('the branch to be built', `sc.views.get('m1').state === 'ready'`)
-    await js(`ev('w1', 'm1', 'codex', 'Builder', 'write', 'src/app.ts')`)
-    await until('the first worker at its desk', settled('w1', 56, 250))
-    await js(`ev('w2', 'm1', 'antigravity', 'Explore', 'write', 'README.md')`)
-    await until('the second worker at its desk', settled('w2', 152, 250))
-    const quiet = (id) => `sc.chars.get('${id}').isIdle`
-    await until('the manager back at their desk', `${settled('m1', 96, 48)} && ${quiet('m1')} && ${quiet('w1')} && ${quiet('w2')}`)
-    await sleep(2500)
-    await until('everyone to settle', `${settled('m1', 96, 48)} && ${quiet('m1')} && ${quiet('w1')} && ${quiet('w2')}`)
-    // The second worker walks to the printer while the other two type: stop the world when it is on
-    // the open floor (an activity is shown for at least 1.2 s, the walk there takes less).
-    await js(`ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md'); ev('w1', 'm1', 'codex', 'Builder', 'write', 'src/app.ts'); ev('w2', 'm1', 'antigravity', 'Explore', 'web', 'docs.example.com')`)
-    await until('the walker on the open floor', `sc.chars.get('w2').position.y - sc.layout.branch('m1').offset.y < 186`, 5000)
-    await js(`sc.scene.pause(); 0`)
-    console.log('portrait:', await js(`new Promise((ok) => sc.portrait('w1', (url) => ok(url ? url.length + ' chars' : 'none')))`))
-    console.log('staged:', await js(`JSON.stringify(['m1', 'w1', 'w2'].map((id) => { const c = sc.chars.get(id); const b = sc.layout.branch('m1'); return [id, c.pose, Math.round(c.position.x - b.offset.x), Math.round(c.position.y - b.offset.y)] }))`))
-
-    // In the app: the side panel closed, so the office has room.
-    await js(`__agentOfficeDev.app.setLayout({ panelOpen: false, inboxOpen: false }, false); 0`)
-    await sleep(600)
-    await js(`(() => { window.dispatchEvent(new Event('resize')); const b = sc.layout.branch('m1'), h = sc.layout.hq, cam = sc.cameras.main; sc.autoFit = false; cam.setZoom(1.5); cam.centerOn(b.offset.x + b.width / 2 - 70, b.offset.y + b.height / 2 - 10) })()`)
-    await sleep(400)
-    await js(`sc.syncOverlay(); 0`)
-    await shot('room-in-app.png')
-
-    // The room alone: the world canvas over the whole window, the camera on the room.
-    await js(`(() => {
+    /** A fresh office (nothing running), the scene handle as `sc`, `ev(...)` to send an agent event. */
+    const fresh = async (query = '', panel = false) => {
+      win.setContentSize(1440, 900)
+      await win.loadURL(`http://127.0.0.1:${PORT}/?stub=empty&restore=none&progress=quiet&board=none${query}`)
+      await until('the scene', '__agentOfficeDev.scene()')
+      await js(`window.sc = __agentOfficeDev.scene(); window.ev = (agentId, parentId, provider, displayName, activity, detail = '') => __agentOfficeEmit({ agentId, parentId, provider, displayName, activity, detail }); ${panel ? '' : '__agentOfficeDev.app.setLayout({ panelOpen: false, inboxOpen: false }, false);'} 0`)
+      await sleep(400)
+    }
+    const built = (id) => until(`branch ${id} to be built`, `sc.views.get('${id}') && sc.views.get('${id}').state === 'ready'`, 60000)
+    const settledAll = (ids) => until('everyone to settle', ids.map((id) => `sc.chars.get('${id}') && sc.chars.get('${id}').isIdle`).join(' && '), 180000)
+    /** The world over the whole window (no shell), the camera on a world rect at a zoom; saves the view. */
+    const alone = () => js(`(() => {
       const hide = document.createElement('style')
       hide.textContent = '.world { position: fixed !important; inset: 0; z-index: 99999 } .world > *:not(.world-canvas):not(.world-tags) { display: none !important }'
       document.head.appendChild(hide)
       sc.autoFit = false
     })()`)
-    let room2 = null
-    for (const zoom of [3, 2, 1]) {
-      const w = Math.round(ROOM.width * zoom), h = Math.round(ROOM.height * zoom)
-      win.setContentSize(w + 40, h + 40)
+    const view = async (name, rectJs, zoom) => {
+      const r0 = await js(`(() => { const r = ${rectJs}; return { x: r.x, y: r.y, width: r.width, height: r.height } })()`)
+      const w = Math.round(r0.width * zoom), h = Math.round(r0.height * zoom)
+      win.setContentSize(w, h)
       await sleep(500)
-      await js(`(() => {
-        window.dispatchEvent(new Event('resize'))
-        sc.scale.refresh()
-        const b = sc.layout.branch('m1'), cam = sc.cameras.main
-        cam.setZoom(${zoom})
-        cam.centerOn(b.offset.x + ${ROOM.x + ROOM.width / 2}, b.offset.y + ${ROOM.y + ROOM.height / 2})
-      })()`)
+      await js(`(() => { window.dispatchEvent(new Event('resize')); sc.scale.refresh(); const cam = sc.cameras.main; cam.setZoom(${zoom}); cam.centerOn(${r0.x + r0.width / 2}, ${r0.y + r0.height / 2}) })()`)
       await sleep(400)
       await js(`sc.syncOverlay(); 0`)
-      const img = await shot(`room-${zoom}x.png`, { x: 20, y: 20, width: w, height: h })
-      if (zoom === 2) room2 = img
+      return shot(name, { x: 0, y: 0, width: w, height: h })
+    }
+    const blockRect = (id, pad = 28) => `(() => { const b = ${id === 'hq' ? 'sc.layout.hq' : `sc.layout.branch('${id}')`}; return { x: b.offset.x - ${pad}, y: b.offset.y - ${pad + 24}, width: b.width + ${pad * 2}, height: b.height + ${pad * 2 + 24} } })()`
+
+    // AO_PREVIEW_ONLY=office,stations,six renders only those parts.
+    const want = (part) => !process.env.AO_PREVIEW_ONLY || process.env.AO_PREVIEW_ONLY.split(',').includes(part)
+    let cmpImg = null
+    if (want('office')) {
+    // ---- 1. The office: HQ and three teams (Claude, Codex, Antigravity), people at work ------------
+    await fresh()
+    console.log('renderer:', await js(`(() => { const g = sc.game; return (g.renderer.gl ? 'WebGL' : 'Canvas') + ', pixelArt ' + g.config.pixelArt + ', mipmaps ' + g.config.mipmapFilter + ', furniture atlas ' + g.textures.exists('art:furniture') + ', floor pictures ' + g.textures.exists('floor:branch:0') + '/' + g.textures.exists('floor:hq:0') })()`))
+    const teams = [['m1', 'claude-code', 'frontend', [['w1', 'codex', 'Builder'], ['w2', 'antigravity', 'Explore']]],
+      ['m2', 'codex', 'storefront', [['w3', 'codex', 'Tests'], ['w4', 'claude-code', 'Docs']]],
+      ['m3', 'antigravity', 'gemini', [['w5', 'antigravity', 'Research'], ['w6', 'codex', 'Lint']]]]
+    for (const [m, prov, name, workers] of teams) {
+      await js(`ev('${m}', null, '${prov}', '${name}', 'write', 'plan.md')`)
+      await built(m)
+      for (const [w, wp, wn] of workers) await js(`ev('${w}', '${m}', '${wp}', '${wn}', 'write', 'src/app.ts')`)
+    }
+    await settledAll(['m1', 'm2', 'm3', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6'])
+    await sleep(1500)
+    // Some work at stations, a manager waiting at the HQ's security gate, the rest typing.
+    await js(`ev('w1', 'm1', 'codex', 'Builder', 'write', 'src/app.ts'); ev('w2', 'm1', 'antigravity', 'Explore', 'web', 'docs.example.com');
+      ev('w3', 'm2', 'codex', 'Tests', 'exec', 'npm test'); ev('w4', 'm2', 'claude-code', 'Docs', 'read', 'README.md');
+      ev('w5', 'm3', 'antigravity', 'Research', 'write', 'planning: the release'); ev('w6', 'm3', 'codex', 'Lint', 'write', 'src/lint.ts');
+      ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md'); ev('m3', null, 'antigravity', 'gemini', 'write', 'notes.md');
+      ev('m2', null, 'codex', 'storefront', 'waiting', 'question: ship it?')`)
+    await until('the manager at the security gate', `(() => { const c = sc.chars.get('m2'), h = sc.layout.hq; return c.isSettled && c.position.y < h.offset.y + h.height && c.position.y > h.offset.y + 160 })()`, 30000)
+    await js(`ev('w1', 'm1', 'codex', 'Builder', 'write', 'src/app.ts'); ev('w6', 'm3', 'codex', 'Lint', 'write', 'src/lint.ts'); ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md'); ev('m3', null, 'antigravity', 'gemini', 'write', 'notes.md')`)
+    await sleep(700)
+    await js(`sc.scene.pause(); 0`)
+    console.log('portrait:', await js(`new Promise((ok) => sc.portrait('w1', (url) => ok(url ? url.length + ' chars' : 'none')))`))
+    console.log('poses:', await js(`JSON.stringify([...sc.chars.entries()].map(([id, c]) => id + ':' + c.pose))`))
+    // The app as it opens: default fit, side panel closed.
+    await js(`sc.autoFit = true; sc.fitCamera(false); 0`)
+    await sleep(500)
+    await js(`sc.syncOverlay(); 0`)
+    await shot('office-full-1x.png')
+    await alone()
+    await view('office-full-2x.png', `(() => { const h = sc.layout.hq, b = sc.layout.branch('m1'); const x0 = Math.min(h.offset.x, b.offset.x) - 30, y0 = Math.min(h.offset.y, b.offset.y) - 50; return { x: x0, y: y0, width: Math.max(h.offset.x + h.width, b.offset.x + b.width) - x0 + 30, height: Math.max(h.offset.y + h.height, b.offset.y + b.height) - y0 + 40 } })()`, 1.25)
+    await view('hq-2x.png', blockRect('hq'), 2)
+    cmpImg = await view('branch-2x.png', blockRect('m1'), 2)
+    }
+    if (want('stations')) {
+
+    // ---- 2. Every station with someone working at it ---------------------------------------------
+    await fresh()
+    const jobs = [['s1', 'codex', 'Files', 'read', 'src/index.ts'], ['s2', 'antigravity', 'Shell', 'exec', 'npm run build'], ['s3', 'claude-code', 'Web', 'web', 'docs.example.com'],
+      ['s4', 'codex', 'Snap', 'capture', 'screen.png'], ['s5', 'antigravity', 'Plan', 'write', 'planning: next steps'], ['s6', 'claude-code', 'Board', 'write', 'checking the board'],
+      ['s7', 'codex', 'Keys', 'write', 'secrets: .env'], ['s8', 'antigravity', 'Editor', 'write', 'src/app.ts']]
+    await js(`ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md')`)
+    await built('m1')
+    for (const [id, p, n] of jobs) await js(`ev('${id}', 'm1', '${p}', '${n}', 'write', 'src/x.ts')`)
+    await settledAll(['m1', ...jobs.map((j) => j[0])])
+    const again = `${jobs.map(([id, p, n, a, d]) => `ev('${id}', 'm1', '${p}', '${n}', '${a}', ${JSON.stringify(d)})`).join(';')}; ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md')`
+    let ok = false
+    for (let i = 0; i < 40 && !ok; i++) {
+      await js(again)
+      await sleep(1000)
+      ok = await js(`[${jobs.map((j) => `'${j[0]}'`).join(',')}].every((id) => { const c = sc.chars.get(id); return c.isSettled && !['idle', 'sit', 'sit_back'].includes(c.pose) })`)
+    }
+    await js(again)
+    await sleep(500)
+    await js(`sc.scene.pause(); 0`)
+    console.log('stations:', await js(`JSON.stringify([...sc.chars.entries()].map(([id, c]) => id + ':' + c.pose))`))
+    await alone()
+    await view('stations.png', blockRect('m1'), 2)
+    }
+    if (want('six')) {
+
+    // ---- 3. Six teams, with the side panel open as the app starts: the default zoom gets small ----
+    await fresh('', true)
+    const six = ['claude-code', 'codex', 'antigravity', 'claude-code', 'codex', 'antigravity']
+    for (let i = 0; i < 6; i++) {
+      await js(`ev('t${i}', null, '${six[i]}', 'team ${i + 1}', 'write', 'plan.md'); ev('t${i}w', 't${i}', '${six[(i + 1) % 6]}', 'helper', 'write', 'src/a.ts')`)
+      await built(`t${i}`)
+    }
+    await sleep(3000)
+    await js(`sc.autoFit = true; sc.fitCamera(false); 0`)
+    await sleep(600)
+    await js(`sc.syncOverlay(); 0`)
+    console.log('six teams zoom:', await js(`sc.cameras.main.zoom.toFixed(2)`))
+    await shot('office-6-teams.png')
     }
 
     // Every sprite: the furniture atlas frames, then the character's poses in three provider colours.
-    const sheet = NO_ART ? null : await js(`(async () => {
+    const sheet = NO_ART || !want('sprites') ? null : await js(`(async () => {
       const m = await import('/scene/charTextures.ts')
       const theme = sc.manifest
-      const S = 3
+      const S = 3, FS = 2
       const furn = sc.textures.get('art:furniture')
       const names = furn.getFrameNames()
       const fscale = Number(furn.customData.meta.scale)
-      const W = 1500, pad = 28
+      const W = 1900, pad = 28
       const c = document.createElement('canvas')
-      c.width = W; c.height = 1500
+      c.width = W; c.height = 2000
       const g = c.getContext('2d')
       g.fillStyle = '#e9ebf0'; g.fillRect(0, 0, c.width, c.height)
       const caption = (t, x, y, bold) => { g.fillStyle = bold ? '#30364a' : '#6b7286'; g.font = (bold ? '600 15px' : '12px') + ' system-ui, sans-serif'; g.textAlign = 'left'; g.fillText(t, x, y) }
       let x = pad, y = pad + 6
-      caption('Furniture (themes/office/art/furniture.png), shown at 3x', pad, y, true); y += 14
+      caption('Furniture (themes/office/art/furniture.png), shown at 2x; @1 = second frame of an animated one', pad, y, true); y += 14
       let rowH = 0
       for (const n of names) {
         const f = furn.get(n)
-        const w = f.width / fscale * S, h = f.height / fscale * S
+        const w = f.width / fscale * FS, h = f.height / fscale * FS
         if (x + w > W - pad) { x = pad; y += rowH + 26; rowH = 0 }
         g.drawImage(f.source.image, f.cutX, f.cutY, f.width, f.height, x, y, w, h)
         caption(n, x + 8, y + h + 12)
@@ -186,17 +239,18 @@ app.whenReady().then(async () => {
       const tints = [['Claude', theme.providers['claude-code'].tint], ['Codex', theme.providers.codex.tint], ['Antigravity', theme.providers.antigravity.tint], ['default', theme.providers.default.tint]]
       const team = [0x3cb44b, 0x4363d8, 0xf58231, 0x911eb4]
       const poses = [['stand', 'front', 0, 'idle'], ['walkA', 'front', 0, 'walk'], ['walkB', 'front', 0, ''], ['carryA', 'front', 0, 'carry'], ['workA', 'front', 0, 'work'], ['workB', 'front', 0, ''],
-        ['sitFront', 'front', 3, 'sit'], ['typeFrontA', 'front', 3, 'type'], ['sitBack', 'back', 3, 'sit (back)'], ['typeBackA', 'back', 3, 'type (back)'], ['typeBackB', 'back', 3, '']]
+        ['sitFront', 'front', 3, 'sit'], ['typeFrontA', 'front', 3, 'type'], ['sitBack', 'back', 3, 'sit (back)'], ['typeBackA', 'back', 3, 'type (back)'],
+        ['workBackA', 'back', 0, 'work (back)'], ['workBackB', 'back', 0, ''], ['sideStand', 'side', 0, 'side'], ['walkSideA', 'side', 0, 'walk (side)'], ['walkSideB', 'side', 0, ''], ['carrySideA', 'side', 0, 'carry (side)'], ['workSideA', 'side', 0, 'work (side)']]
       caption('Characters: white body tinted with the provider colour; head, hair, face, collar and accessory are untinted. Shown at 3x', pad, y, true); y += 10
       const styles = ['short', 'bun', 'spiky', 'long']
       tints.forEach(([label, tint], row) => {
         const worker = m.placeholderSkin(sc, 'worker', theme.roles.worker.placeholder, row + 1, { collar: team[row] })
         const manager = m.placeholderSkin(sc, 'manager', theme.roles.manager.placeholder, row, { head: { style: styles[row], hair: (row * 2 + 1) % 6, skin: (row * 5) % 6 }, accent: team[row], collar: team[row] })
         caption(label + ' worker', pad, y + 16)
-        poses.forEach(([bf, of, drop, name], i) => { person(bf, worker.overlay, of, tint, pad + i * 100, y + 14, drop); if (row === 0 && name) caption(name, pad + i * 100 + 30, y + 134) })
-        const mx = pad + poses.length * 100 + 30
+        poses.forEach(([bf, of, drop, name], i) => { person(bf, worker.overlay, of, tint, pad + i * 84, y + 14, drop); if (row === 0 && name) caption(name, pad + i * 84 + 18, y + 134) })
+        const mx = pad + poses.length * 84 + 30
         caption(label + ' manager', mx, y + 16)
-        ;[['stand', 'front', 0], ['typeFrontA', 'front', 3], ['sitBack', 'back', 3]].forEach(([bf, of, drop], i) => person(bf, manager.overlay, of, tint, mx + i * 100, y + 14, drop))
+        ;[['stand', 'front', 0], ['typeFrontA', 'front', 3], ['sitBack', 'back', 3]].forEach(([bf, of, drop], i) => person(bf, manager.overlay, of, tint, mx + i * 84, y + 14, drop))
         y += 138
       })
       // The CEO, the other accessories and hair styles, and the carried items.
@@ -224,11 +278,11 @@ app.whenReady().then(async () => {
     if (sheet) save('sprites.png', Buffer.from(sheet.slice(sheet.indexOf(',') + 1), 'base64'))
 
     // Our room beside a crop of the reference (someone else's work: a style reference only).
-    if (fs.existsSync(REFERENCE) && room2) {
+    if (fs.existsSync(REFERENCE) && cmpImg) {
       const ref = 'data:image/png;base64,' + fs.readFileSync(REFERENCE).toString('base64')
       const cmp = await js(`(async () => {
         const load = (src) => new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = src })
-        const ours = await load(${JSON.stringify(room2.toDataURL())}), ref = await load(${JSON.stringify(ref)})
+        const ours = await load(${JSON.stringify(cmpImg.toDataURL())}), ref = await load(${JSON.stringify(ref)})
         const crop = { x: 0, y: 95, w: 1179, h: 790 }
         const H = ours.height, rw = Math.round(crop.w * H / crop.h), gap = 24, top = 40
         const c = document.createElement('canvas'); c.width = ours.width + rw + gap * 3; c.height = H + top + gap
@@ -237,7 +291,7 @@ app.whenReady().then(async () => {
         g.drawImage(ours, gap, top)
         g.drawImage(ref, crop.x, crop.y, crop.w, crop.h, ours.width + gap * 2, top, rw, H)
         g.fillStyle = '#e8eaf2'; g.font = '600 16px system-ui, sans-serif'
-        g.fillText('Ours: orthogonal top-down, drawn in code (camera zoom 2)', gap, 26)
+        g.fillText('Ours: one branch, orthogonal top-down, drawn in code (camera zoom 2)', gap, 26)
         g.fillText('Reference: style only (isometric 3D, not ours)', ours.width + gap * 2, 26)
         return c.toDataURL('image/png')
       })()`)

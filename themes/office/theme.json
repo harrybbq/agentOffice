@@ -12,8 +12,13 @@
     }
   },
   "corridor": {
-    "floor": "#dfe3ea",
-    "edge": "#f4f6f9"
+    "floor": "#e0e4eb",
+    "edge": "#f7f8fa",
+    "seam": "#d6dbe3"
+  },
+  "ground": {
+    "color": "#283036",
+    "speckle": "#2f383f"
   },
   "roles": {
     "boss": {
@@ -146,7 +151,8 @@
       "title": "Security gate",
       "subtitle": "Waiting on you",
       "color": "#f0b64f",
-      "once": true
+      "once": true,
+      "offset": 14
     },
     "boss_seat": {
       "title": "CEO office",
@@ -162,12 +168,14 @@
       "title": "Desks",
       "subtitle": "Editing",
       "color": "#7c8cff",
-      "once": true
+      "once": true,
+      "offset": 9
     },
     "filing_cabinet": {
       "title": "Filing cabinet",
       "subtitle": "Reading files",
-      "color": "#5fb8e8"
+      "color": "#5fb8e8",
+      "offset": 2
     },
     "server_room": {
       "title": "Server room",
@@ -177,32 +185,38 @@
     "printer": {
       "title": "Printer",
       "subtitle": "Web & copies",
-      "color": "#c58af9"
+      "color": "#c58af9",
+      "offset": 2
     },
     "photo_booth": {
       "title": "Photo booth",
       "subtitle": "Screenshots",
-      "color": "#e58fb1"
+      "color": "#e58fb1",
+      "offset": 8
     },
     "whiteboard": {
       "title": "Whiteboard",
       "subtitle": "Ideas & planning",
-      "color": "#5b8def"
+      "color": "#5b8def",
+      "offset": 30
     },
     "noticeboard": {
-      "title": "Kanban wall",
-      "subtitle": "Office board",
-      "color": "#f2c94c"
+      "title": "Office board",
+      "subtitle": "Claims & notes",
+      "color": "#f2c94c",
+      "offset": 20
     },
     "vault": {
       "title": "Vault",
       "subtitle": "Secure storage",
-      "color": "#78909c"
+      "color": "#78909c",
+      "offset": 4
     },
     "lounge": {
       "title": "Lounge",
       "subtitle": "Idle",
-      "color": "#e07a5f"
+      "color": "#e07a5f",
+      "offset": 8
     }
   },
   "props": {

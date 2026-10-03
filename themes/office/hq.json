@@ -9,9 +9,33 @@
  "tilewidth": 32,
  "tileheight": 32,
  "infinite": false,
- "nextlayerid": 4,
- "nextobjectid": 29,
+ "nextlayerid": 5,
+ "nextobjectid": 34,
  "layers": [
+  {
+   "id": 4,
+   "name": "floor",
+   "type": "imagelayer",
+   "image": "art/hq-floor.png",
+   "opacity": 1,
+   "visible": true,
+   "x": 0,
+   "y": 0,
+   "offsetx": -24,
+   "offsety": -24,
+   "properties": [
+    {
+     "name": "scale",
+     "type": "float",
+     "value": 2
+    },
+    {
+     "name": "walls",
+     "type": "bool",
+     "value": true
+    }
+   ]
+  },
   {
    "id": 1,
    "name": "furniture",
@@ -47,6 +71,11 @@
        "name": "solid",
        "type": "bool",
        "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
@@ -75,6 +104,11 @@
        "name": "solid",
        "type": "bool",
        "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
@@ -103,11 +137,82 @@
        "name": "solid",
        "type": "bool",
        "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
      "id": 13,
+     "name": "ceo_rug",
+     "x": 86.4,
+     "y": 33.6,
+     "width": 147.2,
+     "height": 102.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#b5838d"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 14,
+     "name": "ceo_chair",
+     "x": 145.6,
+     "y": 27.2,
+     "width": 28.8,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#5b3a2e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "chair_ceo"
+      }
+     ]
+    },
+    {
+     "id": 15,
      "name": "ceo_desk",
      "x": 112,
      "y": 73.6,
@@ -131,11 +236,21 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "desk_ceo"
+      },
+      {
+       "name": "ysort",
+       "type": "bool",
+       "value": true
       }
      ]
     },
     {
-     "id": 14,
+     "id": 16,
      "name": "plant",
      "x": 19.2,
      "y": 35.2,
@@ -159,11 +274,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "plant_tall"
       }
      ]
     },
     {
-     "id": 15,
+     "id": 17,
      "name": "bookshelf",
      "x": 256,
      "y": 25.6,
@@ -187,11 +307,82 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "bookshelf"
       }
      ]
     },
     {
-     "id": 17,
+     "id": 18,
+     "name": "ceo_plant",
+     "x": 288,
+     "y": 124.8,
+     "width": 22.4,
+     "height": 22.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6a994e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "plant"
+      }
+     ]
+    },
+    {
+     "id": 19,
+     "name": "ceo_armchair",
+     "x": 17.6,
+     "y": 97.6,
+     "width": 32,
+     "height": 32,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#8d6e63"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "armchair"
+      }
+     ]
+    },
+    {
+     "id": 21,
      "name": "memo_hatch",
      "x": 128,
      "y": 147.2,
@@ -215,11 +406,16 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "security_gate"
       }
      ]
     },
     {
-     "id": 24,
+     "id": 28,
      "name": "notice_board",
      "x": 217.6,
      "y": 238.4,
@@ -243,6 +439,44 @@
        "name": "solid",
        "type": "bool",
        "value": true
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "notice_board"
+      }
+     ]
+    },
+    {
+     "id": 30,
+     "name": "reception_plant",
+     "x": 73.6,
+     "y": 222.4,
+     "width": 22.4,
+     "height": 22.4,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#6a994e"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "sprite",
+       "type": "string",
+       "value": "plant"
       }
      ]
     }
@@ -433,7 +667,7 @@
    "y": 0,
    "objects": [
     {
-     "id": 16,
+     "id": 20,
      "name": "boss_seat",
      "type": "boss_seat",
      "x": 160,
@@ -442,10 +676,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "south"
+      }
+     ]
     },
     {
-     "id": 18,
+     "id": 22,
      "name": "inbox_1",
      "type": "inbox",
      "x": 40,
@@ -454,10 +695,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 19,
+     "id": 23,
      "name": "inbox_2",
      "type": "inbox",
      "x": 88,
@@ -466,10 +714,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 20,
+     "id": 24,
      "name": "inbox_3",
      "type": "inbox",
      "x": 136,
@@ -478,10 +733,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 21,
+     "id": 25,
      "name": "inbox_4",
      "type": "inbox",
      "x": 184,
@@ -490,10 +752,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 22,
+     "id": 26,
      "name": "inbox_5",
      "type": "inbox",
      "x": 232,
@@ -502,10 +771,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 23,
+     "id": 27,
      "name": "inbox_6",
      "type": "inbox",
      "x": 280,
@@ -514,10 +790,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "north"
+      }
+     ]
     },
     {
-     "id": 25,
+     "id": 29,
      "name": "noticeboard",
      "type": "noticeboard",
      "x": 253,
@@ -526,10 +809,17 @@
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "south"
+      }
+     ]
     },
     {
-     "id": 26,
+     "id": 31,
      "name": "door_bottom",
      "type": "door",
      "x": 160,
@@ -541,7 +831,7 @@
      "visible": true
     },
     {
-     "id": 27,
+     "id": 32,
      "name": "door_left",
      "type": "door",
      "x": 0,
@@ -553,7 +843,7 @@
      "visible": true
     },
     {
-     "id": 28,
+     "id": 33,
      "name": "door_right",
      "type": "door",
      "x": 320,

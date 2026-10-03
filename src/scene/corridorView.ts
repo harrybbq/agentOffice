@@ -7,10 +7,12 @@ import type { Cell, CorridorNetwork } from '../world/corridors'
 export interface CorridorStyle {
   floor: number
   edge: number
+  /** Lines between floor tiles (default: black at 6%). */
+  seam?: number
 }
 
 const SUB = 16 // sub-cell size for edge detection (= nav cell)
-const EDGE_PX = 2
+const EDGE_PX = 3
 const HEAD_COLOR = 0xffd166
 const PULSE_COLOR = 0xffe08a
 
@@ -104,7 +106,8 @@ export class CorridorView {
       for (let y = y0; y < y0 + n; y++) for (let x = x0; x < x0 + n; x++) subs.add(key(x, y))
     }
     // Faint seams every tile so the floor reads as a laid hallway.
-    g.fillStyle(0x000000, 0.06)
+    if (this.style.seam !== undefined) g.fillStyle(this.style.seam, 1)
+    else g.fillStyle(0x000000, 0.06)
     for (const k of subs) {
       const x = Math.floor(k / 65536)
       const y = k % 65536
@@ -118,16 +121,34 @@ export class CorridorView {
       return this.builtBlocks.some((r) => px > r.x && px < r.x + r.width && py > r.y && py < r.y + r.height)
     }
     const open = (x: number, y: number) => !subs.has(key(x, y)) && !inBlock(x, y)
-    g.fillStyle(this.style.edge, 1)
-    for (const k of subs) {
-      const x = Math.floor(k / 65536)
-      const y = k % 65536
-      const px = x * SUB
-      const py = y * SUB
-      if (open(x, y - 1)) g.fillRect(px, py, SUB, EDGE_PX)
-      if (open(x, y + 1)) g.fillRect(px, py + SUB - EDGE_PX, SUB, EDGE_PX)
-      if (open(x - 1, y)) g.fillRect(px, py, EDGE_PX, SUB)
-      if (open(x + 1, y)) g.fillRect(px + SUB - EDGE_PX, py, EDGE_PX, SUB)
+    // A low wall: its shadow on the ground outside (down and right), a soft shade on the floor
+    // inside, then the wall itself.
+    const sides = (draw: (px: number, py: number, side: number) => void) => {
+      for (const k of subs) {
+        const x = Math.floor(k / 65536)
+        const y = k % 65536
+        if (open(x, y - 1)) draw(x * SUB, y * SUB, 0)
+        if (open(x, y + 1)) draw(x * SUB, y * SUB, 1)
+        if (open(x - 1, y)) draw(x * SUB, y * SUB, 2)
+        if (open(x + 1, y)) draw(x * SUB, y * SUB, 3)
+      }
     }
+    g.fillStyle(0x000000, 0.22)
+    sides((px, py, side) => {
+      if (side === 1) g.fillRect(px + 1, py + SUB, SUB, 3)
+      else if (side === 3) g.fillRect(px + SUB, py + 1, 2, SUB)
+    })
+    g.fillStyle(0x000000, 0.05)
+    sides((px, py, side) => {
+      if (side === 0) g.fillRect(px, py + EDGE_PX, SUB, 3)
+      else if (side === 2) g.fillRect(px + EDGE_PX, py, 2, SUB)
+    })
+    g.fillStyle(this.style.edge, 1)
+    sides((px, py, side) => {
+      if (side === 0) g.fillRect(px, py, SUB, EDGE_PX)
+      else if (side === 1) g.fillRect(px, py + SUB - EDGE_PX, SUB, EDGE_PX)
+      else if (side === 2) g.fillRect(px, py, EDGE_PX, SUB)
+      else g.fillRect(px + SUB - EDGE_PX, py, EDGE_PX, SUB)
+    })
   }
 }
