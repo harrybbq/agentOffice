@@ -671,6 +671,17 @@ npm test             # roster, world/pathfinding, corridors, movement rules, ord
 
 `npm run simulate -- --teams 3 --speed 2 --once` changes the number of teams, the speed, and whether it loops.
 
+### In a browser (no install)
+
+The same interface runs in a plain browser, without Electron: `npm run web` (hot reload, http://localhost:5273)
+or `npm run build:web` (a static site in `dist-web/`). A browser cannot start agents, so everything there
+is simulated by `src/dev/stubBridge.ts`: demo sessions, teams, permission requests and the office board. It is
+for looking at the office and checking interface and art changes, not for real work. `?stub=empty` opens an
+empty office and `?idle=5` sends idle characters to the lounge after 5 s (more switches in that file's header).
+
+Every push to `main` publishes the web build to GitHub Pages (`.github/workflows/pages.yml`):
+https://harrybbq.github.io/agentOffice/. One-time setup: repository Settings > Pages > Source: "GitHub Actions".
+
 ### Tray menu
 Show/hide, always on top, overlay mode (transparent and click-through), theme, **Allow CEO orders**, **Office board**, copy/regenerate token, open config folder, quit.
 

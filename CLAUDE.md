@@ -15,6 +15,8 @@ subagents are workers. See README.md for the full picture.
 ## Commands
 - `npm run dev` (hot reload), `npm run build` (what the desktop shortcut runs), `npm test`, `npm run typecheck`
 - `npm run simulate` sends fake teams to a running app
+- `npm run web` / `npm run build:web`: the renderer alone in a browser on the stub bridge (simulated agents);
+  pushed to GitHub Pages by `.github/workflows/pages.yml`. Keep theme URLs relative (`import.meta.env.BASE_URL`)
 - Office art, all generated: `node scripts/gen-office-map.cjs` (maps), then `npx electron scripts/gen-office-art.cjs`
   (pictures in `themes/office/art/`), then `npx electron scripts/art-preview.cjs` (screenshots in `docs/art-preview/`)
 

@@ -1017,7 +1017,8 @@ export function createStubBridge(): AgentOfficeBridge {
     },
     listThemes: async () => [{ name: 'office', displayName: 'Office' }],
     loadTheme: async (name) => {
-      const baseUrl = `/themes/${encodeURIComponent(name)}/`
+      // Relative to where the page is served from: '/' in dev, a sub-folder for the web build.
+      const baseUrl = `${import.meta.env.BASE_URL}themes/${encodeURIComponent(name)}/`
       const get = async (path: string) => {
         // Bundled themes come through the module graph, so no /themes route is needed.
         const bundled = THEME_FILES[`../../themes/${name}/${path}`]

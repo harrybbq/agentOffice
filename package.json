@@ -12,6 +12,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "web": "vite -c vite.web.config.ts",
+    "build:web": "vite build -c vite.web.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "simulate": "tsx scripts/simulate.ts",
     "test": "tsx tests/roster.test.ts"
