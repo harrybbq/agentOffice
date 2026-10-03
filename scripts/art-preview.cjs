@@ -4,6 +4,7 @@
 //   hq-2x.png, branch-2x.png                one building each at camera zoom 2
 //   stations.png                            every station of a branch with someone working at it
 //   office-6-teams.png                      six teams: the default zoom gets small
+//   lounge.png                              a team with nothing to do: on the sofa, at the water cooler
 //   sprites.png                             every sprite drawn so far, on a neutral background
 //   compare.png                             our room beside a crop of the reference (only when
 //                                           docs/reference/office-reference.png exists; local, not committed)
@@ -23,10 +24,11 @@ const REPO = path.join(__dirname, '..')
 const OUT = process.env.AO_PREVIEW_OUT || path.join(REPO, 'docs', 'art-preview')
 const NO_ART = process.env.AO_PREVIEW_NO_ART === '1'
 const REFERENCE = path.join(REPO, 'docs', 'reference', 'office-reference.png')
-const PORT = 5263
+// AO_PREVIEW_PORT=<n>: another port (and Vite cache), so two previews can run at the same time.
+const PORT = Number(process.env.AO_PREVIEW_PORT) || 5263
 const MIME = { '.png': 'image/png', '.json': 'application/json', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml' }
 
-app.setPath('userData', path.join(os.tmpdir(), 'agent-office-art-preview'))
+app.setPath('userData', path.join(os.tmpdir(), 'agent-office-art-preview' + (PORT === 5263 ? '' : '-' + PORT)))
 app.commandLine.appendSwitch('force-device-scale-factor', '1')
 app.commandLine.appendSwitch('ignore-gpu-blocklist')
 app.commandLine.appendSwitch('enable-unsafe-swiftshader')
@@ -52,7 +54,7 @@ async function startServer() {
   const server = await vite.createServer({
     configFile: false, root: path.join(REPO, 'src'), plugins: [react(), themes], logLevel: 'warn',
     server: { port: PORT, strictPort: true, host: '127.0.0.1' },
-    cacheDir: path.join(REPO, 'node_modules', '.vite-art-preview')
+    cacheDir: path.join(REPO, 'node_modules', '.vite-art-preview' + (PORT === 5263 ? '' : '-' + PORT))
   })
   await server.listen()
   return server
@@ -115,7 +117,7 @@ app.whenReady().then(async () => {
     }
     const blockRect = (id, pad = 28) => `(() => { const b = ${id === 'hq' ? 'sc.layout.hq' : `sc.layout.branch('${id}')`}; return { x: b.offset.x - ${pad}, y: b.offset.y - ${pad + 24}, width: b.width + ${pad * 2}, height: b.height + ${pad * 2 + 24} } })()`
 
-    // AO_PREVIEW_ONLY=office,stations,six renders only those parts.
+    // AO_PREVIEW_ONLY=office,stations,six,rest,sprites renders only those parts.
     const want = (part) => !process.env.AO_PREVIEW_ONLY || process.env.AO_PREVIEW_ONLY.split(',').includes(part)
     let cmpImg = null
     if (want('office')) {
@@ -194,6 +196,24 @@ app.whenReady().then(async () => {
     await js(`sc.syncOverlay(); 0`)
     console.log('six teams zoom:', await js(`sc.cameras.main.zoom.toFixed(2)`))
     await shot('office-6-teams.png')
+    }
+    if (want('rest')) {
+
+    // ---- 4. The lounge: a whole team with nothing to do (their idle clocks run forward) ------------
+    await fresh()
+    const crew = [['r1', 'codex', 'Builder'], ['r2', 'antigravity', 'Explore'], ['r3', 'claude-code', 'Docs'], ['r4', 'codex', 'Tests'], ['r5', 'antigravity', 'Research']]
+    const all = ['m1', ...crew.map((w) => w[0])]
+    await js(`ev('m1', null, 'claude-code', 'frontend', 'write', 'plan.md')`)
+    await built('m1')
+    for (const [id, p, n] of crew) await js(`ev('${id}', 'm1', '${p}', '${n}', 'write', 'src/x.ts')`)
+    await settledAll(all)
+    await js(`for (const id of ${JSON.stringify(all)}) sc.idle.busyAt.set(id, 0); 0`)
+    await until('everyone to go and rest', all.map((id) => `sc.idle.isResting('${id}')`).join(' && '), 30000)
+    await settledAll(all)
+    await js(`sc.scene.pause(); 0`)
+    console.log('lounge:', await js(`JSON.stringify([...sc.chars.entries()].filter(([id]) => sc.idle.isResting(id)).map(([id, c]) => id + ':' + c.pose + '@' + Math.round(c.position.x - sc.layout.branch('m1').offset.x) + ',' + Math.round(c.position.y - sc.layout.branch('m1').offset.y)))`))
+    await alone()
+    await view('lounge.png', `(() => { const b = sc.layout.branch('m1'); return { x: b.offset.x + 408, y: b.offset.y + 196, width: 168, height: 168 } })()`, 4)
     }
 
     // Every sprite: the furniture atlas frames, then the character's poses in three provider colours.

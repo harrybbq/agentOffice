@@ -216,7 +216,8 @@
       "title": "Lounge",
       "subtitle": "Idle",
       "color": "#e07a5f",
-      "offset": 8
+      "once": true,
+      "offset": 10
     }
   },
   "props": {

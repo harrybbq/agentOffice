@@ -10,7 +10,7 @@
  "tileheight": 32,
  "infinite": false,
  "nextlayerid": 5,
- "nextobjectid": 89,
+ "nextobjectid": 95,
  "layers": [
   {
    "id": 4,
@@ -488,10 +488,10 @@
     {
      "id": 30,
      "name": "sofa",
-     "x": 454.4,
-     "y": 243.2,
-     "width": 89.6,
-     "height": 27.2,
+     "x": 448,
+     "y": 240,
+     "width": 96,
+     "height": 16,
      "rotation": 0,
      "visible": true,
      "type": "furniture",
@@ -520,9 +520,108 @@
     },
     {
      "id": 31,
+     "name": "sofa_arm_l",
+     "x": 448,
+     "y": 256,
+     "width": 12,
+     "height": 16,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#c06e56"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 32,
+     "name": "sofa_arm_r",
+     "x": 532,
+     "y": 256,
+     "width": 12,
+     "height": 16,
+     "rotation": 0,
+     "visible": true,
+     "type": "furniture",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#c06e56"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": true
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 33,
+     "name": "sofa_seat",
+     "x": 460,
+     "y": 256,
+     "width": 72,
+     "height": 16,
+     "rotation": 0,
+     "visible": true,
+     "type": "area",
+     "properties": [
+      {
+       "name": "color",
+       "type": "color",
+       "value": "#e69c84"
+      },
+      {
+       "name": "label",
+       "type": "string",
+       "value": ""
+      },
+      {
+       "name": "solid",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "fallback",
+       "type": "bool",
+       "value": true
+      }
+     ]
+    },
+    {
+     "id": 37,
      "name": "water",
      "x": 440,
-     "y": 297.6,
+     "y": 307.2,
      "width": 22.4,
      "height": 22.4,
      "rotation": 0,
@@ -552,7 +651,7 @@
      ]
     },
     {
-     "id": 34,
+     "id": 40,
      "name": "desk_1",
      "x": 24,
      "y": 198.4,
@@ -585,7 +684,7 @@
      ]
     },
     {
-     "id": 35,
+     "id": 41,
      "name": "monitor_1",
      "x": 46.4,
      "y": 201.6,
@@ -618,7 +717,7 @@
      ]
     },
     {
-     "id": 36,
+     "id": 42,
      "name": "chair_1",
      "x": 44.8,
      "y": 230.4,
@@ -651,7 +750,7 @@
      ]
     },
     {
-     "id": 37,
+     "id": 43,
      "name": "chair_back_1",
      "x": 44.8,
      "y": 243.2,
@@ -689,7 +788,7 @@
      ]
     },
     {
-     "id": 39,
+     "id": 45,
      "name": "desk_2",
      "x": 120,
      "y": 198.4,
@@ -722,7 +821,7 @@
      ]
     },
     {
-     "id": 40,
+     "id": 46,
      "name": "monitor_2",
      "x": 142.4,
      "y": 201.6,
@@ -755,7 +854,7 @@
      ]
     },
     {
-     "id": 41,
+     "id": 47,
      "name": "chair_2",
      "x": 140.8,
      "y": 230.4,
@@ -788,7 +887,7 @@
      ]
     },
     {
-     "id": 42,
+     "id": 48,
      "name": "chair_back_2",
      "x": 140.8,
      "y": 243.2,
@@ -826,7 +925,7 @@
      ]
     },
     {
-     "id": 44,
+     "id": 50,
      "name": "desk_3",
      "x": 216,
      "y": 198.4,
@@ -859,7 +958,7 @@
      ]
     },
     {
-     "id": 45,
+     "id": 51,
      "name": "monitor_3",
      "x": 238.4,
      "y": 201.6,
@@ -892,7 +991,7 @@
      ]
     },
     {
-     "id": 46,
+     "id": 52,
      "name": "chair_3",
      "x": 236.8,
      "y": 230.4,
@@ -925,7 +1024,7 @@
      ]
     },
     {
-     "id": 47,
+     "id": 53,
      "name": "chair_back_3",
      "x": 236.8,
      "y": 243.2,
@@ -963,7 +1062,7 @@
      ]
     },
     {
-     "id": 49,
+     "id": 55,
      "name": "desk_4",
      "x": 312,
      "y": 198.4,
@@ -996,7 +1095,7 @@
      ]
     },
     {
-     "id": 50,
+     "id": 56,
      "name": "monitor_4",
      "x": 334.4,
      "y": 201.6,
@@ -1029,7 +1128,7 @@
      ]
     },
     {
-     "id": 51,
+     "id": 57,
      "name": "chair_4",
      "x": 332.8,
      "y": 230.4,
@@ -1062,7 +1161,7 @@
      ]
     },
     {
-     "id": 52,
+     "id": 58,
      "name": "chair_back_4",
      "x": 332.8,
      "y": 243.2,
@@ -1100,7 +1199,7 @@
      ]
     },
     {
-     "id": 54,
+     "id": 60,
      "name": "desk_5",
      "x": 24,
      "y": 291.2,
@@ -1133,7 +1232,7 @@
      ]
     },
     {
-     "id": 55,
+     "id": 61,
      "name": "monitor_5",
      "x": 46.4,
      "y": 294.4,
@@ -1166,7 +1265,7 @@
      ]
     },
     {
-     "id": 56,
+     "id": 62,
      "name": "chair_5",
      "x": 44.8,
      "y": 323.2,
@@ -1199,7 +1298,7 @@
      ]
     },
     {
-     "id": 57,
+     "id": 63,
      "name": "chair_back_5",
      "x": 44.8,
      "y": 336,
@@ -1237,7 +1336,7 @@
      ]
     },
     {
-     "id": 59,
+     "id": 65,
      "name": "desk_6",
      "x": 120,
      "y": 291.2,
@@ -1270,7 +1369,7 @@
      ]
     },
     {
-     "id": 60,
+     "id": 66,
      "name": "monitor_6",
      "x": 142.4,
      "y": 294.4,
@@ -1303,7 +1402,7 @@
      ]
     },
     {
-     "id": 61,
+     "id": 67,
      "name": "chair_6",
      "x": 140.8,
      "y": 323.2,
@@ -1336,7 +1435,7 @@
      ]
     },
     {
-     "id": 62,
+     "id": 68,
      "name": "chair_back_6",
      "x": 140.8,
      "y": 336,
@@ -1374,7 +1473,7 @@
      ]
     },
     {
-     "id": 64,
+     "id": 70,
      "name": "desk_7",
      "x": 216,
      "y": 291.2,
@@ -1407,7 +1506,7 @@
      ]
     },
     {
-     "id": 65,
+     "id": 71,
      "name": "monitor_7",
      "x": 238.4,
      "y": 294.4,
@@ -1440,7 +1539,7 @@
      ]
     },
     {
-     "id": 66,
+     "id": 72,
      "name": "chair_7",
      "x": 236.8,
      "y": 323.2,
@@ -1473,7 +1572,7 @@
      ]
     },
     {
-     "id": 67,
+     "id": 73,
      "name": "chair_back_7",
      "x": 236.8,
      "y": 336,
@@ -1511,7 +1610,7 @@
      ]
     },
     {
-     "id": 69,
+     "id": 75,
      "name": "desk_8",
      "x": 312,
      "y": 291.2,
@@ -1544,7 +1643,7 @@
      ]
     },
     {
-     "id": 70,
+     "id": 76,
      "name": "monitor_8",
      "x": 334.4,
      "y": 294.4,
@@ -1577,7 +1676,7 @@
      ]
     },
     {
-     "id": 71,
+     "id": 77,
      "name": "chair_8",
      "x": 332.8,
      "y": 323.2,
@@ -1610,7 +1709,7 @@
      ]
     },
     {
-     "id": 72,
+     "id": 78,
      "name": "chair_back_8",
      "x": 332.8,
      "y": 336,
@@ -1648,7 +1747,7 @@
      ]
     },
     {
-     "id": 74,
+     "id": 80,
      "name": "plant_door",
      "x": 14.4,
      "y": 174.4,
@@ -1681,7 +1780,7 @@
      ]
     },
     {
-     "id": 75,
+     "id": 81,
      "name": "plant_printer",
      "x": 289.6,
      "y": 24,
@@ -1714,7 +1813,7 @@
      ]
     },
     {
-     "id": 76,
+     "id": 82,
      "name": "photo_booth",
      "x": 19.2,
      "y": 360,
@@ -1747,7 +1846,7 @@
      ]
     },
     {
-     "id": 78,
+     "id": 84,
      "name": "kanban_wall",
      "x": 326.4,
      "y": 395.2,
@@ -1780,7 +1879,7 @@
      ]
     },
     {
-     "id": 80,
+     "id": 86,
      "name": "vault",
      "x": 499.2,
      "y": 350.4,
@@ -1813,7 +1912,7 @@
      ]
     },
     {
-     "id": 81,
+     "id": 87,
      "name": "vault_door",
      "x": 520,
      "y": 368,
@@ -1846,7 +1945,7 @@
      ]
     },
     {
-     "id": 83,
+     "id": 89,
      "name": "mat",
      "x": 224,
      "y": 384,
@@ -2196,23 +2295,68 @@
      ]
     },
     {
-     "id": 32,
-     "name": "lounge",
+     "id": 34,
+     "name": "sofa_1",
      "type": "lounge",
-     "x": 499,
-     "y": 298,
+     "x": 472,
+     "y": 264,
      "width": 0,
      "height": 0,
      "point": true,
      "rotation": 0,
-     "visible": true
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "south"
+      }
+     ]
     },
     {
-     "id": 33,
+     "id": 35,
+     "name": "sofa_2",
+     "type": "lounge",
+     "x": 496,
+     "y": 264,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "south"
+      }
+     ]
+    },
+    {
+     "id": 36,
+     "name": "sofa_3",
+     "type": "lounge",
+     "x": 520,
+     "y": 264,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true,
+     "properties": [
+      {
+       "name": "seat",
+       "type": "string",
+       "value": "south"
+      }
+     ]
+    },
+    {
+     "id": 38,
      "name": "water_cooler",
      "type": "water_cooler",
      "x": 451,
-     "y": 336,
+     "y": 346,
      "width": 0,
      "height": 0,
      "point": true,
@@ -2227,7 +2371,26 @@
      ]
     },
     {
-     "id": 38,
+     "id": 39,
+     "name": "cooler",
+     "type": "lounge",
+     "x": 480,
+     "y": 330,
+     "width": 0,
+     "height": 0,
+     "point": true,
+     "rotation": 0,
+     "visible": true,
+     "properties": [
+      {
+       "name": "facing",
+       "type": "string",
+       "value": "west"
+      }
+     ]
+    },
+    {
+     "id": 44,
      "name": "desk_1",
      "type": "desk",
      "x": 56,
@@ -2246,7 +2409,7 @@
      ]
     },
     {
-     "id": 43,
+     "id": 49,
      "name": "desk_2",
      "type": "desk",
      "x": 152,
@@ -2265,7 +2428,7 @@
      ]
     },
     {
-     "id": 48,
+     "id": 54,
      "name": "desk_3",
      "type": "desk",
      "x": 248,
@@ -2284,7 +2447,7 @@
      ]
     },
     {
-     "id": 53,
+     "id": 59,
      "name": "desk_4",
      "type": "desk",
      "x": 344,
@@ -2303,7 +2466,7 @@
      ]
     },
     {
-     "id": 58,
+     "id": 64,
      "name": "desk_5",
      "type": "desk",
      "x": 56,
@@ -2322,7 +2485,7 @@
      ]
     },
     {
-     "id": 63,
+     "id": 69,
      "name": "desk_6",
      "type": "desk",
      "x": 152,
@@ -2341,7 +2504,7 @@
      ]
     },
     {
-     "id": 68,
+     "id": 74,
      "name": "desk_7",
      "type": "desk",
      "x": 248,
@@ -2360,7 +2523,7 @@
      ]
     },
     {
-     "id": 73,
+     "id": 79,
      "name": "desk_8",
      "type": "desk",
      "x": 344,
@@ -2379,7 +2542,7 @@
      ]
     },
     {
-     "id": 77,
+     "id": 83,
      "name": "photo_booth",
      "type": "photo_booth",
      "x": 112,
@@ -2398,7 +2561,7 @@
      ]
     },
     {
-     "id": 79,
+     "id": 85,
      "name": "noticeboard",
      "type": "noticeboard",
      "x": 371,
@@ -2417,7 +2580,7 @@
      ]
     },
     {
-     "id": 82,
+     "id": 88,
      "name": "vault",
      "type": "vault",
      "x": 477,
@@ -2436,7 +2599,7 @@
      ]
     },
     {
-     "id": 84,
+     "id": 90,
      "name": "entrance",
      "type": "entrance",
      "x": 256,
@@ -2448,7 +2611,7 @@
      "visible": true
     },
     {
-     "id": 85,
+     "id": 91,
      "name": "door_bottom",
      "type": "door",
      "x": 256,
@@ -2460,7 +2623,7 @@
      "visible": true
     },
     {
-     "id": 86,
+     "id": 92,
      "name": "door_top",
      "type": "door",
      "x": 352,
@@ -2472,7 +2635,7 @@
      "visible": true
     },
     {
-     "id": 87,
+     "id": 93,
      "name": "door_left",
      "type": "door",
      "x": 0,
@@ -2484,7 +2647,7 @@
      "visible": true
     },
     {
-     "id": 88,
+     "id": 94,
      "name": "door_right",
      "type": "door",
      "x": 576,

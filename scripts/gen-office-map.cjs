@@ -154,10 +154,18 @@ function builder(W, H) {
   b.pt('whiteboard', 13.7, 5.05, 'whiteboard', { facing: 'north' })
   // Lounge: a rug, a sofa and the water cooler
   b.area('lounge_rug', 13.5, 7.4, 4.1, 3, '#d9e4d2', '', { fallback: true }) // part of the floor picture
-  b.item('sofa', 14.2, 7.6, 2.8, 0.85, '#e07a5f', '', { sprite: 'sofa' })
-  b.item('water', 13.75, 9.3, 0.7, 0.7, '#81d4fa', '', { sprite: 'water_cooler' })
-  b.pt('lounge', 15.6, 9.3)
-  b.pt('water_cooler', 14.1, 10.5, 'water_cooler', { facing: 'north' })
+  // Only the sofa's backrest and armrests block (all on whole path cells): the cushions are floor to
+  // walk onto, one seat each. The picture of the whole sofa hangs down from the backrest.
+  b.item('sofa', 14, 7.5, 3, 0.5, '#e07a5f', '', { sprite: 'sofa' })
+  b.item('sofa_arm_l', 14, 8, 0.375, 0.5, '#c06e56', '', { fallback: true }) // in the picture
+  b.item('sofa_arm_r', 16.625, 8, 0.375, 0.5, '#c06e56', '', { fallback: true })
+  b.area('sofa_seat', 14.375, 8, 2.25, 0.5, '#e69c84', '', { fallback: true })
+  for (let i = 0; i < 3; i++) b.pt('lounge', 14.75 + i * 0.75, 8.25, 'sofa_' + (i + 1), { seat: 'south' })
+  b.item('water', 13.75, 9.6, 0.7, 0.7, '#81d4fa', '', { sprite: 'water_cooler' })
+  b.pt('water_cooler', 14.1, 10.8, 'water_cooler', { facing: 'north' })
+  // Resting is the sofa or a drink: a lounge spot beside the cooler (so it stays in view), facing it,
+  // far enough down that the names of those standing there clear the sofa.
+  b.pt('lounge', 15, 10.3, 'cooler', { facing: 'west' })
   // Desks: 2 rows x 4 columns
   let d = 0
   for (let r = 0; r < 2; r++) for (let c = 0; c < 4; c++) {

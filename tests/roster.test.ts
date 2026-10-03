@@ -1,7 +1,7 @@
 // Runs with `npm test` (tsx). Also imports the other test files so one command runs everything.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { Roster, Stations, BOSS_ID } from '../src/scene/roster.ts'
+import { idSeed, Roster, Stations, BOSS_ID } from '../src/scene/roster.ts'
 import { compactQueue } from '../src/scene/queue.ts'
 import { parseMap } from '../src/theme/parse.ts'
 import { WorldLayout } from '../src/world/layout.ts'
@@ -12,6 +12,7 @@ const branchMap = load('branch.json')
 
 const ev = (agentId: string, parentId: string | null, displayName = agentId) => ({ agentId, parentId, provider: 'claude-code', displayName })
 const mk = () => new Roster(new WorldLayout(hqMap, branchMap), { provider: 'human', displayName: 'CEO' })
+const idsAt = (s: Stations, pts: { x: number; y: number }[]) => pts.map((p) => s.occupantsAt(p))
 let pass = 0
 const t = (name: string, fn: () => void) => { fn(); pass++; console.log('ok -', name) }
 
@@ -219,6 +220,65 @@ t('stations offset sharers 12px apart and reuse slots', () => {
   assert.deepEqual(s.claim('c', p), { x: 88, y: 100 })
   s.release('b'); assert.deepEqual(s.claim('d', p), { x: 112, y: 100 })
   assert.deepEqual(s.claim('a', p), { x: 100, y: 100 })
+})
+
+t('resting spots: a free one each, spread by the seed; when all are taken, side by side where people stand', () => {
+  const s = new Stations()
+  const seats = [{ x: 10, y: 0, name: 'sofa_1' }, { x: 30, y: 0, name: 'sofa_2' }, { x: 50, y: 0, name: 'sofa_3' }]
+  const cooler = { x: 0, y: 60, name: 'cooler' }
+  const spots = [...seats, cooler]
+  const isSeat = (p: { name: string }) => p.name.startsWith('sofa')
+  const from = { x: 50, y: 0 } // right at sofa_3: the pick is not "the nearest"
+  const rest = (id: string, seed: number, pts = spots) => {
+    const p = s.restSpot(id, pts, from, seed, isSeat)!
+    s.claim(id, p)
+    return p.name
+  }
+  assert.equal(s.restSpot('a', [], from, 0, isSeat), null)
+  assert.equal(rest('a', 3), 'cooler') //   the seed picks where the search starts ...
+  assert.equal(rest('b', 3), 'sofa_1') //   ... and a taken spot passes to the next free one
+  assert.equal(rest('c', 5), 'sofa_2') //   5 % 4 = 1: sofa_2
+  assert.equal(rest('d', -3), 'sofa_3') //  a negative seed is fine
+  assert.equal(rest('a', 0), 'cooler') //   its own spot is not "taken"
+  assert.deepEqual(idsAt(s, seats), [['b'], ['c'], ['d']])
+  // All taken: nobody stands on the sofa; the extras line up at the cooler.
+  assert.equal(rest('e', 0), 'cooler')
+  assert.equal(rest('f', 1), 'cooler')
+  assert.deepEqual(s.occupantsAt(cooler), ['a', 'e', 'f'])
+  assert.deepEqual(s.claim('f', cooler), { x: -12, y: 60 })
+  // A seat is free again: the next one sits.
+  s.release('c')
+  assert.equal(rest('g', 0), 'sofa_2')
+  // Several standing spots: the least crowded, the nearest among equals.
+  const yard = [{ x: 0, y: 0, name: 'y1' }, { x: 40, y: 0, name: 'y2' }, { x: 80, y: 0, name: 'y3' }]
+  const t2 = new Stations()
+  for (const [id, p] of [['a', yard[0]], ['b', yard[0]], ['c', yard[1]], ['d', yard[2]]] as const) t2.claim(id, p)
+  assert.equal(t2.restSpot('e', yard, { x: 70, y: 0 }, 0, () => false)!.name, 'y3')
+  assert.equal(t2.restSpot('e', yard, { x: 30, y: 0 }, 0, () => false)!.name, 'y2')
+  // Nothing but (taken) seats: the nearest, as before.
+  const t3 = new Stations()
+  seats.forEach((p, i) => t3.claim('x' + i, p))
+  assert.equal(t3.restSpot('e', seats, { x: 28, y: 5 }, 0, isSeat)!.name, 'sofa_2')
+  // The seed is stable per id and never negative.
+  assert.equal(idSeed('agent-1'), idSeed('agent-1'))
+  assert.ok(['', 'a', 'agent-7f3a', 'x'.repeat(200)].every((id) => idSeed(id) >= 0 && Number.isInteger(idSeed(id))))
+})
+
+t('the office lounge: a team of nine rests on three sofa seats and at the cooler', () => {
+  const r = mk(); r.ensure(ev('m', null))
+  const ids = ['m', ...Array.from({ length: 8 }, (_, i) => 'w' + i)]
+  for (const id of ids.slice(1)) r.ensure(ev(id, 'm'))
+  const b = r.blockOf('m')
+  const spots = b.locations.get('lounge')!
+  const isSeat = (p: { x: number; y: number }) => b.template.seats.some((q) => q.x + b.offset.x === p.x && q.y + b.offset.y === p.y)
+  const s = new Stations()
+  const at = new Map<string, number>()
+  for (const id of ids) {
+    const p = s.restSpot(id, spots, r.get(id)!.home, idSeed(id), isSeat)!
+    s.claim(id, p)
+    at.set(p.name, (at.get(p.name) ?? 0) + 1)
+  }
+  assert.deepEqual([...at].sort(), [['cooler', 6], ['sofa_1', 1], ['sofa_2', 1], ['sofa_3', 1]])
 })
 
 t('queue compaction', () => {

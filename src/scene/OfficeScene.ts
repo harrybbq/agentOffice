@@ -22,7 +22,8 @@
 // - Each team has a colour (theme teams.colors) and its manager a distinct procedural head.
 // - Stations: the theme's stationRules pick a more specific location than the activities table,
 //   stationLabels put a floating tag above each station (StationLabels, a DOM layer), and after
-//   idle.afterMs without activity a character walks to the theme's idle location in its own branch.
+//   idle.afterMs without activity a character walks to a free spot of the theme's idle location in
+//   its own branch.
 // - Pointing at a character shows a ring and a card; clicking one selects it (opts.onAgentClick),
 //   clicking the floor deselects. The selected character keeps its ring.
 import Phaser from 'phaser'
@@ -38,7 +39,7 @@ import { NavGrid } from '../world/pathfinding'
 import { NavScopes } from '../world/scopes'
 import { blockRect, buildNav, CorridorNetwork } from '../world/corridors'
 import type { Cell, Corridor } from '../world/corridors'
-import { BOSS_ID, nearest, Roster, Stations } from './roster'
+import { BOSS_ID, idSeed, nearest, Roster, Stations } from './roster'
 import type { Point, RosterEntry } from './roster'
 import { BlockView } from './blockView'
 import type { BuildTimes } from './blockView'
@@ -422,7 +423,11 @@ export class OfficeScene extends Phaser.Scene {
     return { x: (c.position.x - v.x) * z, y: (c.position.y - c.height / 2 - v.y) * z }
   }
 
-  /** Characters with nothing to do for the theme's idle.afterMs walk to its idle location. */
+  /**
+   * Characters with nothing to do for the theme's idle.afterMs walk to its idle location: each to a
+   * free spot of that type (a seat on the sofa, the water cooler), side by side at one where people
+   * stand once all are taken (Stations.restSpot).
+   */
   private restIdle(): void {
     const loc = this.router.idle?.location
     if (!loc) return
@@ -436,7 +441,8 @@ export class OfficeScene extends Phaser.Scene {
         lifecycle: false,
         target: (from) => {
           // Always inside the character's own branch, also for a manager.
-          const p = nearest(this.roster.blockOf(id).locations, loc, from)
+          const spots = this.roster.blockOf(id).locations.get(loc) ?? []
+          const p = this.stations.restSpot(id, spots, from, idSeed(id), (q) => this.seatAt(q) !== null)
           return p ? this.claimAt(id, c, p, false) : this.goHome(entry, c)
         }
       })

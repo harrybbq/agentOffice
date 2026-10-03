@@ -490,10 +490,44 @@ export class Stations {
     return slots ? [...slots.entries()].sort((a, b) => a[0] - b[0]).map(([, id]) => id) : []
   }
 
+  /**
+   * Where `id` goes to rest among `points` (the theme's idle location): a spot nobody else holds,
+   * tried from `seed` on so that characters spread over the spots instead of all taking the nearest.
+   * When every spot is taken: the least crowded one that is not a seat (people stand side by side
+   * there, see offsetFor; on a seat they would stand on the furniture), the nearest to `from` among
+   * equals. With nothing but seats, the nearest point. Null without points. Claims nothing.
+   */
+  restSpot<P extends Point>(id: string, points: readonly P[], from: Point, seed: number, isSeat: (p: P) => boolean): P | null {
+    const n = points.length
+    if (n === 0) return null
+    const others = (p: P) => this.occupantsAt(p).filter((o) => o !== id).length
+    const start = ((Math.trunc(seed) % n) + n) % n
+    for (let i = 0; i < n; i++) {
+      const p = points[(start + i) % n]
+      if (others(p) === 0) return p
+    }
+    let best: P | null = null
+    for (const p of points) {
+      if (isSeat(p)) continue
+      if (!best || others(p) < others(best) || (others(p) === others(best) && dist2(p, from) < dist2(best, from))) best = p
+    }
+    if (best) return best
+    best = points[0]
+    for (const p of points) if (dist2(p, from) < dist2(best, from)) best = p
+    return best
+  }
+
   private indexOf(key: string, id: string): number {
     for (const [i, o] of this.byKey.get(key) ?? []) if (o === id) return i
     return 0
   }
+}
+
+/** A stable number per id (the same character starts at the same resting spot every time). */
+export function idSeed(id: string): number {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
+  return Math.abs(h)
 }
 
 const SPREAD = 12

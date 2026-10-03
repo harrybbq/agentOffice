@@ -67,6 +67,14 @@ await t('normal mode: worker paths stay inside their branch interior; HQ and oth
         for (const p of samples(d, path)) assert.ok(inRect(p, r), `${b.id}: path leaves the branch at (${p.x},${p.y})`)
       }
     }
+    // A resting spot is walked onto exactly (a seat only counts at its very point): never snapped
+    // off a cushion because the sofa blocks it.
+    for (const spot of b.locations.get('lounge')!) {
+      const path = nav.findPath(desks[0], spot)
+      assert.ok(path && path.length > 0, `${b.id}: no path to the lounge spot ${spot.name}`)
+      assert.deepEqual(path[path.length - 1], { x: spot.x, y: spot.y }, `${b.id}: ${spot.name} is not reached exactly`)
+      for (const p of samples(desks[0], path)) assert.ok(inRect(p, r), `${b.id}: path leaves the branch at (${p.x},${p.y})`)
+    }
     // The HQ inbox and every other branch are out of reach.
     assert.equal(nav.findPath(desks[0], l.hq.locations.get('inbox')![0]), null)
     for (const o of l.branches()) if (o.id !== b.id) assert.equal(nav.findPath(desks[0], o.locations.get('printer')![0]), null)

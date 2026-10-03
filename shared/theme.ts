@@ -74,8 +74,11 @@
 //                  still apply. For `waiting` a rule only changes the verb and animation: where a
 //                  waiting character goes (memo relay, inbox) is fixed.
 //   idle           { location, afterMs }: managers and workers with nothing to do for afterMs walk to
-//                  the nearest location of that type inside their own branch (a lounge, a yard) and
-//                  return to work on their next activity. Without it they stay at their desk.
+//                  a location of that type inside their own branch (a lounge, a yard) and return to
+//                  work on their next activity. Without it they stay at their desk. The map may have
+//                  several points of that type (sofa cushions with `seat`, a spot at the water
+//                  cooler with `facing`): each character takes a free one; when all are taken the
+//                  rest stand side by side at one that is not a seat.
 // Optional location type in hq.json: `noticeboard` (where notes for the office board fly to).
 
 import type { Activity } from './events'

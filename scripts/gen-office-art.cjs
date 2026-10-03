@@ -273,15 +273,17 @@ function whiteboard() {
 }
 
 function sofa() {
-  const c = { dark: '#c06e56', base: '#d9846b', hi: '#e69c84' }
+  // Footprint 96 x 16: the backrest. The armrests and the three cushions hang down from it (on the
+  // map: two more blocking rectangles and a strip of floor with a seat on every cushion).
+  const c = { dark: '#c06e56', base: '#d9846b', hi: '#e69c84', seam: '#d48a72' }
+  const cushions = [0, 1, 2].map((i) => rect(12.4 + i * 24, 7, 23.2, 21.5, 3.6, c.hi) + rect(14.4 + i * 24, 8.6, 19.2, 1.1, 0.55, '#eeab95', 'opacity=".8"')).join('')
   return {
-    name: 'sofa', w: 89.6, h: 27.2, pad: [8, 12, 8, 9],
+    name: 'sofa', w: 96, h: 16, pad: [6, 10, 7, 24],
     svg:
-      shadow(rect(1, -4, 87.6, 31, 8, C.shadow), { alpha: 0.26 }) +
-      rect(2, -8, 85.6, 15, 6.5, c.dark) + rect(4, -7, 81.6, 8, 4, c.base) +
-      rect(0, -4, 10.5, 30.5, 5, c.dark) + rect(79.1, -4, 10.5, 30.5, 5, c.dark) + rect(1, -3, 8.5, 10, 4, c.base) + rect(80.1, -3, 8.5, 10, 4, c.base) +
-      rect(9.5, 3, 35, 19, 3.6, c.hi) + rect(45.1, 3, 35, 19, 3.6, c.hi) + rect(9, 20.6, 71.6, 6.4, 2.6, c.dark) +
-      `<g transform="rotate(-9 19 3)">${rect(13, -2, 12.5, 10, 3.4, '#7fb7b0')}${rect(14.5, -1, 9.5, 3, 1.5, '#95c8c1')}</g>`
+      shadow(rect(1, -3, 94, 36, 8, C.shadow), { alpha: 0.26 }) +
+      rect(2, -8, 92, 18, 6.5, c.dark) + rect(4, -7, 88, 9, 4, c.base) +
+      rect(0, -3, 12.5, 36, 5, c.dark) + rect(83.5, -3, 12.5, 36, 5, c.dark) + rect(1, -2, 10.5, 11, 4, c.base) + rect(84.5, -2, 10.5, 11, 4, c.base) +
+      rect(11.5, 26, 73, 7, 2.6, c.dark) + cushions
   }
 }
 

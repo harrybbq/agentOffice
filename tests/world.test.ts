@@ -321,6 +321,20 @@ t('office maps: pictures cover floor and walls; every rectangle has a sprite or 
     const p = branchMap.locations.get(type)![0]
     assert.ok(branchMap.facings.some((f) => f.x === p.x && f.y === p.y), `${type} has no facing`)
   }
+  // The lounge: one seat per sofa cushion (facing the viewer) and a spot at the water cooler, facing it.
+  const lounge = branchMap.locations.get('lounge')!
+  const sofaSeats = lounge.filter((p) => branchMap.seats.some((s) => s.x === p.x && s.y === p.y && s.facing === 'south'))
+  assert.deepEqual(sofaSeats.map((p) => p.name), ['sofa_1', 'sofa_2', 'sofa_3'])
+  const standing = lounge.filter((p) => !sofaSeats.includes(p))
+  assert.deepEqual(standing.map((p) => p.name), ['cooler'])
+  assert.ok(branchMap.facings.some((f) => f.x === standing[0].x && f.y === standing[0].y && f.facing === 'west'))
+  // The cushions are floor (walked onto), under the sofa's picture; its back and arms block.
+  const piece = (n: string) => branchMap.furniture.find((f) => f.name === n)!
+  assert.deepEqual(['sofa', 'sofa_arm_l', 'sofa_arm_r', 'sofa_seat'].map((n) => piece(n).solid), [true, true, true, false])
+  for (const p of sofaSeats) {
+    const c = piece('sofa_seat')
+    assert.ok(p.x > c.x && p.x < c.x + c.width && p.y > c.y && p.y < c.y + c.height, `${p.name} is not on a cushion`)
+  }
   // Every sprite the maps name is in the atlas the theme ships, inside the page.
   const atlas = raw('art/furniture.json') as { frames: Record<string, { frame: { x: number; y: number; w: number; h: number }; pivot: { x: number; y: number } }>; meta: { scale: string; size: { w: number; h: number } } }
   const named = new Set([...hqMap.furniture, ...branchMap.furniture].filter((f) => f.sprite).map((f) => f.sprite))
